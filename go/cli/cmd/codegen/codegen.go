@@ -15,6 +15,7 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 
 	cmd.AddCommand(newSQLCCmd(ctx))
 	cmd.AddCommand(newOpenAPICmd(ctx))
+	cmd.AddCommand(newComposeCmd(ctx))
 
 	return []*cobra.Command{cmd}
 }

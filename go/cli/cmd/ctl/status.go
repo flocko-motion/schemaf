@@ -1,4 +1,4 @@
-package compose
+package ctl
 
 import (
 	"fmt"
@@ -19,7 +19,7 @@ func newStatusCmd(ctx *cli.Context) *cobra.Command {
 		Long: `Resolve the dependency graph and check health of all services.
 
 Example:
-  atlas compose status atlas-graph/compose/graph-api.yml`,
+  zeus ctl status example/compose/app.yml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := resolveAndPrint(args[0])

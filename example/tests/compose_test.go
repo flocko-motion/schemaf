@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"atlas.local/base/cli/cmd/compose"
+	"atlas.local/base/cli/cmd/ctl"
 )
 
 func TestComposeResolve(t *testing.T) {
@@ -13,7 +13,7 @@ func TestComposeResolve(t *testing.T) {
 	root := filepath.Join(filepath.Dir(file), "..")
 
 	appYML := filepath.Join(root, "compose", "app.yml")
-	files, err := compose.Resolve([]string{appYML})
+	files, err := ctl.Resolve([]string{appYML})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestComposeDedup(t *testing.T) {
 
 	appYML := filepath.Join(root, "compose", "app.yml")
 	// Resolve twice — should not duplicate
-	files, err := compose.Resolve([]string{appYML, appYML})
+	files, err := ctl.Resolve([]string{appYML, appYML})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestProjectName(t *testing.T) {
 	root := filepath.Join(filepath.Dir(file), "..")
 
 	appYML := filepath.Join(root, "compose", "app.yml")
-	files, err := compose.Resolve([]string{appYML})
+	files, err := ctl.Resolve([]string{appYML})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@ import (
 
 	basecli "atlas.local/base/cli"
 	"atlas.local/base/cli/cmd/codegen"
-	"atlas.local/base/cli/cmd/compose"
+	"atlas.local/base/cli/cmd/ctl"
 	"atlas.local/example/cli/cmd"
 )
 
@@ -24,7 +24,7 @@ func main() {
 	}
 
 	c.AddSubcommands(
-		compose.SubcommandProvider,
+		ctl.SubcommandProvider,
 		codegen.SubcommandProvider,
 		cmd.TodoSubcommandProvider,
 	)

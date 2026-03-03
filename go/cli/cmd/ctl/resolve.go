@@ -1,6 +1,6 @@
-// Package compose re-exports the compose resolver types from atlas.local/base/compose
+// Package ctl re-exports the compose resolver types from atlas.local/base/compose
 // for use by the CLI subcommands.
-package compose
+package ctl
 
 import "atlas.local/base/compose"
 

@@ -1,19 +1,19 @@
-package compose
+package ctl
 
 import (
 	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
 )
 
-func newDownCmd(ctx *cli.Context) *cobra.Command {
+func newStopCmd(ctx *cli.Context) *cobra.Command {
 	_ = ctx
 	cmd := &cobra.Command{
-		Use:   "down <compose-file>",
+		Use:   "stop <compose-file>",
 		Short: "Stop all services in a composition",
 		Long: `Resolve the dependency graph and stop all services.
 
 Example:
-  atlas compose down atlas-graph/compose/graph-api.yml`,
+  zeus ctl stop example/compose/app.yml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := resolveAndPrint(args[0])

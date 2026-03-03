@@ -1,4 +1,4 @@
-package compose
+package ctl
 
 import (
 	"fmt"
@@ -11,23 +11,28 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// SubcommandProvider returns the compose subcommand tree
+// SubcommandProvider returns the ctl subcommand tree.
 func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "compose",
-		Short: "Manage Atlas service compositions",
+		Use:   "ctl",
+		Short: "Control project services",
 		Long: `Resolve, merge and run multi-service Docker Compose stacks.
 
 Each service has its own compose file declaring dependencies via x-atlas.
-The compose tool resolves the dependency graph and delegates to Docker Compose.`,
+The ctl tool resolves the dependency graph and delegates to Docker Compose.`,
 	}
 
-	cmd.AddCommand(newUpCmd(ctx))
-	cmd.AddCommand(newDownCmd(ctx))
-	cmd.AddCommand(newBuildCmd(ctx))
+	cmd.AddCommand(newStartCmd(ctx))
+	cmd.AddCommand(newDevCmd(ctx))
+	cmd.AddCommand(newStopCmd(ctx))
 	cmd.AddCommand(newStatusCmd(ctx))
 
 	return []*cobra.Command{cmd}
+}
+
+// ComposeSubcommandProvider is a compatibility wrapper for older imports.
+func ComposeSubcommandProvider(ctx *cli.Context) []*cobra.Command {
+	return SubcommandProvider(ctx)
 }
 
 // buildDockerComposeArgs builds the -f flags for docker compose from resolved files
