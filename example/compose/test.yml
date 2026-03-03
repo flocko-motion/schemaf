@@ -1,0 +1,9 @@
+x-atlas:
+  project: atlas-example-test
+  depends-on-compose:
+    - ../../compose/postgres.yml
+  dev-db-pass: "dev"
+
+services:
+  postgres:
+    restart: "no"

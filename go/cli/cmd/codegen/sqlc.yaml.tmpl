@@ -1,0 +1,12 @@
+version: "2"
+sql:
+  - engine: postgresql
+    queries: ./queries/
+    schema: ./migrations/
+    gen:
+      go:
+        package: {{.Package}}
+        out: .
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false

@@ -1,0 +1,19 @@
+# Binaries
+bin/
+*.exe
+
+# Go build cache
+vendor/
+
+# Test output
+*.test
+coverage.out
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
