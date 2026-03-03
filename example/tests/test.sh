@@ -6,19 +6,19 @@
 set -e
 cd "$(dirname "$0")"
 
-ATLAS="../cli/atlas.sh"
+ZEUS="../cli/zeus.sh"
 COMPOSE="../compose/test.yml"
 BACKEND_PORT=7001
 BACKEND_URL="http://localhost:${BACKEND_PORT}"
 
-# Start Postgres via atlas compose
-$ATLAS compose up --wait "$COMPOSE"
-trap '$ATLAS compose down '"$COMPOSE" EXIT
+# Start Postgres via zeus compose
+$ZEUS compose up --wait "$COMPOSE"
+trap '$ZEUS compose down '"$COMPOSE" EXIT
 
 # Start the native backend in the background (connects to localhost:7003 per PORTS.md convention)
 (cd ../backend && PORT=$BACKEND_PORT go run .) &
 BACKEND_PID=$!
-trap "kill $BACKEND_PID 2>/dev/null; $ATLAS compose down $COMPOSE" EXIT
+trap "kill $BACKEND_PID 2>/dev/null; $ZEUS compose down $COMPOSE" EXIT
 
 # Wait for backend to be ready (up to 30s)
 echo "waiting for backend on $BACKEND_URL ..."
@@ -31,4 +31,17 @@ for i in $(seq 1 30); do
 done
 
 export BACKEND_URL
+
+TEST_NAME="go tests"
+echo "[test] $TEST_NAME"
+set +e
 go test -v "$@" ./...
+status=$?
+set -e
+
+if [ $status -ne 0 ]; then
+  echo "[fail] $TEST_NAME"
+  exit $status
+fi
+
+echo "[pass] $TEST_NAME"
