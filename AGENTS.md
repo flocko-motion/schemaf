@@ -13,3 +13,8 @@ Use td usage -q for subsequent reads.
 
 - Do not edit README files while working.
 - Documentation-first means you defer README updates until explicitly asked.
+
+## MANDATORY: CLI Command Layout
+
+- Subcommands must live in `go/cli/cmd/<branch>/<name>.go`.
+- The filename must match the command name.
