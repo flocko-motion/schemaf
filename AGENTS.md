@@ -8,3 +8,8 @@ Use td usage -q for subsequent reads.
 - When you begin work, there MUST be a task on the td board for it.
 - Only work on tasks; never freestyle.
 - When you finish a task, check the task list and mark it complete if possible.
+
+## MANDATORY: README Discipline
+
+- Do not edit README files while working.
+- Documentation-first means you defer README updates until explicitly asked.
