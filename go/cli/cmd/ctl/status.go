@@ -2,6 +2,7 @@ package ctl
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -14,17 +15,23 @@ import (
 func newStatusCmd(ctx *cli.Context) *cobra.Command {
 	_ = ctx
 	cmd := &cobra.Command{
-		Use:   "status <compose-file>",
-		Short: "Show health status of all services in a composition",
+		Use:   "status <compose-file> [service]",
+		Short: "Show health status of services in a composition",
 		Long: `Resolve the dependency graph and check health of all services.
 
 Example:
-  zeus ctl status example/compose/app.yml`,
-		Args: cobra.ExactArgs(1),
+  zeus ctl status example/compose/app.yml
+  zeus ctl status example/compose/app.yml backend`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := resolveAndPrint(args[0])
 			if err != nil {
 				return err
+			}
+
+			httpClient := &http.Client{Timeout: 3 * time.Second}
+			if len(args) == 2 {
+				return runStatusForService(httpClient, files, args[1])
 			}
 
 			// Get running containers via docker compose ps
@@ -40,57 +47,26 @@ Example:
 			fmt.Println("Health:")
 			fmt.Println(strings.Repeat("─", 60))
 
-			httpClient := &http.Client{Timeout: 3 * time.Second}
-
-			for _, cf := range files {
-				for svcName, svc := range cf.Services {
-					atlas := svc.Atlas
-					if atlas == nil {
-						// Fall back to file-level atlas for single-service files
-						if len(cf.Services) == 1 {
-							atlas = cf.Atlas
-						}
+			services := AllServices(files)
+			shortMap := ShortNameMap(files)
+			for _, svcName := range services {
+				label := svcName
+				for short, name := range shortMap {
+					if name == svcName {
+						label = fmt.Sprintf("%s (%s)", svcName, short)
+						break
 					}
-					if atlas == nil || atlas.Health == nil {
-						continue
+				}
+				url := guessHTTPURL(files, svcName, "/health")
+				resp, err := httpClient.Get(url)
+				if err == nil && resp.StatusCode < 400 {
+					resp.Body.Close()
+					cli.Success("%s  %s", label, url)
+				} else {
+					if resp != nil {
+						resp.Body.Close()
 					}
-
-					label := svcName
-					if atlas.ShortName != "" {
-						label = fmt.Sprintf("%s (%s)", svcName, atlas.ShortName)
-					}
-
-					switch atlas.Health.Type {
-					case "http":
-						containerName := svc.ContainerName
-						if containerName == "" {
-							containerName = svcName
-						}
-						// Try to find port from docker inspect
-						url := guessHTTPURL(files, svcName, atlas.Health.Path)
-						resp, err := httpClient.Get(url)
-						if err == nil && resp.StatusCode < 400 {
-							resp.Body.Close()
-							cli.Success("%s  %s", label, url)
-						} else {
-							if resp != nil {
-								resp.Body.Close()
-							}
-							cli.Error("%s  %s", label, url)
-						}
-
-					case "redis_ping":
-						containerName := svc.ContainerName
-						if containerName == "" {
-							containerName = svcName
-						}
-						out, err := exec.Command("docker", "exec", containerName, "redis-cli", "PING").Output()
-						if err == nil && strings.TrimSpace(string(out)) == "PONG" {
-							cli.Success("%s", label)
-						} else {
-							cli.Error("%s", label)
-						}
-					}
+					cli.Error("%s  %s", label, url)
 				}
 			}
 
@@ -116,4 +92,43 @@ func guessHTTPURL(files []*ComposeFile, svcName string, path string) string {
 		return fmt.Sprintf("http://localhost:%s%s", port, path)
 	}
 	return fmt.Sprintf("http://localhost%s", path)
+}
+
+func runStatusForService(httpClient *http.Client, files []*ComposeFile, service string) error {
+	shortMap := ShortNameMap(files)
+	services := map[string]bool{}
+	for _, svc := range AllServices(files) {
+		services[svc] = true
+	}
+
+	if resolved, ok := shortMap[service]; ok {
+		service = resolved
+	}
+	if !services[service] {
+		return fmt.Errorf("unknown service %q", service)
+	}
+
+	url := guessHTTPURL(files, service, "/status")
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode >= 400 {
+		cli.Error("%s  %s", service, resp.Status)
+	}
+
+	output := strings.TrimSpace(string(body))
+	if output == "" {
+		fmt.Println(resp.Status)
+		return nil
+	}
+	fmt.Println(output)
+	return nil
 }
