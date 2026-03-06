@@ -3,10 +3,12 @@
 
 package api
 
+import schemafapi "schemaf.local/base/api"
+
 // Provider registers all API endpoints with the schemaf framework.
 // Wire up in go/main.go: app.AddApi(api.Provider)
 func Provider() {
 {{- range .Endpoints}}
-	Register(NewRoute[{{.ReqType}}, {{.RespType}}]({{.StructName}}{}, {{printf "%q" .Summary}}, {{printf "%q" .Description}}))
+	schemafapi.Register(schemafapi.NewRoute[{{.ReqType}}, {{.RespType}}]({{.StructName}}{}, {{printf "%q" .Summary}}, {{printf "%q" .Description}}))
 {{- end}}
 }

@@ -23,6 +23,12 @@ func New(ctx context.Context, project string) *App {
 	return &App{ctx: ctx, project: project}
 }
 
+// AddApi registers all API endpoints by calling the generated provider function.
+// Wire up in go/main.go: app.AddApi(api.Provider)
+func (a *App) AddApi(provider func()) {
+	provider()
+}
+
 // AddMigrations registers an embedded FS of SQL migration files.
 // The migration prefix is the full project name (e.g. "schemaf-example").
 func (a *App) AddMigrations(migrations embed.FS) {
