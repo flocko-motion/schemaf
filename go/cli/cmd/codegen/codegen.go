@@ -13,7 +13,9 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 		Long:  `Generate code from your project's SQL queries, schemas, and API definitions.`,
 	}
 
+	cmd.AddCommand(newMigrationsCmd(ctx))
 	cmd.AddCommand(newSQLCCmd(ctx))
+	cmd.AddCommand(newEndpointsCmd(ctx))
 	cmd.AddCommand(newOpenAPICmd(ctx))
 	cmd.AddCommand(newComposeCmd(ctx))
 

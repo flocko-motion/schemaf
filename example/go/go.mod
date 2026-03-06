@@ -1,4 +1,4 @@
-module schemaf.local/example/backend
+module schemaf.local/example
 
 go 1.25.0
 

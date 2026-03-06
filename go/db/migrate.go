@@ -13,7 +13,7 @@ import (
 
 // MigrationSet holds a set of migration files namespaced by prefix.
 type MigrationSet struct {
-	Prefix string   // e.g. "ab", "todo" — namespaces migrations in ab_migrations
+	Prefix string   // e.g. "ab", "todo" — namespaces migrations in schemaf_migrations
 	Files  embed.FS // embedded migration SQL files
 }
 
@@ -25,7 +25,7 @@ func RegisterMigrations(ms MigrationSet) {
 	registeredSets = append(registeredSets, ms)
 }
 
-// RunMigrations creates the ab_migrations table if needed, then runs all
+// RunMigrations creates the schemaf_migrations table if needed, then runs all
 // registered migration sets in registration order. Uses the singleton connection.
 func RunMigrations(ctx context.Context) error {
 	db := conn
@@ -40,7 +40,7 @@ func RunMigrationsOn(ctx context.Context, db *sql.DB) error {
 func runMigrations(ctx context.Context, db *sql.DB) error {
 	// Always ensure the tracking table exists first
 	const createTable = `
-CREATE TABLE IF NOT EXISTS ab_migrations (
+CREATE TABLE IF NOT EXISTS schemaf_migrations (
     id         SERIAL PRIMARY KEY,
     prefix     TEXT NOT NULL,
     version    INT NOT NULL,
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS ab_migrations (
     UNIQUE(prefix, version)
 )`
 	if _, err := db.ExecContext(ctx, createTable); err != nil {
-		return fmt.Errorf("creating ab_migrations table: %w", err)
+		return fmt.Errorf("creating schemaf_migrations table: %w", err)
 	}
 
 	for _, ms := range registeredSets {
@@ -107,7 +107,7 @@ func runSet(ctx context.Context, db *sql.DB, ms MigrationSet) error {
 	})
 
 	// Get applied versions for this prefix
-	rows, err := db.QueryContext(ctx, `SELECT version FROM ab_migrations WHERE prefix = $1 ORDER BY version`, ms.Prefix)
+	rows, err := db.QueryContext(ctx, `SELECT version FROM schemaf_migrations WHERE prefix = $1 ORDER BY version`, ms.Prefix)
 	if err != nil {
 		return fmt.Errorf("querying applied migrations: %w", err)
 	}
@@ -134,7 +134,7 @@ func runSet(ctx context.Context, db *sql.DB, ms MigrationSet) error {
 			return fmt.Errorf("running migration %s/%04d_%s: %w", ms.Prefix, m.version, m.name, err)
 		}
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO ab_migrations (prefix, version, name) VALUES ($1, $2, $3)`,
+			`INSERT INTO schemaf_migrations (prefix, version, name) VALUES ($1, $2, $3)`,
 			ms.Prefix, m.version, m.name,
 		); err != nil {
 			return fmt.Errorf("recording migration %s/%04d_%s: %w", ms.Prefix, m.version, m.name, err)

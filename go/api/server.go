@@ -12,7 +12,6 @@ func Serve(addr string) error {
 
 	// Framework default endpoints
 	mux.Handle("GET /openapi.json", OpenAPIHandler())
-	mux.Handle("GET /openapi.ts", APITSHandler())
 	mux.Handle("GET /api/health", HealthHandler())
 
 	// Registered project routes

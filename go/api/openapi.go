@@ -9,9 +9,10 @@ import (
 
 // openAPISchema is a minimal OpenAPI 3.0 document.
 type openAPISchema struct {
-	OpenAPI string                     `json:"openapi"`
-	Info    openAPIInfo                `json:"info"`
-	Paths   map[string]openAPIPathItem `json:"paths"`
+	OpenAPI    string                        `json:"openapi"`
+	Info       openAPIInfo                   `json:"info"`
+	Paths      map[string]openAPIPathItem    `json:"paths"`
+	Components openAPIComponents             `json:"components,omitempty"`
 }
 
 type openAPIInfo struct {
@@ -19,11 +20,23 @@ type openAPIInfo struct {
 	Version string `json:"version"`
 }
 
+type openAPIComponents struct {
+	SecuritySchemes map[string]openAPISecurityScheme `json:"securitySchemes,omitempty"`
+}
+
+type openAPISecurityScheme struct {
+	Type         string `json:"type"`
+	Scheme       string `json:"scheme"`
+	BearerFormat string `json:"bearerFormat,omitempty"`
+}
+
 type openAPIPathItem map[string]openAPIOperation // method → operation
 
 type openAPIOperation struct {
 	Summary     string                     `json:"summary,omitempty"`
+	Description string                     `json:"description,omitempty"`
 	OperationID string                     `json:"operationId,omitempty"`
+	Security    []map[string][]string      `json:"security,omitempty"`
 	RequestBody *openAPIRequestBody        `json:"requestBody,omitempty"`
 	Responses   map[string]openAPIResponse `json:"responses"`
 }
@@ -46,13 +59,15 @@ type openAPIResponse struct {
 // reflecting all registered routes.
 func OpenAPIHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		doc := buildOpenAPI()
+		doc := BuildOpenAPI("API", "1.0.0")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(doc)
 	})
 }
 
-func buildOpenAPI() openAPISchema {
+// BuildOpenAPI constructs the OpenAPI spec from all registered routes.
+// Exported so the codegen command can call it directly to write openapi.json.
+func BuildOpenAPI(title, version string) openAPISchema {
 	paths := map[string]openAPIPathItem{}
 
 	for _, route := range Routes() {
@@ -61,10 +76,18 @@ func buildOpenAPI() openAPISchema {
 
 		op := openAPIOperation{
 			Summary:     route.Summary,
+			Description: route.Description,
 			OperationID: operationID(route.Method, route.Path),
 			Responses: map[string]openAPIResponse{
 				"200": {Description: "OK"},
+				"400": {Description: "Bad Request"},
+				"500": {Description: "Internal Server Error"},
 			},
+		}
+
+		if route.Auth {
+			op.Security = []map[string][]string{{"bearerAuth": {}}}
+			op.Responses["401"] = openAPIResponse{Description: "Unauthorized"}
 		}
 
 		if route.ReqType != nil {
@@ -95,8 +118,17 @@ func buildOpenAPI() openAPISchema {
 
 	return openAPISchema{
 		OpenAPI: "3.0.0",
-		Info:    openAPIInfo{Title: "API", Version: "1.0.0"},
+		Info:    openAPIInfo{Title: title, Version: version},
 		Paths:   paths,
+		Components: openAPIComponents{
+			SecuritySchemes: map[string]openAPISecurityScheme{
+				"bearerAuth": {
+					Type:         "http",
+					Scheme:       "bearer",
+					BearerFormat: "JWT",
+				},
+			},
+		},
 	}
 }
 
@@ -108,7 +140,6 @@ func operationID(method, path string) string {
 		if p == "" {
 			continue
 		}
-		// Strip path params braces
 		p = strings.Trim(p, "{}")
 		if len(p) > 0 {
 			result += strings.ToUpper(p[:1]) + p[1:]
@@ -119,7 +150,6 @@ func operationID(method, path string) string {
 
 // typeToSchema converts a Go type (via reflection) into a simple JSON Schema map.
 func typeToSchema(t reflect.Type) map[string]any {
-	// Dereference pointer
 	for t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}

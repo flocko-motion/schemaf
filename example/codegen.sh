@@ -1,5 +1,7 @@
 #!/bin/bash
+set -euo pipefail
 cd "$(dirname "$0")"
+
 go run schemaf.local/base/cmd/schemaf codegen migrations
 go run schemaf.local/base/cmd/schemaf codegen sqlc
 go run schemaf.local/base/cmd/schemaf codegen endpoints

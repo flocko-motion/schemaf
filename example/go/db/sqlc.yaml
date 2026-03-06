@@ -5,7 +5,7 @@ sql:
     schema: ./migrations/
     gen:
       go:
-        package: {{.Package}}
+        package: db
         out: .
         emit_prepared_queries: false
         emit_interface: false

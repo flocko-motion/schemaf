@@ -2,14 +2,16 @@ package api
 
 import "net/http"
 
-// Route describes a single HTTP route to be registered with the framework.
+// Route describes a single HTTP route registered with the framework.
 type Route struct {
-	Method   string // "GET", "POST", "PUT", "DELETE", etc.
-	Path     string // e.g. "/api/todos", "/api/todos/{id}"
-	Summary  string // human-readable; appears in OpenAPI
-	Handler  http.Handler
-	ReqType  any // pointer to request body type (for reflection); optional
-	RespType any // pointer to response type (for reflection); optional
+	Method      string       // "GET", "POST", "PUT", "DELETE", etc.
+	Path        string       // e.g. "/api/todos", "/api/todos/{id}"
+	Auth        bool         // whether JWT auth is required
+	Summary     string       // first line of endpoint struct doc comment
+	Description string       // remaining lines of endpoint struct doc comment
+	Handler     http.Handler
+	ReqType     any // pointer to zero-value request type (for OpenAPI reflection)
+	RespType    any // pointer to zero-value response type (for OpenAPI reflection)
 }
 
 var routes []Route
