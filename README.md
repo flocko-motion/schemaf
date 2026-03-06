@@ -82,7 +82,7 @@ go build -o myapp go/main.go
 ./myapp codegen .
 
 # 7. Run
-./myapp dev
+./myapp compose dev
 ```
 
 **That's it.** The framework:
@@ -162,18 +162,22 @@ schemaf is **batteries-included**. These are built-in, not optional:
   - Binds `/` for frontend (proxy in dev, embed in production)
   - Single exposed port (7000)
 - **Authentication**: Built-in auth layer (implementation: TBD)
-- **Database**: Postgres with automatic migration and codegen
+- **Database**: Postgres is the built-in, always-present SQL database
+  - schemaf provisions and manages Postgres — no setup, no configuration
+  - It is the one and only SQL database in a schemaf project
+  - You add tables, migrations, and queries; the infrastructure is handled for you
   - Write SQL in `go/sql/migrations/` and `go/sql/queries/`
   - Run `./myapp codegen .` - generates providers
   - Wire up: `app.AddDb(db.Provider)` in main.go
   - Generated: `go/db/queries.gen.go`, `go/db/migrations.gen.go`
+  - Need a graph DB, NoSQL store, or other data layer? Add it yourself via `app.AddService()` and compose — schemaf does not manage those
 - **API codegen**: Generate `/openapi.ts` TypeScript client from Go handlers
   - Write handlers in `go/api/`
   - Run `./myapp codegen .` - generates `api.Provider` and TypeScript client
   - Wire up: `app.AddApi(api.Provider)` in main.go
-- **Docker compose**: Dependency resolution via `x-schemaf` metadata
+- **Docker compose**: Built-in compose for backend, frontend, and Postgres — extended by `compose/` in your project
 - **Ports**: Fixed allocation (see below)
-- **CLI commands**: `dev`, `compose`, `codegen` - built-in, ready to use
+- **CLI commands**: `compose prod`, `compose dev`, `codegen` - built-in, ready to use
 
 ## What You Add
 
@@ -200,21 +204,7 @@ Your Application (port 7000)
     └── Prod:     Serve embedded static files
 ```
 
-**Development workflow:**
-```bash
-./myapp dev        # Starts Go server (proxies to :7002) + frontend dev server
-```
-
-**Production deployment:**
-Frontend is embedded at build time via `//go:embed`, served directly by the Go server.
-
-**Single binary deployment:**
-```bash
-go build -o myapp go/main.go
-./myapp server     # Production server on port 7000
-```
-
-All migrations, frontend assets, and configuration are embedded. Deploy one binary.
+In production, frontend assets are embedded at build time via `//go:embed` and served directly by the Go server. In dev mode, the Go server proxies frontend requests to the dev server on port 7002.
 
 **Default endpoints:**
 - `/health` - Health check (built-in)
@@ -230,9 +220,9 @@ Your application **is** a CLI. The binary you build has all commands built-in.
 go build -o myapp go/main.go
 
 # Run commands (Cobra handles routing)
-./myapp server               # Start the server (+ services)
-./myapp dev                  # Start dev mode (server + db + frontend dev + services)
-./myapp compose up           # Docker compose with dependency resolution
+./myapp compose prod         # Run full stack in production mode
+./myapp compose dev          # Run full stack in dev mode (all services)
+./myapp compose dev postgres # Run only specific services
 ./myapp compose down         # Stop all services
 ./myapp codegen .            # Generate EVERYTHING (fast - no services started)
 ```
@@ -240,17 +230,47 @@ go build -o myapp go/main.go
 **The CLI uses Cobra for command routing:**
 - `app.Run()` hands over to Cobra
 - Cobra decides which command to execute based on CLI args
-- Services registered via `app.AddService()` only run for `server`/`dev` commands
-- Other commands (`codegen`, `compose`) stay fast and lightweight
+- `codegen` never starts services — stays fast and lightweight
 
 **The CLI has full knowledge of your application.** It's not separate tooling - it's the same binary that runs your server. This means:
 - Codegen knows your handlers (they're compiled in)
 - Migrations are embedded (no external files in production)
-- Server command is built-in (just run `myapp server`)
 - Optional: add custom commands to `go/main.go`
-- Optional: register services that run with the server
 
 Your `go/main.go` wires everything up - all framework commands are already there.
+
+## Docker Compose
+
+schemaf ships with a **built-in compose configuration** that covers the full standard stack:
+
+- Go backend (port 7000)
+- Frontend dev server (port 7002)
+- Postgres (port 7003)
+
+You never write or maintain these service definitions. They are part of the framework.
+
+**Extending with project services:**
+
+If your project needs additional services (Redis, a background worker, a vector DB, etc.), add a `compose/` directory to your project:
+
+```
+myapp/
+└── compose/
+    └── services.yml    # Your additional services only
+```
+
+schemaf merges the framework compose with your project compose at runtime. You define only the extra services — the core stack is always there.
+
+**Running the stack:**
+
+```bash
+./myapp compose prod          # Full stack, production mode
+./myapp compose dev           # Full stack, dev mode (hot reload, frontend dev server)
+./myapp compose dev postgres  # Only specific services (useful during development)
+./myapp compose down          # Stop everything
+```
+
+`compose dev <args>` lets you start only a subset of services. This is useful when you want to run the Go server directly on the host (e.g. with a debugger) while still having Postgres managed by compose.
 
 ## Code Generation
 
@@ -349,14 +369,9 @@ Projects have a minimal `schemaf.toml` file that defines:
 ```toml
 title = "My Application"
 name = "myapp"
-
-# Optional: explicitly declare database locations
-# (If omitted, schemaf auto-discovers go/sql/)
-[[db]]
-name = "app"
-type = "postgres"
-path = "go/sql"
 ```
+
+That's it. Database location is always `go/sql/` — normative, not configurable.
 
 **Philosophy**: Maximum automation. If schemaf can generate it, you don't write it. We auto-discover files, generate glue code, and wire everything together. Paths are normative - no configuration needed.
 
