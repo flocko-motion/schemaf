@@ -29,6 +29,16 @@ You focus on:
 
 This repository is the framework itself. The example project lives in `example/` and demonstrates how a project consumes the framework.
 
+## Prerequisites
+
+- Go 1.22+
+- Docker + Docker Compose
+- Node.js (for TypeScript codegen and frontend)
+- `gotestsum` for pretty test output (recommended):
+  ```bash
+  go install gotest.tools/gotestsum@latest
+  ```
+
 ## Quick Start
 
 ```bash
@@ -78,10 +88,10 @@ func GetUserHandler(w http.ResponseWriter, r *http.Request) {
 EOF
 
 # 6. Generate
-./codegen.sh
+./schemaf.sh codegen
 
 # 7. Run
-./myapp compose dev
+./schemaf.sh dev
 ```
 
 **That's it.** The framework:
@@ -103,8 +113,10 @@ schemaf expects a specific directory layout. No configuration, no flexibility - 
 ```
 myapp/
 ├── schemaf.toml                    # Minimal config (title, name)
-├── codegen.sh                      # Copy from schemaf repo — bootstraps codegen
-├── compose.gen.yml                 # Generated: merged compose definition (commit this)
+├── schemaf.sh                      # Copy from schemaf repo — project entrypoint
+├── gen/                            # All generated files (gitignored)
+│   ├── compose.gen.yml             # Generated: merged compose definition
+│   └── openapi.json                # Generated: OpenAPI spec
 ├── go/                            # All Go code (CLI + server unified)
 │   ├── main.go                    # Wire up providers, start app
 │   ├── db/                        # All database concerns
@@ -146,13 +158,10 @@ All generated files use `.gen.` infix (e.g., `*.gen.go`, `*.gen.ts`) making them
 
 **Recommended .gitignore:**
 ```gitignore
-*.gen.go
-*.gen.ts
+gen/
 ```
 
-`compose.gen.yml` is an exception — commit it. It is the production compose definition and must be present without running codegen first.
-
-Run `./codegen.sh` after checkout to regenerate everything else.
+The entire `gen/` directory is gitignored — run `./schemaf.sh codegen` after checkout to regenerate everything.
 
 ## What schemaf Provides
 
@@ -184,9 +193,9 @@ schemaf is **batteries-included**. These are built-in, not optional:
   - Codegen scans endpoint structs → generates `api.Provider` + full OpenAPI spec → generates TypeScript client
   - Type-safe end to end, no running server needed for codegen
   - Wire up: `app.AddApi(api.Provider)` in main.go
-- **Docker compose**: Built-in compose for backend, frontend, and Postgres — merged with `compose/` in your project into a single generated `compose.gen.yml`
+- **Docker compose**: Built-in compose for backend and Postgres — merged with `compose/` in your project, generated to `gen/compose.gen.yml`
 - **Ports**: Fixed allocation (see below)
-- **CLI commands**: `compose prod`, `compose dev`, `codegen`, `test` - built-in, ready to use
+- **Project entrypoint**: `schemaf.sh codegen`, `schemaf.sh test`, `schemaf.sh run`, `schemaf.sh dev`
 
 ## What You Add
 
@@ -221,22 +230,30 @@ In production, frontend assets are embedded at build time via `//go:embed` and s
 - `/status` - Service status (built-in)
 - `/api/*` - Your handlers + auth layer (framework provides auth, you add business logic)
 
-## schemaf CLI
+## schemaf.sh
 
-Your application **is** a CLI. The binary has built-in commands and can be extended with your own:
+`schemaf.sh` is your project entrypoint — copy it from the schemaf repo next to `schemaf.toml`:
+
+```bash
+./schemaf.sh codegen         # Generate all code (SQL, endpoints, TypeScript client)
+./schemaf.sh test            # Regenerate, then run all tests
+./schemaf.sh test --verbose  # Verbose test output
+./schemaf.sh test --no-cache # Bypass test cache
+./schemaf.sh run             # Start production compose stack
+./schemaf.sh dev             # Start dev compose stack (exposes service ports)
+./schemaf.sh dev postgres    # Start only specific services
+```
+
+`run` and `dev` exec into `docker compose` and exit — the actual server runs inside the container.
+
+## Your Application CLI
+
+Your built binary has additional built-in commands and can be extended with your own:
 
 ```bash
 ./myapp server               # Run the HTTP server (used inside the Docker container)
-./myapp compose prod         # Syscall docker compose — starts the full production stack
-./myapp compose dev          # Syscall docker compose — starts the full dev stack
-./myapp compose dev postgres # Syscall docker compose — start only specific services
-./myapp compose down         # Syscall docker compose — stop all services
 ./myapp import               # Example custom subcommand — does whatever you implement
 ```
-
-`compose prod` and `compose dev` are thin run-scripts. They exec into docker compose and hand off — the binary itself exits. The actual server runs inside the container via `./myapp server`.
-
-`./myapp server` is what runs inside the container — pure HTTP server, no compose logic.
 
 Custom subcommands added via `app.AddSubcommand()` run directly — no server, no compose, just your code. Use them for data imports, admin tasks, one-off scripts, anything that benefits from being bundled in the same binary.
 
@@ -271,32 +288,29 @@ myapp/
     └── services.yml    # Your additional services only
 ```
 
-These become a full part of the application. Codegen merges the framework's built-in compose with everything in your `compose/` and produces `compose.gen.yml`. That generated file is the complete, self-contained compose definition for your app — commit it and use it in production.
+These become a full part of the application. Codegen merges the framework's built-in compose with everything in your `compose/` and produces `gen/compose.gen.yml`. Run `./schemaf.sh codegen` after checkout to regenerate it.
 
-**No chicken-egg problem:** compose codegen is pure file I/O. `codegen.sh` handles it the same way as SQL and API codegen — no project binary needed.
+**No chicken-egg problem:** compose codegen is pure file I/O — no project binary needed.
 
 **Running the stack:**
 
 ```bash
-./myapp compose prod          # Full stack, production mode (uses compose.gen.yml)
-./myapp compose dev           # Full stack, dev mode (hot reload, frontend dev server)
-./myapp compose dev postgres  # Only specific services (useful during development)
-./myapp compose down          # Stop everything
+./schemaf.sh run              # Full stack, production mode
+./schemaf.sh dev              # Full stack, dev mode (exposes service ports)
+./schemaf.sh dev postgres     # Only specific services (useful during development)
 ```
 
-`compose dev <args>` lets you start only a subset of services. This is useful when you want to run the Go server directly on the host (e.g. with a debugger) while still having Postgres managed by compose.
-
-**Separation of concerns:** `./myapp compose prod/dev` are run-scripts — they exec docker compose and exit. The actual server is `./myapp server`, which runs inside the container. Docker compose handles orchestration; the binary handles HTTP.
+`./schemaf.sh dev <args>` passes extra args through to `docker compose up` — useful for starting only a subset of services while running the Go server directly on the host (e.g. with a debugger).
 
 ## Code Generation
 
 **One command generates everything:**
 
 ```bash
-./codegen.sh
+./schemaf.sh codegen
 ```
 
-Copy `codegen.sh` from the schemaf repository into your project root and commit it. It uses `go run` to build a standalone schemaf CLI on the fly — no project binary needed, no dependencies beyond Go itself. The script always changes to its own directory first, so it works correctly regardless of where you call it from.
+Copy `schemaf.sh` from the schemaf repository into your project root next to `schemaf.toml` and commit it. It uses `go run` to build a standalone schemaf CLI on the fly — no project binary needed, no dependencies beyond Go itself.
 
 The schemaf CLI used here (`cmd/schemaf`) is a standalone entrypoint in the framework repository. It has no knowledge of your application — it only reads your project files from disk.
 
@@ -314,18 +328,17 @@ The schemaf CLI used here (`cmd/schemaf`) is a standalone entrypoint in the fram
 3. **Endpoint structs → api.Provider + OpenAPI spec**
    - Auto-discovers endpoint structs in `go/api/*.go`
    - Generates `go/api/endpoints.gen.go` with `api.Provider` (handler registration)
-   - Generates OpenAPI spec from typed request/response structs
+   - Generates `gen/openapi.json` — OpenAPI 3.0 spec
 
 4. **OpenAPI spec → TypeScript client**
-   - Generates `frontend/api/openapi.gen.ts` — type-safe client for your frontend
+   - Generates `frontend/src/api/generated/api.gen.ts` — type-safe client for your frontend
    - No running server needed
 
-5. **Compose → compose.gen.yml**
-   - Merges schemaf's built-in compose (backend, frontend, Postgres) with your `compose/*.yml`
-   - Generates `compose.gen.yml` — the complete, self-contained compose definition
-   - Used by `./myapp compose prod/dev`; commit it for production deployments
+5. **Compose → gen/compose.gen.yml**
+   - Merges schemaf's built-in compose (backend, Postgres) with your `compose/*.yml`
+   - Used by `./schemaf.sh run` and `./schemaf.sh dev`
 
-**Zero configuration.** Just run `./codegen.sh` and all the glue code appears.
+**Zero configuration.** Just run `./schemaf.sh codegen` and all the glue code appears.
 
 ## What is main.go?
 
@@ -384,7 +397,7 @@ func main() {
 | Use for | Background workers, schedulers, event loops | Redis, vector DBs, external processes |
 | Lifecycle | Starts with the server, stops with the server | Managed by Docker compose |
 
-- `app.AddService()` providers are **only started** when running `./myapp compose prod` or `./myapp compose dev`
+- `app.AddService()` providers are **only started** when running `./schemaf.sh run` or `./schemaf.sh dev`
 - `codegen` never starts services — stays fast and lightweight
 
 **What gets wired:**
@@ -476,7 +489,7 @@ compose/        - Reusable compose blocks (postgres, future: redis, etc.)
 example/        - Example project demonstrating schemaf usage
 go/api/         - API registry + OpenAPI generation
 go/server/      - Server framework (gateway, routing, frontend proxy/embed)
-go/atlas/       - App lifecycle and DB bootstrapping
+go/schemaf/     - App lifecycle (schemaf.New, app.Run)
 go/cli/         - schemaf CLI framework (subcommands, config/state)
 go/compose/     - Compose dependency resolver (x-schemaf metadata)
 go/db/          - Database helpers + migrations
@@ -484,53 +497,45 @@ go/db/          - Database helpers + migrations
 
 ## Testing
 
-schemaf provides a first-class testing system. The same provider pattern used everywhere applies to tests — you write suites, hook them in, the framework handles the infrastructure.
-
-**Test suites, not test files.** A suite is a named group of related tests that share setup and teardown. This is a deliberate design choice: suites express intent and structure, not just a flat list of functions in a file.
-
-```go
-// go/tests/users_suite.go
-type UsersTestSuite struct{}
-
-func (s UsersTestSuite) Name() string { return "Users" }
-
-func (s UsersTestSuite) Tests() []testing.Test {
-    return []testing.Test{
-        {Name: "create user", Run: s.TestCreateUser},
-        {Name: "reject duplicate email", Run: s.TestDuplicateEmail},
-        {Name: "get user requires auth", Run: s.TestGetUserAuth},
-    }
-}
-
-func (s UsersTestSuite) TestCreateUser(ctx testing.Context) error {
-    user := ctx.CreateUser("test@example.com")
-    resp, err := ctx.API().Post("/api/users", user)
-    // ...
-}
-```
-
-**What the framework provides per test:**
-- A blank database (migrations applied, no data)
-- A running server instance
-- Mock user creation with valid JWTs
-- A typed API client pointed at the test server
-- Automatic teardown after each suite
-
-**Wiring:**
-```go
-// go/main.go
-app.AddTests(tests.Provider)   // generated from go/tests/ by codegen
-```
-
-The `tests.Provider` is generated by codegen — it discovers all suite structs in `go/tests/` and registers them. Same pattern as `api.Provider` and `db.Provider`.
-
-**Running:**
+**Running tests:**
 ```bash
-./myapp test           # run all suites
-./myapp test Users     # run a specific suite
+./schemaf.sh test                  # regenerate code, then run all tests
+./schemaf.sh test --verbose        # verbose go test output
+./schemaf.sh test --no-cache       # bypass test cache
 ```
 
-You write the test logic. The framework provides a clean server, a clean database, and the utilities to drive them.
+`./schemaf.sh test` always runs codegen first, then `go test ./go/...` and `npx tsc --noEmit`. This guarantees tests always run against freshly generated code.
+
+Test output is formatted by [gotestsum](https://github.com/gotestyourself/gotestsum) when installed (recommended):
+
+```bash
+go install gotest.tools/gotestsum@latest
+```
+
+If `gotestsum` is not installed, `./schemaf.sh test` will warn you and fall back to plain `go test`.
+
+**Go tests** live in `go/api/*_test.go` — standard Go test files using `httptest`.
+
+**TypeScript tests** live in `go/tests/*.test.ts`. Write exported async functions named `test*`:
+
+```typescript
+// go/tests/api.test.ts
+export async function testCreateUser(baseUrl: string) {
+    const resp = await fetch(`${baseUrl}/api/users`, { method: "POST", ... })
+    if (!resp.ok) throw new Error(`expected 200, got ${resp.status}`)
+}
+```
+
+Codegen scans these files and generates Go wrappers (`go/tests/ts.gen_test.go`) that start an `httptest.Server`, run the TypeScript via `npx tsx`, and report pass/fail as a standard Go test. Each TS test gets its own server instance.
+
+To skip a TS test (e.g. requires a docker service not available in unit test mode), add a comment on the preceding line:
+
+```typescript
+// skip: requires clock docker service
+export async function testClockTime(baseUrl: string) { ... }
+```
+
+The generated Go wrapper will call `t.Skip(...)` with that message.
 
 ## The One Binary Principle
 
@@ -541,8 +546,8 @@ schemaf collapses all of this into a single compiled binary:
 | What | How |
 |---|---|
 | HTTP server | `./myapp server` — runs inside the container |
-| Compose orchestration | `./myapp compose prod/dev` — execs docker, then exits |
-| Code generation | `./codegen.sh` — `go run`s the framework CLI, reads your files |
+| Compose orchestration | `./schemaf.sh run/dev` — execs docker compose, then exits |
+| Code generation | `./schemaf.sh codegen` — `go run`s the framework CLI, reads your files |
 | Database migrations | embedded SQL, applied automatically on server startup |
 | Frontend | embedded via `//go:embed` in production; proxied from port 7002 in dev (no rebuild needed) |
 | TypeScript API client | generated from compiled-in endpoint structs at codegen time |
@@ -552,13 +557,13 @@ The binary has full knowledge of itself. Its endpoint structs are compiled in �
 
 **What makes this unusual** is the self-referential quality of codegen: the binary looks inward to generate its own client. The same code that handles a `GET /api/users/{id}` request also describes that endpoint well enough to produce a type-safe TypeScript function for it. No separate spec, no annotations, no second source of truth.
 
-The only thing outside the binary is docker compose — but even that is generated by the binary (`codegen.sh`) and driven by it (`./myapp compose`).
+The only thing outside the binary is docker compose — but even that is generated by `./schemaf.sh codegen`.
 
 **Deployment is therefore trivial:**
 ```bash
 go build -o myapp go/main.go   # one artifact
-./codegen.sh                    # generates compose.gen.yml
-./myapp compose prod            # everything runs
+./schemaf.sh codegen            # generates gen/compose.gen.yml
+./schemaf.sh run                # everything runs
 ```
 
 No package manager. No deployment pipeline that installs twelve tools. No config files spread across the filesystem. One binary, one compose file, done.

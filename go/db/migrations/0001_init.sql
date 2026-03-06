@@ -1,8 +1,4 @@
--- WARNING: This file is //go:embed embedded in the framework.
--- DO NOT reference via file path - it will not be accessible when schemaf
--- is imported as a Go module dependency.
--- The Schemaf CLI extracts embedded SQL during codegen to merge with project files.
-CREATE TABLE IF NOT EXISTS ab_migrations (
+CREATE TABLE schemaf_migrations (
     id         SERIAL PRIMARY KEY,
     prefix     TEXT NOT NULL,
     version    INT NOT NULL,

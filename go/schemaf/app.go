@@ -4,17 +4,18 @@ import (
 	"context"
 	"embed"
 	"fmt"
-	"log"
 	"os"
 
 	"schemaf.local/base/api"
 	"schemaf.local/base/db"
+	slog "schemaf.local/base/log"
 )
 
 // App is a configured schemaf server. Use New to create one.
 type App struct {
 	ctx     context.Context
 	project string
+	hasDB   bool
 }
 
 // New creates a new App for the given project name (e.g. "schemaf-example").
@@ -29,25 +30,25 @@ func (a *App) AddApi(provider func()) {
 	provider()
 }
 
-// AddMigrations registers an embedded FS of SQL migration files.
-// The migration prefix is the full project name (e.g. "schemaf-example").
-func (a *App) AddMigrations(migrations embed.FS) {
-	db.RegisterMigrations(db.MigrationSet{Prefix: a.project, Files: migrations})
+// AddDb registers the project's database migrations.
+// Wire up in go/main.go: app.AddDb(db.Provider)
+func (a *App) AddDb(provider func() embed.FS) {
+	a.hasDB = true
+	db.RegisterMigrations(db.MigrationSet{Prefix: a.project, Files: provider()})
 }
 
-// Run connects to the database, runs migrations, and starts the HTTP server.
-// It blocks until the server exits.
+// Run starts the HTTP server, connecting to the database first if AddDb was called.
+// Blocks until the server exits.
 func (a *App) Run() error {
-	dsn := a.dsn()
-	log.Printf("connecting to database for project %q", a.project)
-
-	if err := db.Init(dsn); err != nil {
-		return fmt.Errorf("db init: %w", err)
-	}
-
-	log.Printf("running migrations")
-	if err := db.RunMigrations(a.ctx); err != nil {
-		return fmt.Errorf("migrations: %w", err)
+	if a.hasDB {
+		slog.Info("connecting to database", "project", a.project)
+		if err := db.Init(a.dsn()); err != nil {
+			return fmt.Errorf("db init: %w", err)
+		}
+		slog.Info("running migrations")
+		if err := db.RunMigrations(a.ctx); err != nil {
+			return fmt.Errorf("migrations: %w", err)
+		}
 	}
 
 	port := os.Getenv("PORT")
@@ -55,7 +56,7 @@ func (a *App) Run() error {
 		port = "7001"
 	}
 
-	log.Printf("starting server on :%s", port)
+	slog.Info("starting server", "addr", ":"+port)
 	return api.Serve(":" + port)
 }
 

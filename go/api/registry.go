@@ -25,3 +25,8 @@ func Register(r Route) {
 func Routes() []Route {
 	return routes
 }
+
+// Reset clears all registered routes. Intended for use in tests only.
+func Reset() {
+	routes = nil
+}

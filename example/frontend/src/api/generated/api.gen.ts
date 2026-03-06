@@ -20,6 +20,13 @@ export interface DeleteTodoReq {
 
 export type DeleteTodoResp = object;
 
+export type GetServerTimeReq = object;
+
+export interface GetServerTimeResp {
+  /** @format date-time */
+  time: string;
+}
+
 export interface GetTodoReq {
   id: string;
 }
@@ -311,6 +318,21 @@ export class Api<
   SecurityDataType extends unknown,
 > extends HttpClient<SecurityDataType> {
   api = {
+    /**
+     * @description Demonstrates how project compose extensions integrate with the backend.
+     *
+     * @name GetApiTime
+     * @summary Returns the current time from the clock sidecar.
+     * @request GET:/api/time
+     */
+    getApiTime: (params: RequestParams = {}) =>
+      this.request<GetServerTimeResp, void>({
+        path: `/api/time`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
     /**
      * @description Returns an empty array if no todos exist.
      *

@@ -24,7 +24,7 @@ var endpointsGenTemplate string
 const (
 	apiDir          = "go/api"
 	endpointsGenOut = apiDir + "/endpoints.gen.go"
-	openapiJSONOut  = "openapi.json"
+	openapiJSONOut  = "gen/openapi.json"
 )
 
 func newEndpointsCmd(ctx *cli.Context) *cobra.Command {
@@ -39,7 +39,7 @@ An endpoint struct is any struct that implements:
 
 Generates:
   go/api/endpoints.gen.go  — Provider() that registers all endpoints
-  openapi.json             — OpenAPI 3.0 spec (input for swagger-typescript-api)`,
+  gen/openapi.json         — OpenAPI 3.0 spec (input for swagger-typescript-api)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEndpointsGen(ctx)
 		},
@@ -508,6 +508,9 @@ func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) e
 		return fmt.Errorf("marshaling openapi spec: %w", err)
 	}
 
+	if err := os.MkdirAll("gen", 0755); err != nil {
+		return fmt.Errorf("creating gen/: %w", err)
+	}
 	if err := os.WriteFile(openapiJSONOut, data, 0644); err != nil {
 		return fmt.Errorf("writing %s: %w", openapiJSONOut, err)
 	}

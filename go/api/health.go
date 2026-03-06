@@ -14,7 +14,9 @@ func HealthHandler() http.Handler {
 		resp := map[string]string{}
 		overallOK := true
 
-		if err := db.DB().PingContext(r.Context()); err != nil {
+		if db.DB() == nil {
+			resp["db"] = "not configured"
+		} else if err := db.HealthCheck(); err != nil {
 			resp["db"] = "error: " + err.Error()
 			overallOK = false
 		} else {

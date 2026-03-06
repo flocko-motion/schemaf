@@ -1,26 +1,23 @@
-import { listTodos, createTodo, deleteTodo, updateTodo, Todo } from "./api.gen";
+import { Api, Todo } from "./api/generated/api.gen";
 
+const client = new Api({ baseUrl: "" });
 const app = document.getElementById("app")!;
 
 async function render() {
   app.innerHTML = "";
 
-  // Form
   const form = document.createElement("form");
-  form.innerHTML = `
-    <input id="new-todo" type="text" placeholder="New todo..." required />
-    <button type="submit">Add</button>
-  `;
+  form.innerHTML = `<input id="new-todo" type="text" placeholder="New todo..." required /><button type="submit">Add</button>`;
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = document.getElementById("new-todo") as HTMLInputElement;
-    await createTodo({ text: input.value });
+    await client.api.postApiTodos({ text: input.value });
     render();
   });
   app.appendChild(form);
 
-  // List
-  const todos = await listTodos();
+  const { data } = await client.api.getApiTodos();
+  const todos: Todo[] = data?.todos ?? [];
   const ul = document.createElement("ul");
   for (const todo of todos) {
     const li = document.createElement("li");
@@ -30,14 +27,14 @@ async function render() {
     const doneBtn = document.createElement("button");
     doneBtn.textContent = todo.done ? "Undo" : "Done";
     doneBtn.onclick = async () => {
-      await updateTodo(todo.id, { text: todo.text, done: !todo.done });
+      await client.api.putApiTodosId(todo.id, { id: todo.id, text: todo.text, done: !todo.done });
       render();
     };
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "Delete";
     delBtn.onclick = async () => {
-      await deleteTodo(todo.id);
+      await client.api.deleteApiTodosId(todo.id);
       render();
     };
 

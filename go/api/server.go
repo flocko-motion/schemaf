@@ -4,21 +4,20 @@ import (
 	"net/http"
 )
 
-// Serve builds an http.ServeMux with all framework defaults and registered routes,
-// then starts the HTTP server on the given address.
-// addr should be in the form ":7001".
-func Serve(addr string) error {
+// NewMux builds and returns the http.ServeMux with all framework defaults and
+// registered routes. Useful for testing with httptest.NewServer.
+func NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
-
-	// Framework default endpoints
 	mux.Handle("GET /openapi.json", OpenAPIHandler())
 	mux.Handle("GET /api/health", HealthHandler())
-
-	// Registered project routes
 	for _, r := range Routes() {
-		pattern := r.Method + " " + r.Path
-		mux.Handle(pattern, r.Handler)
+		mux.Handle(r.Method+" "+r.Path, r.Handler)
 	}
+	return mux
+}
 
-	return http.ListenAndServe(addr, mux)
+// Serve starts the HTTP server on the given address using the registered routes.
+// addr should be in the form ":7001".
+func Serve(addr string) error {
+	return http.ListenAndServe(addr, NewMux())
 }

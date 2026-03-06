@@ -41,10 +41,11 @@ func runCompose(ctx *cli.Context, composeFile, devMode, nativeMode string, skipB
 		return err
 	}
 
-	// Inject PROJECT_NAME and DB_PASS from x-schemaf metadata on the entry compose file
+	// Inject PROJECT_NAME from x-schemaf metadata on the entry compose file
 	injectProjectEnv(files)
 
-	setupEnv(files, ctx.HomeDir)
+	// Load secrets from ~/.<name>/etc/env (dev: ~/.<name>/dev/etc/env)
+	loadProjectEnv(ctx.HomeDir, devMode != "")
 
 	shortMap := ShortNameMap(files)
 	allSvcs := AllServices(files)

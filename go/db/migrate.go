@@ -13,7 +13,7 @@ import (
 
 // MigrationSet holds a set of migration files namespaced by prefix.
 type MigrationSet struct {
-	Prefix string   // e.g. "ab", "todo" — namespaces migrations in schemaf_migrations
+	Prefix string   // namespaces migrations in schemaf_migrations, e.g. "schemaf", "myapp"
 	Files  embed.FS // embedded migration SQL files
 }
 
@@ -25,11 +25,10 @@ func RegisterMigrations(ms MigrationSet) {
 	registeredSets = append(registeredSets, ms)
 }
 
-// RunMigrations creates the schemaf_migrations table if needed, then runs all
+// RunMigrations bootstraps the tracking table if needed, then runs all
 // registered migration sets in registration order. Uses the singleton connection.
 func RunMigrations(ctx context.Context) error {
-	db := conn
-	return runMigrations(ctx, db)
+	return runMigrations(ctx, conn)
 }
 
 // RunMigrationsOn runs migrations on a specific *sql.DB. Used for testing.
@@ -38,18 +37,8 @@ func RunMigrationsOn(ctx context.Context, db *sql.DB) error {
 }
 
 func runMigrations(ctx context.Context, db *sql.DB) error {
-	// Always ensure the tracking table exists first
-	const createTable = `
-CREATE TABLE IF NOT EXISTS schemaf_migrations (
-    id         SERIAL PRIMARY KEY,
-    prefix     TEXT NOT NULL,
-    version    INT NOT NULL,
-    name       TEXT NOT NULL,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(prefix, version)
-)`
-	if _, err := db.ExecContext(ctx, createTable); err != nil {
-		return fmt.Errorf("creating schemaf_migrations table: %w", err)
+	if err := bootstrap(ctx, db); err != nil {
+		return fmt.Errorf("bootstrap: %w", err)
 	}
 
 	for _, ms := range registeredSets {
@@ -60,8 +49,39 @@ CREATE TABLE IF NOT EXISTS schemaf_migrations (
 	return nil
 }
 
+// bootstrap ensures schemaf_migrations exists. If it doesn't, it runs
+// framework migration 0001 (which creates the table) and records it.
+func bootstrap(ctx context.Context, db *sql.DB) error {
+	var exists bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'schemaf_migrations'
+		)`).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("checking for schemaf_migrations table: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	// Table doesn't exist: run 0001_init.sql directly, then record it.
+	initSQL, err := frameworkMigrations.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		return fmt.Errorf("reading framework migration 0001: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, string(initSQL)); err != nil {
+		return fmt.Errorf("running framework migration 0001: %w", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO schemaf_migrations (prefix, version, name) VALUES ('schemaf', 1, 'init')`,
+	); err != nil {
+		return fmt.Errorf("recording framework migration 0001: %w", err)
+	}
+	return nil
+}
+
 func runSet(ctx context.Context, db *sql.DB, ms MigrationSet) error {
-	// Collect all .sql files from the embedded FS
 	type migration struct {
 		version int
 		name    string
@@ -69,7 +89,6 @@ func runSet(ctx context.Context, db *sql.DB, ms MigrationSet) error {
 	}
 
 	var migrations []migration
-
 	err := fs.WalkDir(ms.Files, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -77,37 +96,35 @@ func runSet(ctx context.Context, db *sql.DB, ms MigrationSet) error {
 		if d.IsDir() || !strings.HasSuffix(path, ".sql") {
 			return nil
 		}
-		base := d.Name()
-		// Parse version from NNNN_name.sql
-		parts := strings.SplitN(base, "_", 2)
+		parts := strings.SplitN(d.Name(), "_", 2)
 		if len(parts) < 2 {
-			return fmt.Errorf("invalid migration filename %q: expected NNNN_name.sql", base)
+			return fmt.Errorf("invalid migration filename %q: expected NNNN_name.sql", d.Name())
 		}
 		ver, err := strconv.Atoi(parts[0])
 		if err != nil {
-			return fmt.Errorf("invalid version in filename %q: %w", base, err)
+			return fmt.Errorf("invalid version in filename %q: %w", d.Name(), err)
 		}
-		name := strings.TrimSuffix(parts[1], ".sql")
-
 		data, err := ms.Files.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("reading migration %q: %w", path, err)
 		}
-
-		migrations = append(migrations, migration{version: ver, name: name, sql: string(data)})
+		migrations = append(migrations, migration{
+			version: ver,
+			name:    strings.TrimSuffix(parts[1], ".sql"),
+			sql:     string(data),
+		})
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	// Sort by version
 	sort.Slice(migrations, func(i, j int) bool {
 		return migrations[i].version < migrations[j].version
 	})
 
-	// Get applied versions for this prefix
-	rows, err := db.QueryContext(ctx, `SELECT version FROM schemaf_migrations WHERE prefix = $1 ORDER BY version`, ms.Prefix)
+	rows, err := db.QueryContext(ctx,
+		`SELECT version FROM schemaf_migrations WHERE prefix = $1 ORDER BY version`, ms.Prefix)
 	if err != nil {
 		return fmt.Errorf("querying applied migrations: %w", err)
 	}
@@ -125,7 +142,6 @@ func runSet(ctx context.Context, db *sql.DB, ms MigrationSet) error {
 		return err
 	}
 
-	// Run unapplied migrations in order
 	for _, m := range migrations {
 		if applied[m.version] {
 			continue
@@ -140,13 +156,14 @@ func runSet(ctx context.Context, db *sql.DB, ms MigrationSet) error {
 			return fmt.Errorf("recording migration %s/%04d_%s: %w", ms.Prefix, m.version, m.name, err)
 		}
 	}
-
 	return nil
 }
 
 //go:embed migrations/*.sql
-var abMigrations embed.FS
+var frameworkMigrations embed.FS
 
 func init() {
-	RegisterMigrations(MigrationSet{Prefix: "ab", Files: abMigrations})
+	// Register framework migrations under the "schemaf" prefix.
+	// 0001_init.sql is handled specially by bootstrap() on first run.
+	RegisterMigrations(MigrationSet{Prefix: "schemaf", Files: frameworkMigrations})
 }

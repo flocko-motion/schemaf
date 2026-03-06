@@ -7,7 +7,6 @@
 This project is designed documentation-first. Features are designed by writing the README and docs _before_ implementation. If the README doesn't describe it, the feature doesn't exist yet.
 
 - Read `README.md` before touching any code
-- Read `docs/CODEGEN.md`, `go/cli/README.md`, `compose/README.md` when working in those areas
 - If implementation diverges from the README, the README wins — fix the code, not the docs
 - Never modify the architecture without first discussing and updating the documentation together with the user
 
@@ -31,11 +30,10 @@ When you identify a need for an architectural change: surface it, propose it, an
 ```
 go/api/          - API registry + OpenAPI generation
 go/server/       - Server framework (gateway, routing, frontend proxy/embed)
-go/atlas/        - App lifecycle and DB bootstrapping
+go/schemaf/      - App lifecycle (schemaf.New, app.Run)
 go/cli/          - CLI framework (subcommands, config/state)
 go/compose/      - Compose dependency resolver (x-schemaf metadata)
 go/db/           - Database helpers + migrations
-go/schemaf/      - Core app entrypoint (schemaf.New, app.Run)
 compose/         - Reusable compose blocks (postgres, etc.)
 example/         - Example project consuming the framework
 ```
@@ -47,13 +45,16 @@ These are framework-wide conventions. Do not deviate.
 **Generated files** use `.gen.` infix: `*.gen.go`, `*.gen.ts`
 
 **Project layout** (enforced, not configurable):
-- `go/sql/migrations/` → input migrations
-- `go/sql/queries/` → sqlc input
+- `go/db/migrations/` → input migrations
+- `go/db/queries/` → sqlc input
 - `go/db/migrations.gen.go` → generated `db.Provider`
-- `go/db/queries.gen.go` → generated query functions
-- `go/api/*.go` → handler implementations
+- `go/db/queries.gen.go` → generated sqlc query functions
+- `go/api/*.go` → endpoint struct implementations
 - `go/api/endpoints.gen.go` → generated `api.Provider`
-- `frontend/api/openapi.gen.ts` → generated TypeScript client
+- `frontend/src/api/generated/api.gen.ts` → generated TypeScript client
+- `compose.gen.yml` → generated base compose (postgres + backend)
+- `compose.dev.yml` → generated dev overlay (exposed ports)
+- `compose/*.yml` → project-specific compose extensions
 
 **Port allocation** (fixed):
 - 7000 — application server
@@ -62,6 +63,8 @@ These are framework-wide conventions. Do not deviate.
 - 7010+ — project-specific services
 
 **Config file**: `schemaf.toml` (two fields only: `title`, `name`)
+
+**Secrets**: stored in `~/.<name>/etc/env` (prod) and `~/.<name>/dev/etc/env` (dev) — never in project directories
 
 ## Code Style
 
@@ -76,3 +79,9 @@ These are framework-wide conventions. Do not deviate.
 > If it can be generalized, put it in schemaf. If arbitrary decisions need to be made: decide them normatively in the framework. Leave only creative decisions to the application layer.
 
 When in doubt about whether something belongs in the framework or the application: cement it in the framework.
+
+## Running Tests
+
+The `/example` directory contains an example project built using SchemaF. Run `/example/codegen.sh` to generate code (including `test.gen.sh`) and then run `test.gen.sh` to execute the tests.
+Don't run tests directly unless you're debugging a specific issue. The `test.gen.sh` script handles dependencies and ensures consistent test execution - it executes both unit and integration tests, 
+including tests written in golang as well as in TypeScript (wrapped in golang). Only running `teste.gen.sh` guarantees that all tests are executed consistently.

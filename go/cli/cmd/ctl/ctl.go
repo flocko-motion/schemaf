@@ -127,21 +127,12 @@ func runDockerComposeCapture(args []string) (string, error) {
 	return string(out), err
 }
 
-// setupEnv symlinks ~/.schemaf/.env → .env in the directory of the first compose file.
-func setupEnv(files []*ComposeFile, homeDir string) {
-	if len(files) == 0 {
-		return
-	}
-	src := filepath.Join(homeDir, ".env")
-	if _, err := os.Stat(src); err != nil {
-		cli.Warning("env file not found: %s", src)
-		return
-	}
-	dst := filepath.Join(files[len(files)-1].Dir, ".env")
-	// Remove stale symlink or file
-	_ = os.Remove(dst)
-	if err := os.Symlink(src, dst); err != nil {
-		cli.Warning("could not symlink .env: %v", err)
+// loadProjectEnv loads secrets from ~/.<name>/etc/env into the process environment.
+// Variables already set in the environment are not overwritten.
+func loadProjectEnv(homeDir string, dev bool) {
+	etcDir := cli.EtcDir(homeDir, dev)
+	if err := cli.LoadEnv(etcDir); err != nil {
+		cli.Warning("loading env from %s: %v", etcDir, err)
 	}
 }
 
