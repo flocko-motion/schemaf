@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -85,6 +86,10 @@ func runEndpointsGen(_ *cli.Context) error {
 	if len(endpoints) == 0 {
 		cli.Warning("no endpoint structs found in %s", apiDir)
 	}
+
+	sort.Slice(endpoints, func(i, j int) bool {
+		return endpoints[i].StructName < endpoints[j].StructName
+	})
 
 	// Generate endpoints.gen.go
 	if err := writeEndpointsGen(endpoints); err != nil {

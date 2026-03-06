@@ -9,9 +9,9 @@ import schemafapi "schemaf.local/base/api"
 // Wire up in go/main.go: app.AddApi(api.Provider)
 func Provider() {
 	schemafapi.Register(schemafapi.NewRoute[ListTodosReq, ListTodosResp](ListTodosEndpoint{}, "Returns all todo items ordered by creation date.", "Returns an empty array if no todos exist."))
-	schemafapi.Register(schemafapi.NewRoute[CreateTodoReq, Todo](CreateTodoEndpoint{}, "Creates a new todo item.", ""))
+	schemafapi.Register(schemafapi.NewRoute[DeleteTodoReq, DeleteTodoResp](DeleteTodoEndpoint{}, "Deletes a todo item by ID.", ""))
 	schemafapi.Register(schemafapi.NewRoute[GetServerTimeReq, GetServerTimeResp](GetServerTimeEndpoint{}, "Returns the current time from the clock sidecar.", "Demonstrates how project compose extensions integrate with the backend."))
 	schemafapi.Register(schemafapi.NewRoute[GetTodoReq, GetTodoResp](GetTodoEndpoint{}, "Retrieves a single todo item by ID.", "Returns 404 if the todo does not exist."))
+	schemafapi.Register(schemafapi.NewRoute[CreateTodoReq, Todo](CreateTodoEndpoint{}, "Creates a new todo item.", ""))
 	schemafapi.Register(schemafapi.NewRoute[UpdateTodoReq, Todo](UpdateTodoEndpoint{}, "Updates the text and done status of a todo item.", ""))
-	schemafapi.Register(schemafapi.NewRoute[DeleteTodoReq, DeleteTodoResp](DeleteTodoEndpoint{}, "Deletes a todo item by ID.", ""))
 }
