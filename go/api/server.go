@@ -10,6 +10,7 @@ func NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("GET /openapi.json", OpenAPIHandler())
 	mux.Handle("GET /api/health", HealthHandler())
+	mux.Handle("GET /api/user/me", UserMeHandler())
 	for _, r := range Routes() {
 		mux.Handle(r.Method+" "+r.Path, r.Handler)
 	}

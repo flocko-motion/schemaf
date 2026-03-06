@@ -2,10 +2,12 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	schemafapi "schemaf.local/base/api"
 	"schemaf.local/example/api"
@@ -16,6 +18,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 	schemafapi.Reset()
 	api.Provider()
 	return httptest.NewServer(schemafapi.NewMux())
+}
+
+func newAuthTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	schemafapi.InitAuth([]byte("test-signing-key-32-bytes-padding"))
+	return newTestServer(t)
 }
 
 func TestHealth(t *testing.T) {
@@ -89,6 +97,61 @@ func TestCreateTodo(t *testing.T) {
 	}
 	if todo.Text != "buy milk" {
 		t.Fatalf("POST /api/todos: expected text 'buy milk', got %q", todo.Text)
+	}
+}
+
+func TestUserMe(t *testing.T) {
+	srv := newAuthTestServer(t)
+	defer srv.Close()
+
+	token, err := schemafapi.IssueToken("user-uuid-123", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/user/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/user/me: got %d, want 200", resp.StatusCode)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["id"] != "user-uuid-123" {
+		t.Fatalf("expected id %q, got %q", "user-uuid-123", body["id"])
+	}
+}
+
+func TestUserMeUnauthorized(t *testing.T) {
+	srv := newAuthTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/user/me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET /api/user/me without token: got %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestUserMeInvalidToken(t *testing.T) {
+	srv := newAuthTestServer(t)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/user/me", nil)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", "not.a.valid.token"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET /api/user/me with bad token: got %d, want 401", resp.StatusCode)
 	}
 }
 
