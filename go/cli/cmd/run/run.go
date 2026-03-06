@@ -44,14 +44,21 @@ func runTests(verbose, noCache bool) error {
 }
 
 func runGoTests(verbose, noCache bool) error {
+	// Run both project tests (./go/...) and framework tests (schemaf.local/base/...).
+	// Framework tests validate guarantees (migration ordering, DB reset filter, etc.)
+	// that all projects depend on.
+	pkgs := []string{"./go/...", "schemaf.local/base/..."}
+
 	// Use gotestsum for pretty output when available, fall back to go test.
 	if path, err := exec.LookPath("gotestsum"); err == nil {
 		args := []string{path, "--format", "testdox"}
 		if noCache {
-			args = append(args, "--rerun-fails=0", "--", "-count=1", "./go/...")
+			args = append(args, "--rerun-fails=0", "--")
+			args = append(args, "-count=1")
 		} else {
-			args = append(args, "--", "./go/...")
+			args = append(args, "--")
 		}
+		args = append(args, pkgs...)
 		if verbose {
 			args = append(args, "-v")
 		}
@@ -64,7 +71,8 @@ func runGoTests(verbose, noCache bool) error {
 	fmt.Fprintln(os.Stderr, "WARNING: gotestsum not found — output will be plain go test.")
 	fmt.Fprintln(os.Stderr, "         Install with: go install gotest.tools/gotestsum@latest")
 
-	args := []string{"test", "./go/..."}
+	args := []string{"test"}
+	args = append(args, pkgs...)
 	if verbose {
 		args = append(args, "-v")
 	}

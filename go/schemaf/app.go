@@ -2,7 +2,9 @@ package schemaf
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 
@@ -49,6 +51,9 @@ func (a *App) Run() error {
 		if err := db.RunMigrations(a.ctx); err != nil {
 			return fmt.Errorf("migrations: %w", err)
 		}
+		if err := a.initAuth(); err != nil {
+			return fmt.Errorf("auth init: %w", err)
+		}
 	}
 
 	port := os.Getenv("PORT")
@@ -58,6 +63,33 @@ func (a *App) Run() error {
 
 	slog.Info("starting server", "addr", ":"+port)
 	return api.Serve(":" + port)
+}
+
+// initAuth loads (or generates) the JWT signing key from _schemaf_config.
+func (a *App) initAuth() error {
+	const keyName = "jwt_signing_key"
+	val, ok, err := db.ConfigGet(a.ctx, keyName)
+	if err != nil {
+		return fmt.Errorf("loading jwt signing key: %w", err)
+	}
+	if !ok {
+		// First boot: generate a new random 32-byte key.
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			return fmt.Errorf("generating jwt signing key: %w", err)
+		}
+		val = hex.EncodeToString(raw)
+		if err := db.ConfigSet(a.ctx, keyName, val); err != nil {
+			return fmt.Errorf("storing jwt signing key: %w", err)
+		}
+		slog.Info("jwt signing key generated and stored")
+	}
+	key, err := hex.DecodeString(val)
+	if err != nil {
+		return fmt.Errorf("decoding jwt signing key: %w", err)
+	}
+	api.InitAuth(key)
+	return nil
 }
 
 // dsn constructs the Postgres DSN deterministically from the project name and environment.

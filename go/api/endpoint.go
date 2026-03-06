@@ -32,13 +32,17 @@ type Endpoint[Req, Resp any] interface {
 func NewRoute[Req, Resp any](e Endpoint[Req, Resp], summary, description string) Route {
 	var zeroReq Req
 	var zeroResp Resp
+	h := newTypedHandler(e)
+	if e.Auth() {
+		h = requireAuth(h)
+	}
 	return Route{
 		Method:      e.Method(),
 		Path:        e.Path(),
 		Auth:        e.Auth(),
 		Summary:     summary,
 		Description: description,
-		Handler:     newTypedHandler(e),
+		Handler:     h,
 		ReqType:     &zeroReq,
 		RespType:    &zeroResp,
 	}

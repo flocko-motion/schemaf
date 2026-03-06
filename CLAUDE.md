@@ -1,5 +1,74 @@
 # CLAUDE.md — schemaf
 
+## MANDATORY: Use td for Task Management
+
+**td** is the task system for this project (part of the [Sidecar](https://sidecar.haplab.com) workflow). All state lives in `.todos/db.sqlite` — local only, never transmitted.
+
+### Session Start
+
+```
+td usage --new-session
+```
+
+Run this at the start of every conversation (or after `/clear`). It shows current state and assigned work. Use `td usage -q` after the first read to suppress the banner.
+
+Optional session naming:
+```
+td session "name"      # label the current session
+td session --new       # force a new session in the same terminal context
+```
+
+### During a Session
+
+Log progress as you work — don't wait until the end:
+
+```
+td log "what you did"                        # completed work
+td log --decision "why this approach"        # architectural choices
+td log --blocker "what's blocking"           # impediments
+td link <issue-id> [files]                   # track modified files
+```
+
+Key navigation commands:
+```
+td next                  # highest priority open issue
+td focus <issue-id>      # set active issue
+td start <issue-id>      # transition open → in_progress
+td context <issue-id>    # view handoff state from prior session
+```
+
+### Session End / Before Context Runs Out
+
+Always hand off before the context window fills:
+
+```
+td handoff <issue-id> \
+  --done "completed and tested work" \
+  --remaining "specific pending tasks" \
+  --decision "why the approach was chosen" \
+  --uncertain "open questions for next session"
+```
+
+### Review Workflow
+
+```
+td review <issue-id>              # submit for review
+td reviewable                     # list issues awaiting review
+td approve <issue-id>             # approve and close
+td reject <issue-id> --reason ""  # reject with feedback
+```
+
+**Critical**: The session that implements code cannot approve it. Review must come from a different session (human or separate agent).
+
+### Creating Work
+
+```
+td create "description" --type [feature|bug|chore|docs|refactor|test] --priority [P0-P3]
+td epic create "name" --priority [P0-P3]
+td dep add <issue> <depends-on>   # declare dependency
+td critical-path                  # optimal work sequence
+```
+
 ## Documentation-First
 
 **The README is the source of truth.**

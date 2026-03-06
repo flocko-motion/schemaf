@@ -3,18 +3,19 @@ services:
     clock:
         image: python:3-alpine
         container_name: schemaf-example-clock
-        command: >
-            python3 -c "
-            from http.server import HTTPServer, BaseHTTPRequestHandler
-            import json, datetime
-            class H(BaseHTTPRequestHandler):
-              def do_GET(self):
-                self.send_response(200)
-                self.send_header('Content-Type','application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'time': datetime.datetime.utcnow().isoformat()+'Z'}).encode())
-              def log_message(self, *a): pass
-            HTTPServer(('',8080),H).serve_forever()
-            "
+        command:
+            - python3
+            - -c
+            - |
+                from http.server import HTTPServer, BaseHTTPRequestHandler
+                import json, datetime
+                class H(BaseHTTPRequestHandler):
+                  def do_GET(self):
+                    self.send_response(200)
+                    self.send_header('Content-Type','application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'time': datetime.datetime.utcnow().isoformat()+'Z'}).encode())
+                  def log_message(self, *a): pass
+                HTTPServer(('',8080),H).serve_forever()
         networks:
             - net

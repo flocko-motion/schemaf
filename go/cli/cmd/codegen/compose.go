@@ -18,6 +18,9 @@ var composeGenTemplate string
 //go:embed compose.dev.yml.tmpl
 var composeDevTemplate string
 
+//go:embed compose.test.yml.tmpl
+var composeTestTemplate string
+
 func newComposeCmd(_ *cli.Context) *cobra.Command {
 	return &cobra.Command{
 		Use:   "compose",
@@ -58,6 +61,11 @@ func runComposeGen() error {
 		return err
 	}
 	cli.Success("Generated gen/compose.dev.yml")
+
+	if err := renderTemplate(composeTestTemplate, "gen/compose.test.yml", data); err != nil {
+		return err
+	}
+	cli.Success("Generated gen/compose.test.yml")
 	return nil
 }
 

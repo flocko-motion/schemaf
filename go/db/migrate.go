@@ -41,12 +41,27 @@ func runMigrations(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("bootstrap: %w", err)
 	}
 
-	for _, ms := range registeredSets {
+	for _, ms := range orderMigrationSets(registeredSets) {
 		if err := runSet(ctx, db, ms); err != nil {
 			return fmt.Errorf("running migrations for prefix %q: %w", ms.Prefix, err)
 		}
 	}
 	return nil
+}
+
+// orderMigrationSets returns a new slice with the "schemaf" prefix always first,
+// preserving relative order of all other sets. This guarantees framework migrations
+// run before project migrations regardless of registration order.
+func orderMigrationSets(sets []MigrationSet) []MigrationSet {
+	ordered := make([]MigrationSet, 0, len(sets))
+	for _, ms := range sets {
+		if ms.Prefix == "schemaf" {
+			ordered = append([]MigrationSet{ms}, ordered...)
+		} else {
+			ordered = append(ordered, ms)
+		}
+	}
+	return ordered
 }
 
 // bootstrap ensures schemaf_migrations exists. If it doesn't, it runs
