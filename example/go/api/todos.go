@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"time"
+
+	schemafapi "schemaf.local/base/api"
 )
 
 // ─── Shared types ──────────────────────────────────────────────────────────────
@@ -46,7 +48,10 @@ func (e GetTodoEndpoint) Path() string   { return "/api/todos/{id}" }
 func (e GetTodoEndpoint) Auth() bool     { return false }
 func (e GetTodoEndpoint) Handle(ctx context.Context, req GetTodoReq) (GetTodoResp, error) {
 	// TODO: query db using generated db.GetTodo(ctx, req.ID)
-	return GetTodoResp{}, nil
+	if req.ID == "" {
+		return GetTodoResp{}, schemafapi.ErrNotFound
+	}
+	return GetTodoResp{Todo: Todo{ID: req.ID}}, nil
 }
 
 type GetTodoReq struct {

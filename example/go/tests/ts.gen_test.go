@@ -38,6 +38,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestClockTime(t *testing.T) {
-	t.Skip("requires clock docker service")
+	srv := newTSTestServer(t)
+	runTSTest(t, "testClockTime", srv)
 }
 

@@ -51,7 +51,12 @@ func NewRoute[Req, Resp any](e Endpoint[Req, Resp], summary, description string)
 func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req Req
-		// Decode body for methods that carry one
+		// Decode path params (fields tagged with `path:"name"`).
+		if err := decodePathParams(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Decode body for methods that carry one.
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -61,8 +66,7 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
 
 		resp, err := e.Handle(r.Context(), req)
 		if err != nil {
-			// TODO: map error types to status codes
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeJSONError(w, statusFor(err), err.Error())
 			return
 		}
 

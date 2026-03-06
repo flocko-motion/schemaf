@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"text/template"
 
 	"github.com/spf13/cobra"
 	cli "schemaf.local/base/cli"
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed compose.gen.yml.tmpl
@@ -20,6 +23,9 @@ var composeDevTemplate string
 
 //go:embed compose.test.yml.tmpl
 var composeTestTemplate string
+
+//go:embed test-env.sh.tmpl
+var testEnvShTemplate string
 
 func newComposeCmd(_ *cli.Context) *cobra.Command {
 	return &cobra.Command{
@@ -46,7 +52,12 @@ func runComposeGen() error {
 		return err
 	}
 
-	data := map[string]any{"Name": name, "Extensions": extensions}
+	extServices, err := scanExtServices(extensions)
+	if err != nil {
+		return err
+	}
+
+	data := map[string]any{"Name": name, "Extensions": extensions, "ExtServices": extServices}
 
 	if err := os.MkdirAll("gen", 0755); err != nil {
 		return fmt.Errorf("creating gen/: %w", err)
@@ -66,6 +77,15 @@ func runComposeGen() error {
 		return err
 	}
 	cli.Success("Generated gen/compose.test.yml")
+
+	if err := renderTemplate(testEnvShTemplate, "gen/test-env.sh", data); err != nil {
+		return err
+	}
+	if err := os.Chmod("gen/test-env.sh", 0755); err != nil {
+		return fmt.Errorf("chmod gen/test-env.sh: %w", err)
+	}
+	cli.Success("Generated gen/test-env.sh")
+
 	return nil
 }
 
@@ -106,4 +126,46 @@ func scanComposeExtensions() ([]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+// ExtService describes a project compose extension service that exposes internal ports.
+// The codegen adds host port mappings for these services in compose.test.yml so that
+// tests running on the host can reach them.
+type ExtService struct {
+	Name   string   // service name, e.g. "clock"
+	Ports  []string // internal ports declared via expose:, e.g. ["8080"]
+	EnvVar string   // env var name, e.g. "CLOCK_URL"
+}
+
+// scanExtServices parses compose/ extension files and returns services with expose: entries.
+func scanExtServices(extensions []string) ([]ExtService, error) {
+	type composeFile struct {
+		Services map[string]struct {
+			Expose []string `yaml:"expose"`
+		} `yaml:"services"`
+	}
+
+	var result []ExtService
+	for _, path := range extensions {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+		var cf composeFile
+		if err := yaml.Unmarshal(data, &cf); err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", path, err)
+		}
+		for name, svc := range cf.Services {
+			if len(svc.Expose) == 0 {
+				continue
+			}
+			result = append(result, ExtService{
+				Name:   name,
+				Ports:  svc.Expose,
+				EnvVar: strings.ToUpper(name) + "_URL",
+			})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
 }

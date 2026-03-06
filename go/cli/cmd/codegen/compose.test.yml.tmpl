@@ -18,14 +18,20 @@ services:
       POSTGRES_PASSWORD: dev
       POSTGRES_DB: {{.Name}}
     ports:
-      - "127.0.0.1:7004:5432"
+      - "127.0.0.1::5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U schemaf"]
       interval: 2s
       timeout: 2s
       retries: 10
       start_period: 5s
-
+{{range .ExtServices}}
+  {{.Name}}:
+    ports:
+{{- range .Ports}}
+      - "127.0.0.1::{{.}}"
+{{- end}}
+{{end}}
 networks:
   net:
     driver: bridge

@@ -24,6 +24,7 @@ const testsDir = "go/tests"
 
 var reExportedTestFunc = regexp.MustCompile(`^export\s+async\s+function\s+(test\w+)`)
 var reSkipComment = regexp.MustCompile(`//\s*skip:\s*(.+)`)
+var reManualComment = regexp.MustCompile(`//\s*manual:`)
 
 func newTestsCmd(_ *cli.Context) *cobra.Command {
 	return &cobra.Command{
@@ -40,6 +41,7 @@ type tsTestFunc struct {
 	FuncName string // e.g. "testHealth"
 	GoName   string // e.g. "Health"
 	Skip     string // non-empty if the test should be skipped
+	Manual   bool   // true if a hand-written Go wrapper exists — skip codegen
 }
 
 type tsTestFile struct {
@@ -122,24 +124,32 @@ func parseTSTestFuncs(path string) ([]tsTestFunc, error) {
 
 	var tests []tsTestFunc
 	var pendingSkip string
+	var pendingManual bool
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		// Check for skip comment on the preceding line
 		if m := reSkipComment.FindStringSubmatch(line); m != nil {
 			pendingSkip = strings.TrimSpace(m[1])
 			continue
 		}
+		if reManualComment.MatchString(line) {
+			pendingManual = true
+			continue
+		}
 		if m := reExportedTestFunc.FindStringSubmatch(line); m != nil {
 			funcName := m[1]
-			tests = append(tests, tsTestFunc{
-				FuncName: funcName,
-				GoName:   tsToGoTestName(funcName),
-				Skip:     pendingSkip,
-			})
+			if !pendingManual {
+				tests = append(tests, tsTestFunc{
+					FuncName: funcName,
+					GoName:   tsToGoTestName(funcName),
+					Skip:     pendingSkip,
+				})
+			}
 			pendingSkip = ""
+			pendingManual = false
 		} else {
 			pendingSkip = ""
+			pendingManual = false
 		}
 	}
 	return tests, scanner.Err()

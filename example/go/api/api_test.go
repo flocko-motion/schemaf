@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -97,6 +98,108 @@ func TestCreateTodo(t *testing.T) {
 	}
 	if todo.Text != "buy milk" {
 		t.Fatalf("POST /api/todos: expected text 'buy milk', got %q", todo.Text)
+	}
+}
+
+func TestMalformedJSONReturns400(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/todos", "application/json",
+		strings.NewReader(`{not valid json`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed JSON: got %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestNotFoundReturns404(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+
+	// GetTodoEndpoint returns ErrNotFound when ID is empty — hit /api/todos/ with no id segment.
+	// To force the handler to return ErrNotFound, call a non-existent route.
+	resp, err := http.Get(srv.URL + "/api/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown route: got %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestHandlerErrNotFoundMapsTo404(t *testing.T) {
+	// Register a one-off endpoint that always returns ErrNotFound.
+	schemafapi.Reset()
+	schemafapi.Register(schemafapi.NewRoute[struct{}, struct{}](notFoundEndpoint{}, "", ""))
+	srv := httptest.NewServer(schemafapi.NewMux())
+	defer srv.Close()
+
+	r, err := http.Get(srv.URL + "/api/test/notfound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("ErrNotFound handler: got %d, want 404", r.StatusCode)
+	}
+}
+
+type notFoundEndpoint struct{}
+
+func (notFoundEndpoint) Method() string { return "GET" }
+func (notFoundEndpoint) Path() string   { return "/api/test/notfound" }
+func (notFoundEndpoint) Auth() bool     { return false }
+func (notFoundEndpoint) Handle(_ context.Context, _ struct{}) (struct{}, error) {
+	return struct{}{}, schemafapi.ErrNotFound
+}
+
+func TestGetTodoPathParam(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+
+	const wantID = "abc-123-uuid"
+	resp, err := http.Get(srv.URL + "/api/todos/" + wantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/todos/{id}: got %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		Todo struct {
+			ID string `json:"id"`
+		} `json:"todo"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Todo.ID != wantID {
+		t.Fatalf("path param not decoded: got id=%q, want %q", body.Todo.ID, wantID)
+	}
+}
+
+func TestStatus(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/status: got %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("expected status ok, got %v", body["status"])
+	}
+	if _, ok := body["uptime"]; !ok {
+		t.Fatal("expected uptime field in /api/status response")
 	}
 }
 

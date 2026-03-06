@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -16,7 +17,12 @@ func (e GetServerTimeEndpoint) Method() string { return "GET" }
 func (e GetServerTimeEndpoint) Path() string   { return "/api/time" }
 func (e GetServerTimeEndpoint) Auth() bool     { return false }
 func (e GetServerTimeEndpoint) Handle(ctx context.Context, _ GetServerTimeReq) (GetServerTimeResp, error) {
-	resp, err := http.Get("http://clock:8080")
+	clockURL := os.Getenv("CLOCK_URL")
+	if clockURL == "" {
+		clockURL = "http://clock:8080"
+	}
+
+	resp, err := http.Get(clockURL)
 	if err != nil {
 		return GetServerTimeResp{}, fmt.Errorf("calling clock service: %w", err)
 	}

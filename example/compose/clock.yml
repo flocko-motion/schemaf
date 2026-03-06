@@ -17,5 +17,7 @@ services:
                     self.wfile.write(json.dumps({'time': datetime.datetime.utcnow().isoformat()+'Z'}).encode())
                   def log_message(self, *a): pass
                 HTTPServer(('',8080),H).serve_forever()
+        expose:
+            - "8080"
         networks:
             - net
