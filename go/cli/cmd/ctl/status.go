@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
 )
 
 func newStatusCmd(ctx *cli.Context) *cobra.Command {
@@ -20,8 +20,8 @@ func newStatusCmd(ctx *cli.Context) *cobra.Command {
 		Long: `Resolve the dependency graph and check health of all services.
 
 Example:
-  zeus ctl status example/compose/app.yml
-  zeus ctl status example/compose/app.yml backend`,
+  schemaf ctl status example/compose/app.yml
+  schemaf ctl status example/compose/app.yml backend`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := resolveAndPrint(args[0])

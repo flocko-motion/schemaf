@@ -1,75 +1,420 @@
-# atlas-base
+# schemaf
 
-atlas-base is a framework that canonically fixes the infrastructure decisions that normally get rebuilt for every new project. The goal is to eliminate setup churn and start building product logic immediately.
+> **⚠️ SPECIFICATION-FIRST PROJECT**  
+> This project is designed **documentation-first**. The README is the source of truth.  
+> **DO NOT modify the architecture without first discussing and implementing changes to the documentation together with the user.**  
+> All design decisions are made through pair programming and captured here before implementation.
 
-This repository is the framework itself. The example project lives in `example/` and demonstrates how a project consumes the framework. The Atlas product is a separate project built on top of atlas-base and is not this repository.
+schemaf is an opinionated framework that eliminates infrastructure churn by making all the boring decisions for you. Build production-ready applications with Go backend, Postgres, and static frontend immediately - no setup, no bikeshedding.
 
-## What atlas-base Fixes
+The name "Schema F" comes from the German expression meaning "the standard operating procedure" or "the tried-and-true method" - which is exactly what this framework provides: a reliable, proven approach to project infrastructure.
 
-These choices are **fixed and not re-litigated** per project:
+## Golden Rule
 
-- docker compose dependency resolution (`x-atlas` metadata)
-- gateway (nginx reverse proxy for `/api` and `/`)
-- backend API structure (Go mux + default endpoints)
-- database (Postgres + migrations + sqlc workflow)
-- API codegen (`/openapi.ts` for TypeScript clients)
-- ports (see below)
+**If it can be generalized, put it in schemaf. If arbitrary decisions need to be made: decide them normatively in the framework. Leave only creative decisions to the application layer.**
 
-## What Projects Extend
+schemaf deliberately reduces degrees of freedom. We cement:
+- Run scripts and CLI tooling
+- Code generation workflows (one command → everything)
+- Docker compose layout and dependency resolution
+- Port assignments
+- Database choice and migration patterns
+- Server architecture (the Go server is the gateway)
+- Glue code generation (migrations provider, endpoint provider, etc.)
 
-Projects built with atlas-base **add**:
+You focus on:
+- Your database schema
+- Your API endpoints
+- Your frontend UI
 
-- CLI subcommands (project-specific commands mounted into Zeus)
-- API routes (additional handlers registered by the project)
-- database schema/migrations (project-specific tables)
-- frontend (any framework; atlas-base only provides the generated API client)
+This repository is the framework itself. The example project lives in `example/` and demonstrates how a project consumes the framework.
 
-## Zeus CLI Concept
+## Quick Start
 
-There is always **one CLI per project**, called Zeus. The framework ships the CLI **framework**, not a binary. Each project builds its own Zeus CLI by mounting framework subcommands (compose/codegen) plus its own commands.
+```bash
+# 1. Create your project structure (normative paths)
+mkdir myapp && cd myapp
+mkdir -p go/sql/migrations go/sql/queries go/api frontend
 
-The example project shows this pattern in `example/cli/main.go` and `example/cli/zeus.sh`.
+# 2. Create minimal main.go
+cat > go/main.go <<EOF
+package main
+import (
+    "context"
+    "github.com/yourorg/schemaf"
+    "myapp/go/api"
+    "myapp/go/db"
+)
+func main() {
+    ctx := context.Background()
+    app := schemaf.New(ctx)
+    app.AddDb(db.Provider)
+    app.AddApi(api.Provider)
+    app.Run()
+}
+EOF
 
-## Codegen (Documentation-First)
+# 3. Write a migration
+cat > go/sql/migrations/001_users.sql <<EOF
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+EOF
 
-Zeus provides canonical code generation commands:
+# 4. Write a query
+cat > go/sql/queries/users.sql <<EOF
+-- name: GetUser :one
+SELECT * FROM users WHERE id = $1;
+EOF
+
+# 5. Write a handler
+cat > go/api/users.go <<EOF
+package api
+func GetUserHandler(w http.ResponseWriter, r *http.Request) {
+  // Your handler logic
+}
+EOF
+
+# 6. Build & generate
+go build -o myapp go/main.go
+./myapp codegen .
+
+# 7. Run
+./myapp dev
+```
+
+**That's it.** The framework:
+- Generates `go/db/queries.gen.go` → type-safe query functions (sqlc)
+- Generates `go/db/migrations.gen.go` → `db.Provider` with embedded SQL
+- Generates `go/api/endpoints.gen.go` → `api.Provider` with handler registration
+- Generates `frontend/api/openapi.gen.ts` → TypeScript client
+- Wires everything via provider pattern in main.go
+- Provides `/health`, `/status`, auth layer
+- Serves your frontend (if present)
+- All on port 7000
+
+You write SQL, handlers, and frontend. The framework generates all glue code.
+
+## Project Structure (Normative)
+
+schemaf expects a specific directory layout. No configuration, no flexibility - this is the structure:
 
 ```
-zeus codegen openapi
-zeus codegen sqlc
+myapp/
+├── schemaf.toml                    # Minimal config (title, name)
+├── go/                            # All Go code (CLI + server unified)
+│   ├── main.go                    # Wire up providers, start app
+│   ├── sql/
+│   │   ├── migrations/            # Your SQL migrations
+│   │   │   ├── 001_users.sql
+│   │   │   └── 002_posts.sql
+│   │   └── queries/               # Your SQL queries (sqlc)
+│   │       └── users.sql
+│   ├── db/                        # Generated by codegen
+│   │   ├── queries.gen.go        # Generated: sqlc query functions
+│   │   └── migrations.gen.go     # Generated: db.Provider
+│   └── api/                       # Your API handlers (normative!)
+│       ├── users.go              # Your handler implementations
+│       └── endpoints.gen.go      # Generated: api.Provider
+├── frontend/                      # Your static site (any language/framework)
+│   ├── api/
+│   │   └── openapi.gen.ts        # Generated: TypeScript client
+│   ├── src/
+│   └── package.json
+└── compose/                       # Optional: docker-compose overrides
 ```
 
-- OpenAPI generation runs from code (no running server required)
-- SQLC generation merges framework SQL with project SQL
-- All paths are canonical and relative to `project.toml`
+**Why normative paths?**
+- Zero decisions about "where do I put this?"
+- Codegen knows exactly where to write generated providers
+- No configuration needed
+- Clone any schemaf project and the structure is identical
 
-See `docs/CODEGEN.md` for details.
+**Path rules:**
+- `go/sql/migrations/*.sql` → migrations (input)
+- `go/sql/queries/*.sql` → sqlc input
+- `go/db/migrations.gen.go` → generated `db.Provider`
+- `go/db/queries.gen.go` → generated query functions
+- `go/api/*.go` → your API handlers (normative!)
+- `go/api/endpoints.gen.go` → generated `api.Provider`
+- `frontend/api/openapi.gen.ts` → generated TypeScript client
+
+**Generated file naming:**
+All generated files use `.gen.` infix (e.g., `*.gen.go`, `*.gen.ts`) making them instantly recognizable and easy to `.gitignore`.
+
+**Recommended .gitignore:**
+```gitignore
+*.gen.go
+*.gen.ts
+```
+
+Run `schemaf codegen .` after checkout to regenerate everything.
+
+## What schemaf Provides
+
+schemaf is **batteries-included**. These are built-in, not optional:
+
+- **Server with default endpoints**: `/health`, `/status`, auth layer
+  - Go server is the gateway
+  - Binds `/api/*` for your handlers + framework endpoints
+  - Binds `/` for frontend (proxy in dev, embed in production)
+  - Single exposed port (7000)
+- **Authentication**: Built-in auth layer (implementation: TBD)
+- **Database**: Postgres with automatic migration and codegen
+  - Write SQL in `go/sql/migrations/` and `go/sql/queries/`
+  - Run `./myapp codegen .` - generates providers
+  - Wire up: `app.AddDb(db.Provider)` in main.go
+  - Generated: `go/db/queries.gen.go`, `go/db/migrations.gen.go`
+- **API codegen**: Generate `/openapi.ts` TypeScript client from Go handlers
+  - Write handlers in `go/api/`
+  - Run `./myapp codegen .` - generates `api.Provider` and TypeScript client
+  - Wire up: `app.AddApi(api.Provider)` in main.go
+- **Docker compose**: Dependency resolution via `x-schemaf` metadata
+- **Ports**: Fixed allocation (see below)
+- **CLI commands**: `dev`, `compose`, `codegen` - built-in, ready to use
+
+## What You Add
+
+Projects built with schemaf **add only creative logic**:
+
+- **Database schema**: Write SQL migrations in `go/sql/migrations/`
+- **Database queries**: Write SQL queries in `go/sql/queries/`
+- **API handlers**: Write Go handlers in `go/api/` (normative!)
+- **Frontend**: Any static site framework in `frontend/` (React, Vue, Svelte, etc.)
+- **Optional services**: Additional Docker containers if needed (Redis, workers, etc.)
+- **Optional CLI commands**: Add custom commands to `main.go` if needed (rarely necessary)
+
+**That's it.** No configuration files (except minimal `schemaf.toml`). No binding framework commands. No decisions about project structure - it's normative.
+
+## Server Architecture
+
+The Go server built from schemaf **is the gateway**.
+
+```
+Your Application (port 7000)
+├── /api/*        → Go handlers (your business logic)
+└── /*            → Frontend
+    ├── Dev:      Proxy to frontend dev server (port 7002)
+    └── Prod:     Serve embedded static files
+```
+
+**Development workflow:**
+```bash
+./myapp dev        # Starts Go server (proxies to :7002) + frontend dev server
+```
+
+**Production deployment:**
+Frontend is embedded at build time via `//go:embed`, served directly by the Go server.
+
+**Single binary deployment:**
+```bash
+go build -o myapp go/main.go
+./myapp server     # Production server on port 7000
+```
+
+All migrations, frontend assets, and configuration are embedded. Deploy one binary.
+
+**Default endpoints:**
+- `/health` - Health check (built-in)
+- `/status` - Service status (built-in)
+- `/api/*` - Your handlers + auth layer (framework provides auth, you add business logic)
+
+## schemaf CLI
+
+Your application **is** a CLI. The binary you build has all commands built-in.
+
+```bash
+# Build your application
+go build -o myapp go/main.go
+
+# Run commands (Cobra handles routing)
+./myapp server               # Start the server (+ services)
+./myapp dev                  # Start dev mode (server + db + frontend dev + services)
+./myapp compose up           # Docker compose with dependency resolution
+./myapp compose down         # Stop all services
+./myapp codegen .            # Generate EVERYTHING (fast - no services started)
+```
+
+**The CLI uses Cobra for command routing:**
+- `app.Run()` hands over to Cobra
+- Cobra decides which command to execute based on CLI args
+- Services registered via `app.AddService()` only run for `server`/`dev` commands
+- Other commands (`codegen`, `compose`) stay fast and lightweight
+
+**The CLI has full knowledge of your application.** It's not separate tooling - it's the same binary that runs your server. This means:
+- Codegen knows your handlers (they're compiled in)
+- Migrations are embedded (no external files in production)
+- Server command is built-in (just run `myapp server`)
+- Optional: add custom commands to `go/main.go`
+- Optional: register services that run with the server
+
+Your `go/main.go` wires everything up - all framework commands are already there.
+
+## Code Generation
+
+**One command generates everything:**
+
+```bash
+schemaf codegen <project-dir>
+```
+
+**What gets generated:**
+
+1. **SQL → Go (sqlc)**
+   - Auto-discovers `go/sql/queries/*.sql`
+   - Generates type-safe Go query functions → `go/db/queries.gen.go`
+
+2. **Migrations → db.Provider**
+   - Auto-discovers `go/sql/migrations/*.sql`
+   - Generates `go/db/migrations.gen.go` with `db.Provider` function
+   - Provider returns embedded migrations to framework
+
+3. **Handlers → api.Provider**
+   - Auto-discovers handler functions in `go/api/*.go`
+   - Generates `go/api/endpoints.gen.go` with `api.Provider` function
+   - Provider registers all handlers with the framework
+
+4. **Handlers → TypeScript client**
+   - Scans `go/api/*.go` for API handler definitions
+   - Generates `frontend/api/openapi.gen.ts` (no running server needed)
+   - Type-safe client for your frontend
+
+**Zero configuration.** Just run `./myapp codegen .` and all the glue code appears.
+
+## What is main.go?
+
+Your `go/main.go` is the application entry point. It wires up the generated providers.
+
+**Minimal example:**
+```go
+package main
+
+import (
+    "context"
+    "github.com/yourorg/schemaf"
+    "myapp/go/api"
+    "myapp/go/db"
+)
+
+func main() {
+    ctx := context.Background()
+    app := schemaf.New(ctx)
+    
+    // Wire up generated providers (pass function references, not calls!)
+    app.AddDb(db.Provider)      // Generated: migrations + queries
+    app.AddApi(api.Provider)    // Generated: endpoint registration
+    
+    app.Run() // Hands over to Cobra CLI - blocking
+}
+```
+
+**With optional customizations:**
+```go
+func main() {
+    ctx := context.Background()
+    app := schemaf.New(ctx)
+    
+    app.AddDb(db.Provider)
+    app.AddApi(api.Provider)
+    
+    // Optional: mount custom CLI commands
+    app.AddSubcommand("import", importer.SubcommandProvider)
+    
+    // Optional: register background services
+    // These only run when "server" or "dev" command is used
+    app.AddService(worker.ServiceProvider)  // Starts when server starts
+    
+    app.Run()  // Cobra handles command routing
+}
+```
+
+**How services work:**
+- `app.AddService()` registers a service provider
+- Services are **only started** when running `./myapp server` or `./myapp dev`
+- Other commands (`codegen`, `compose`, etc.) don't start services
+- Keeps CLI commands fast and lightweight
+
+**What gets wired:**
+- `db.Provider` → function generated in `go/db/migrations.gen.go` (embedded SQL)
+- `api.Provider` → function generated in `go/api/endpoints.gen.go` (handler registration)
+- Framework calls these providers at the right time
+- Everything else is framework-provided
+
+## Configuration: schemaf.toml
+
+Projects have a minimal `schemaf.toml` file that defines:
+
+```toml
+title = "My Application"
+name = "myapp"
+
+# Optional: explicitly declare database locations
+# (If omitted, schemaf auto-discovers go/sql/)
+[[db]]
+name = "app"
+type = "postgres"
+path = "go/sql"
+```
+
+**Philosophy**: Maximum automation. If schemaf can generate it, you don't write it. We auto-discover files, generate glue code, and wire everything together. Paths are normative - no configuration needed.
 
 ## Port Convention
 
+schemaf uses a fixed port allocation scheme to eliminate configuration:
+
 ```
-7000    - nginx gateway (main entry point)
-7001    - backend API
-7002    - frontend dev server
-7003    - postgres
-7004 - 7009    - atlas-base reserved
-7010+   - project services
+7000           - Application server (main entry point)
+                 Serves /api (Go handlers) and / (frontend)
+7001           - Reserved (future use)
+7002           - Frontend dev server (Vite, Next.js dev, etc.)
+7003           - Postgres
+7004 - 7009    - schemaf framework reserved
+7010+          - Project-specific services (Redis, workers, etc.)
 ```
+
+**Why fixed ports?**
+- No port conflicts across projects (each gets its own range)
+- No environment variables needed for service discovery
+- Docker compose networking "just works"
+- Clear convention: 700X for core, 701X+ for project services
 
 ## Repository Map
 
 ```
-compose/        - reusable compose blocks (nginx, postgres)
-example/        - example project using atlas-base
+compose/        - Reusable compose blocks (postgres, future: redis, etc.)
+example/        - Example project demonstrating schemaf usage
 go/api/         - API registry + OpenAPI generation
-go/atlas/       - app lifecycle and DB bootstrapping
-go/cli/         - Zeus CLI framework (subcommands, config/state)
-go/compose/     - compose dependency resolver
-go/db/          - database helpers + migrations
+go/server/      - Server framework (gateway, routing, frontend proxy/embed)
+go/atlas/       - App lifecycle and DB bootstrapping
+go/cli/         - schemaf CLI framework (subcommands, config/state)
+go/compose/     - Compose dependency resolver (x-schemaf metadata)
+go/db/          - Database helpers + migrations
 ```
+
+## Design Philosophy
+
+schemaf is **documentation-first**. We design by writing the README and docs for features that don't exist yet. The documentation is the source of truth for how the framework should work.
+
+**Core principles:**
+1. **Maximize decisions made** - Every choice you don't have to make is time saved
+2. **Minimize configuration** - Zero config is the goal; convention over configuration
+3. **Maximize generation** - If we can generate it, you don't write it
+4. **Cement boilerplate** - Run scripts, codegen, compose layout, ports, database choice, glue code
+5. **Single responsibility** - Framework handles infra, you handle business logic
+6. **Fast to production** - Clone, add schema + handlers, run codegen, deploy
+
+**The codegen philosophy:**
+- One command (`schemaf codegen .`) generates everything
+- Auto-discovery: find SQL files, Go handlers, migrations
+- Auto-generation: sqlc code, migration providers, endpoint providers, TypeScript clients
+- Auto-wiring: hook generated code into framework automatically
+- No manual registration, no manual imports, no glue code
 
 ## Further Reading
 
-- `example/README.md`
-- `compose/README.md`
-- `go/cli/README.md`
+- `example/README.md` - How to build a project with schemaf
+- `compose/README.md` - Docker compose dependency system
+- `go/cli/README.md` - CLI framework internals
+- `docs/CODEGEN.md` - Code generation workflows

@@ -4,13 +4,13 @@ set -e
 
 TEST_NAME="cli smoke"
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-ZEUS="$ROOT_DIR/cli/zeus.sh"
+SCHEMAF="$ROOT_DIR/cli/schemaf.sh"
 
 echo "[test] $TEST_NAME"
 
 status=0
 
-if ! "$ZEUS" codegen openapi >/dev/null 2>&1; then
+if ! "$SCHEMAF" codegen openapi >/dev/null 2>&1; then
   echo "[fail] codegen openapi"
   status=1
 else
@@ -22,7 +22,7 @@ else
   fi
 fi
 
-if ! "$ZEUS" codegen sqlc >/dev/null 2>&1; then
+if ! "$SCHEMAF" codegen sqlc >/dev/null 2>&1; then
   echo "[fail] codegen sqlc"
   status=1
 else

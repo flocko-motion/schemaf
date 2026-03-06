@@ -3,7 +3,7 @@ services:
     image: postgres:17-alpine
     container_name: ${PROJECT_NAME}-postgres
     environment:
-      POSTGRES_USER: atlas
+      POSTGRES_USER: schemaf
       POSTGRES_PASSWORD: ${DB_PASS}
       POSTGRES_DB: ${PROJECT_NAME}
     volumes:
@@ -11,7 +11,7 @@ services:
     networks:
       - net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U atlas"]
+      test: ["CMD-SHELL", "pg_isready -U schemaf"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -19,7 +19,7 @@ services:
     ports:
       - "127.0.0.1:7003:5432"
     restart: unless-stopped
-    x-atlas:
+    x-schemaf:
       short-name: db
 
 networks:

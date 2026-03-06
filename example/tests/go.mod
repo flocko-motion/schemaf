@@ -1,10 +1,10 @@
-module atlas.local/example/tests
+module schemaf.local/example/tests
 
 go 1.25.0
 
 require (
-	atlas.local/base v0.0.0
-	atlas.local/example/backend v0.0.0
+	schemaf.local/base v0.0.0
+	schemaf.local/example/backend v0.0.0
 )
 
 require (
@@ -28,6 +28,6 @@ require (
 )
 
 replace (
-	atlas.local/base => ../../go
-	atlas.local/example/backend => ../backend
+	schemaf.local/base => ../../go
+	schemaf.local/example/backend => ../backend
 )

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"os"
 
-	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
 )
 
 func newOpenAPICmd(ctx *cli.Context) *cobra.Command {
@@ -19,8 +19,8 @@ func newOpenAPICmd(ctx *cli.Context) *cobra.Command {
 		Long: `Fetch the TypeScript client from <url>/openapi.ts and write it locally.
 
 Example:
-  atlas codegen openapi http://localhost:7001
-  atlas codegen openapi http://localhost:7001 --output frontend/src/api.gen.ts`,
+  schemaf codegen openapi http://localhost:7001
+  schemaf codegen openapi http://localhost:7001 --output frontend/src/api.gen.ts`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runOpenAPI(ctx, args[0], output)

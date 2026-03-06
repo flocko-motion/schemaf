@@ -5,17 +5,17 @@ import (
 	"path/filepath"
 )
 
-// ProjectPath resolves a path relative to the atlas home directory.
-// Uses $ATLAS_HOME if set, otherwise defaults to $HOME/.atlas.
+// ProjectPath resolves a path relative to the schemaf home directory.
+// Uses $SCHEMAF_HOME if set, otherwise defaults to $HOME/.schemaf.
 func ProjectPath(relativePath string) string {
-	home := os.Getenv("ATLAS_HOME")
+	home := os.Getenv("SCHEMAF_HOME")
 	if home == "" {
-		home = filepath.Join(os.Getenv("HOME"), ".atlas")
+		home = filepath.Join(os.Getenv("HOME"), ".schemaf")
 	}
 	return filepath.Join(home, relativePath)
 }
 
-// EnsureProjectDir ensures a directory exists under the atlas home directory.
+// EnsureProjectDir ensures a directory exists under the schemaf home directory.
 // Returns the absolute path to the directory.
 func EnsureProjectDir(relativePath string) (string, error) {
 	dir := ProjectPath(relativePath)

@@ -1,5 +1,5 @@
-x-atlas:
-  project: atlas-example-test
+x-schemaf:
+  project: schemaf-example-test
   depends-on-compose:
     - ../../compose/postgres.yml
   dev-db-pass: "dev"

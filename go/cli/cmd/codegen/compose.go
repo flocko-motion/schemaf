@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	cli "atlas.local/base/cli"
-	"atlas.local/base/compose"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
+	"schemaf.local/base/compose"
 )
 
 func newComposeCmd(ctx *cli.Context) *cobra.Command {
@@ -24,8 +24,8 @@ Uses 'docker compose config' to merge and interpolate all files.
 Output goes to stdout by default (pipe or redirect as needed).
 
 Examples:
-  zeus codegen compose example/compose/app.yml
-  zeus codegen compose example/compose/app.yml --output deploy/stack.yml`,
+  schemaf codegen compose example/compose/app.yml
+  schemaf codegen compose example/compose/app.yml --output deploy/stack.yml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := resolveAndPrintCompose(args[0])
@@ -115,11 +115,11 @@ func dockerEnv() []string {
 		return env
 	}
 
-	atlasDockerDir, err := cli.EnsureProjectDir("docker")
+	schemafDockerDir, err := cli.EnsureProjectDir("docker")
 	if err != nil {
 		return env
 	}
-	cleanConfig := filepath.Join(atlasDockerDir, "config.json")
+	cleanConfig := filepath.Join(schemafDockerDir, "config.json")
 	if _, err := os.Stat(cleanConfig); os.IsNotExist(err) {
 		_ = os.WriteFile(cleanConfig, []byte("{}"), 0644)
 	}
@@ -130,7 +130,7 @@ func dockerEnv() []string {
 			result = append(result, e)
 		}
 	}
-	return append(result, "DOCKER_CONFIG="+atlasDockerDir)
+	return append(result, "DOCKER_CONFIG="+schemafDockerDir)
 }
 
 func setupEnv(files []*compose.ComposeFile, homeDir string) {

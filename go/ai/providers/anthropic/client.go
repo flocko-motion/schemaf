@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"atlas.local/base/ai"
+	"schemaf.local/base/ai"
 )
 
 // Client is an Anthropic API client.
@@ -45,7 +45,7 @@ func WithBaseURL(url string) Option {
 }
 
 // NewAnthropic creates a new Anthropic client.
-// The API key is loaded automatically from ~/.atlas/.env.
+// The API key is loaded automatically from ~/.schemaf/.env.
 func NewAnthropic(opts ...Option) (*Client, error) {
 	apiKey, err := ai.GetAPIKey("anthropic")
 	if err != nil {

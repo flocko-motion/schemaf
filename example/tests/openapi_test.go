@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	baseapi "atlas.local/base/api"
-	_ "atlas.local/example/backend/api" // register routes via init()
+	baseapi "schemaf.local/base/api"
+	_ "schemaf.local/example/backend/api" // register routes via init()
 )
 
 func TestOpenAPI(t *testing.T) {

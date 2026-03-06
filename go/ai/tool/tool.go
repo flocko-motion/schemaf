@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"atlas.local/base/ai"
+	"schemaf.local/base/ai"
 )
 
 // Config holds configuration for a Tool instance.

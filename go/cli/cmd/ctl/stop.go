@@ -1,8 +1,8 @@
 package ctl
 
 import (
-	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
 )
 
 func newStopCmd(ctx *cli.Context) *cobra.Command {
@@ -13,7 +13,7 @@ func newStopCmd(ctx *cli.Context) *cobra.Command {
 		Long: `Resolve the dependency graph and stop all services.
 
 Example:
-  zeus ctl stop example/compose/app.yml`,
+  schemaf ctl stop example/compose/app.yml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := resolveAndPrint(args[0])

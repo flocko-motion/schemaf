@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	basecli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	basecli "schemaf.local/base/cli"
 )
 
 const defaultBackendURL = "http://localhost:7001"

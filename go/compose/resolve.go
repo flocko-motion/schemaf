@@ -8,8 +8,8 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// AtlasExtension holds the x-atlas metadata from a compose file
-type AtlasExtension struct {
+// SchemafExtension holds the x-schemaf metadata from a compose file
+type SchemafExtension struct {
 	Project                string            `yaml:"project"`
 	ShortName              string            `yaml:"short-name"`
 	DependsOnCompose       []string          `yaml:"depends-on-compose"`
@@ -32,25 +32,25 @@ type HealthConfig struct {
 type ComposeFile struct {
 	Path     string // absolute path
 	Dir      string // directory containing the file
-	Atlas    *AtlasExtension
+	Schemaf  *SchemafExtension
 	Services map[string]ServiceDef
 }
 
 // ServiceDef holds the parts of a compose service we care about
 type ServiceDef struct {
 	ContainerName string
-	Atlas         *AtlasExtension
+	Schemaf       *SchemafExtension
 }
 
 // rawCompose is used only for YAML parsing
 type rawCompose struct {
 	Services map[string]rawService  `yaml:"services"`
-	XAtlas   map[string]interface{} `yaml:"x-atlas"`
+	XSchemaf map[string]interface{} `yaml:"x-schemaf"`
 }
 
 type rawService struct {
 	ContainerName string                 `yaml:"container_name"`
-	XAtlas        map[string]interface{} `yaml:"x-atlas"`
+	XSchemaf      map[string]interface{} `yaml:"x-schemaf"`
 }
 
 // Resolve walks the dependency graph starting from the given compose file paths.
@@ -85,8 +85,8 @@ func walk(absPath string, seen map[string]bool, ordered *[]*ComposeFile) error {
 	}
 
 	// Walk dependencies first (depth-first, deps before dependents)
-	if cf.Atlas != nil {
-		for _, dep := range cf.Atlas.DependsOnCompose {
+	if cf.Schemaf != nil {
+		for _, dep := range cf.Schemaf.DependsOnCompose {
 			depAbs := dep
 			if !filepath.IsAbs(dep) {
 				depAbs = filepath.Join(cf.Dir, dep)
@@ -119,24 +119,24 @@ func parseComposeFile(absPath string) (*ComposeFile, error) {
 		Services: make(map[string]ServiceDef),
 	}
 
-	// Parse top-level x-atlas
-	if raw.XAtlas != nil {
-		atlas, err := parseAtlasExtension(raw.XAtlas)
+	// Parse top-level x-schemaf
+	if raw.XSchemaf != nil {
+		schemaf, err := parseSchemafExtension(raw.XSchemaf)
 		if err != nil {
-			return nil, fmt.Errorf("parsing x-atlas in %q: %w", absPath, err)
+			return nil, fmt.Errorf("parsing x-schemaf in %q: %w", absPath, err)
 		}
-		cf.Atlas = atlas
+		cf.Schemaf = schemaf
 	}
 
 	// Parse per-service info
 	for name, svc := range raw.Services {
 		sd := ServiceDef{ContainerName: svc.ContainerName}
-		if svc.XAtlas != nil {
-			atlas, err := parseAtlasExtension(svc.XAtlas)
+		if svc.XSchemaf != nil {
+			schemaf, err := parseSchemafExtension(svc.XSchemaf)
 			if err != nil {
-				return nil, fmt.Errorf("parsing x-atlas for service %q in %q: %w", name, absPath, err)
+				return nil, fmt.Errorf("parsing x-schemaf for service %q in %q: %w", name, absPath, err)
 			}
-			sd.Atlas = atlas
+			sd.Schemaf = schemaf
 		}
 		cf.Services[name] = sd
 	}
@@ -144,39 +144,39 @@ func parseComposeFile(absPath string) (*ComposeFile, error) {
 	return cf, nil
 }
 
-// parseAtlasExtension converts a raw map[string]interface{} (from YAML) into AtlasExtension.
+// parseSchemafExtension converts a raw map[string]interface{} (from YAML) into SchemafExtension.
 // We re-marshal/unmarshal via YAML to avoid manual field mapping.
-func parseAtlasExtension(raw map[string]interface{}) (*AtlasExtension, error) {
+func parseSchemafExtension(raw map[string]interface{}) (*SchemafExtension, error) {
 	b, err := yaml.Marshal(raw)
 	if err != nil {
 		return nil, err
 	}
-	var atlas AtlasExtension
-	if err := yaml.Unmarshal(b, &atlas); err != nil {
+	var schemaf SchemafExtension
+	if err := yaml.Unmarshal(b, &schemaf); err != nil {
 		return nil, err
 	}
-	return &atlas, nil
+	return &schemaf, nil
 }
 
 // ShortNameMap builds a map of short-name → service name across all resolved compose files.
-// The atlas extension on the compose file level defines a short name for the whole file's
-// primary service; per-service x-atlas.short-name overrides for individual services.
+// The schemaf extension on the compose file level defines a short name for the whole file's
+// primary service; per-service x-schemaf.short-name overrides for individual services.
 func ShortNameMap(files []*ComposeFile) map[string]string {
 	m := map[string]string{} // short-name → compose service name
 	for _, cf := range files {
 		for svcName, svc := range cf.Services {
-			if svc.Atlas != nil && svc.Atlas.ShortName != "" {
-				m[svc.Atlas.ShortName] = svcName
+			if svc.Schemaf != nil && svc.Schemaf.ShortName != "" {
+				m[svc.Schemaf.ShortName] = svcName
 			}
 		}
-		// Top-level x-atlas short-name applies to the file's first/only service
+		// Top-level x-schemaf short-name applies to the file's first/only service
 		// (useful for single-service compose files)
-		if cf.Atlas != nil && cf.Atlas.ShortName != "" {
+		if cf.Schemaf != nil && cf.Schemaf.ShortName != "" {
 			// If only one service, map it
 			if len(cf.Services) == 1 {
 				for svcName := range cf.Services {
-					if _, already := m[cf.Atlas.ShortName]; !already {
-						m[cf.Atlas.ShortName] = svcName
+					if _, already := m[cf.Schemaf.ShortName]; !already {
+						m[cf.Schemaf.ShortName] = svcName
 					}
 				}
 			}
@@ -209,16 +209,16 @@ func FilePaths(files []*ComposeFile) []string {
 	return paths
 }
 
-// FindAtlasByService looks up the AtlasExtension for a given compose service name.
-func FindAtlasByService(files []*ComposeFile, svcName string) *AtlasExtension {
+// FindSchemafByService looks up the SchemafExtension for a given compose service name.
+func FindSchemafByService(files []*ComposeFile, svcName string) *SchemafExtension {
 	for _, cf := range files {
-		if svc, ok := cf.Services[svcName]; ok && svc.Atlas != nil {
-			return svc.Atlas
+		if svc, ok := cf.Services[svcName]; ok && svc.Schemaf != nil {
+			return svc.Schemaf
 		}
-		// Fall back to file-level atlas if only one service
+		// Fall back to file-level schemaf if only one service
 		if len(cf.Services) == 1 {
-			if _, ok := cf.Services[svcName]; ok && cf.Atlas != nil {
-				return cf.Atlas
+			if _, ok := cf.Services[svcName]; ok && cf.Schemaf != nil {
+				return cf.Schemaf
 			}
 		}
 	}

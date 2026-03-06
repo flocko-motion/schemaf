@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	baseapi "atlas.local/base/api"
-	basedb "atlas.local/base/db"
+	baseapi "schemaf.local/base/api"
+	basedb "schemaf.local/base/db"
 )
 
 // Todo represents a todo item.
@@ -29,7 +29,22 @@ type UpdateTodoRequest struct {
 	Done bool   `json:"done"`
 }
 
+// REFERENCE IMPLEMENTATION (README design - not yet implemented):
+// These handlers will be auto-discovered by codegen and wired up via api.Provider()
+// generated in api/endpoints.gen.go. The init() registration below is temporary.
+//
+// Future: codegen scans this file, finds handlers, generates:
+//   func Provider() *schemaf.ApiProvider {
+//       return &schemaf.ApiProvider{
+//           Routes: []Route{
+//               {Method: "GET", Path: "/api/todos", Handler: listTodos, ...},
+//               ...
+//           },
+//       }
+//   }
+
 func init() {
+	// TODO(codegen): Replace init() registration with auto-generated api.Provider()
 	baseapi.Register(baseapi.Route{Method: "GET", Path: "/api/todos", Summary: "List todos", Handler: http.HandlerFunc(listTodos)})
 	baseapi.Register(baseapi.Route{Method: "POST", Path: "/api/todos", Summary: "Create todo", Handler: http.HandlerFunc(createTodo), ReqType: &CreateTodoRequest{}})
 	baseapi.Register(baseapi.Route{Method: "GET", Path: "/api/todos/{id}", Summary: "Get todo", Handler: http.HandlerFunc(getTodo)})

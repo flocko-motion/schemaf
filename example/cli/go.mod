@@ -1,10 +1,10 @@
-module atlas.local/example/cli
+module schemaf.local/example/cli
 
 go 1.25.0
 
 require (
-	atlas.local/base v0.0.0
 	github.com/spf13/cobra v1.10.2
+	schemaf.local/base v0.0.0
 )
 
 require (
@@ -26,4 +26,4 @@ require (
 	golang.org/x/text v0.28.0 // indirect
 )
 
-replace atlas.local/base => ../../go
+replace schemaf.local/base => ../../go

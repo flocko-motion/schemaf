@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"atlas.local/base/db"
+	"schemaf.local/base/db"
 )
 
 // HealthHandler returns an http.Handler that reports the health of the service and database.

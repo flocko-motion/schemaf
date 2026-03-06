@@ -1,4 +1,4 @@
-module atlas.local/base
+module schemaf.local/base
 
 go 1.25.0
 

@@ -1,4 +1,4 @@
-package atlas
+package schemaf
 
 import (
 	"context"
@@ -7,24 +7,24 @@ import (
 	"log"
 	"os"
 
-	"atlas.local/base/api"
-	"atlas.local/base/db"
+	"schemaf.local/base/api"
+	"schemaf.local/base/db"
 )
 
-// App is a configured atlas server. Use New to create one.
+// App is a configured schemaf server. Use New to create one.
 type App struct {
 	ctx     context.Context
 	project string
 }
 
-// New creates a new App for the given project name (e.g. "atlas-example").
+// New creates a new App for the given project name (e.g. "schemaf-example").
 // The project name determines the database name, host, and migration prefix.
 func New(ctx context.Context, project string) *App {
 	return &App{ctx: ctx, project: project}
 }
 
 // AddMigrations registers an embedded FS of SQL migration files.
-// The migration prefix is the full project name (e.g. "atlas-example").
+// The migration prefix is the full project name (e.g. "schemaf-example").
 func (a *App) AddMigrations(migrations embed.FS) {
 	db.RegisterMigrations(db.MigrationSet{Prefix: a.project, Files: migrations})
 }
@@ -55,18 +55,18 @@ func (a *App) Run() error {
 
 // dsn constructs the Postgres DSN deterministically from the project name and environment.
 //
-// In Docker (ATLAS_ENV=docker):
+// In Docker (SCHEMAF_ENV=docker):
 //
-//	postgres://atlas:{DB_PASS}@{project}-postgres:5432/{project}
+//	postgres://schemaf:{DB_PASS}@{project}-postgres:5432/{project}
 //
 // Native (dev/test):
 //
-//	postgres://atlas:dev@localhost:7003/{project}
+//	postgres://schemaf:dev@localhost:7003/{project}
 func (a *App) dsn() string {
-	if os.Getenv("ATLAS_ENV") == "docker" {
+	if os.Getenv("SCHEMAF_ENV") == "docker" {
 		pass := os.Getenv("DB_PASS")
-		return fmt.Sprintf("postgres://atlas:%s@%s-postgres:5432/%s?sslmode=disable", pass, a.project, a.project)
+		return fmt.Sprintf("postgres://schemaf:%s@%s-postgres:5432/%s?sslmode=disable", pass, a.project, a.project)
 	}
 	// Native: use port 7003 per PORTS.md convention
-	return fmt.Sprintf("postgres://atlas:dev@localhost:7003/%s?sslmode=disable", a.project)
+	return fmt.Sprintf("postgres://schemaf:dev@localhost:7003/%s?sslmode=disable", a.project)
 }

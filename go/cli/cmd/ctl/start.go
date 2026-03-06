@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
 )
 
 func newStartCmd(ctx *cli.Context) *cobra.Command {
@@ -20,8 +20,8 @@ func newStartCmd(ctx *cli.Context) *cobra.Command {
 		Long: `Resolve the dependency graph of a compose file and start all services.
 
 Examples:
-  zeus ctl start example/compose/app.yml
-  zeus ctl start example/compose/app.yml --native backend`,
+  schemaf ctl start example/compose/app.yml
+  schemaf ctl start example/compose/app.yml --native backend`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCompose(ctx, args[0], "", nativeMode, skipBuild, wait)
@@ -41,7 +41,7 @@ func runCompose(ctx *cli.Context, composeFile, devMode, nativeMode string, skipB
 		return err
 	}
 
-	// Inject PROJECT_NAME and DB_PASS from x-atlas metadata on the entry compose file
+	// Inject PROJECT_NAME and DB_PASS from x-schemaf metadata on the entry compose file
 	injectProjectEnv(files)
 
 	setupEnv(files, ctx.HomeDir)
@@ -73,16 +73,16 @@ func runCompose(ctx *cli.Context, composeFile, devMode, nativeMode string, skipB
 		for _, svc := range nativeSvcs {
 			containerName := ContainerName(files, svc)
 			stopContainer(containerName)
-			atlas := FindAtlasByService(files, svc)
-			if atlas == nil || atlas.DevInstructions == "" {
+			schemaf := FindSchemafByService(files, svc)
+			if schemaf == nil || schemaf.DevInstructions == "" {
 				return fmt.Errorf("no dev-instructions defined for service %q", svc)
 			}
 			cli.Info("Running %s natively:", svc)
 			fmt.Println()
-			fmt.Println(atlas.DevInstructions)
+			fmt.Println(schemaf.DevInstructions)
 			fmt.Println()
 			// Execute in shell
-			return runShell(atlas.DevInstructions, files[len(files)-1].Dir)
+			return runShell(schemaf.DevInstructions, files[len(files)-1].Dir)
 		}
 		return nil
 	}
@@ -96,16 +96,16 @@ func runCompose(ctx *cli.Context, composeFile, devMode, nativeMode string, skipB
 
 	// Kill native instances of services that will run in compose
 	for _, svc := range includeSvcs {
-		atlas := FindAtlasByService(files, svc)
-		runNativeStop(svc, atlas)
+		schemaf := FindSchemafByService(files, svc)
+		runNativeStop(svc, schemaf)
 	}
 
 	// Apply env-overrides-when-absent for excluded services
 	envOverrides := map[string]string{}
 	for _, svc := range excludeSvcs {
-		atlas := FindAtlasByService(files, svc)
-		if atlas != nil {
-			for k, v := range atlas.EnvOverridesWhenAbsent {
+		schemaf := FindSchemafByService(files, svc)
+		if schemaf != nil {
+			for k, v := range schemaf.EnvOverridesWhenAbsent {
 				envOverrides[k] = v
 			}
 		}
@@ -150,10 +150,10 @@ func runCompose(ctx *cli.Context, composeFile, devMode, nativeMode string, skipB
 		fmt.Println("Run excluded services manually:")
 		fmt.Println(strings.Repeat("─", 40))
 		for _, svc := range excludeSvcs {
-			atlas := FindAtlasByService(files, svc)
-			if atlas != nil && atlas.DevInstructions != "" {
+			schemaf := FindSchemafByService(files, svc)
+			if schemaf != nil && schemaf.DevInstructions != "" {
 				fmt.Printf("\n%s:\n", svc)
-				fmt.Println(strings.TrimSpace(atlas.DevInstructions))
+				fmt.Println(strings.TrimSpace(schemaf.DevInstructions))
 			}
 		}
 		fmt.Println()

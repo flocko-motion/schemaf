@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"atlas.local/base/ai"
+	"schemaf.local/base/ai"
 )
 
 // buildRequest converts a generic CompletionRequest to an Anthropic-specific request.

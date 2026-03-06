@@ -54,9 +54,9 @@ func New(homeDir string, opts ...Option) (*CLI, error) {
 
 	// Create root command
 	rootCmd := &cobra.Command{
-		Use:     "atlas",
-		Short:   "Atlas CLI - Unified tooling for the Atlas ecosystem",
-		Long:    "Atlas CLI provides commands for interacting with Atlas services.",
+		Use:     "schemaf",
+		Short:   "Schemaf CLI - unified tooling for the Schemaf ecosystem",
+		Long:    "Schemaf CLI provides commands for interacting with Schemaf services.",
 		Version: cliOpts.version,
 	}
 

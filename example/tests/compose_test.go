@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"atlas.local/base/cli/cmd/ctl"
+	"schemaf.local/base/cli/cmd/ctl"
 )
 
 func TestComposeResolve(t *testing.T) {
@@ -68,10 +68,10 @@ func TestProjectName(t *testing.T) {
 	}
 
 	entry := files[len(files)-1]
-	if entry.Atlas == nil || entry.Atlas.Project == "" {
-		t.Error("x-atlas.project not set in app.yml")
+	if entry.Schemaf == nil || entry.Schemaf.Project == "" {
+		t.Error("x-schemaf.project not set in app.yml")
 	}
-	if entry.Atlas.Project != "atlas-example" {
-		t.Errorf("project: got %q, want %q", entry.Atlas.Project, "atlas-example")
+	if entry.Schemaf.Project != "schemaf-example" {
+		t.Errorf("project: got %q, want %q", entry.Schemaf.Project, "schemaf-example")
 	}
 }

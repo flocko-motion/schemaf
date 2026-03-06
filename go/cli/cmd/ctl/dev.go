@@ -1,8 +1,8 @@
 package ctl
 
 import (
-	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
 )
 
 func newDevCmd(ctx *cli.Context) *cobra.Command {
@@ -18,7 +18,7 @@ func newDevCmd(ctx *cli.Context) *cobra.Command {
 Services should be provided as a comma-separated list of short names.
 
 Example:
-  zeus ctl dev example/compose/app.yml db,backend`,
+  schemaf ctl dev example/compose/app.yml db,backend`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCompose(ctx, args[0], args[1], nativeMode, skipBuild, wait)

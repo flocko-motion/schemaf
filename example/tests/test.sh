@@ -1,24 +1,24 @@
 #!/bin/sh
-# test.sh — run the atlas-base example test suite.
+# test.sh — run the schemaf example test suite.
 # Usage:
 #   ./test.sh              # spins up Postgres + native backend automatically
 #   ./test.sh -run CRUD    # filter to specific tests
 set -e
 cd "$(dirname "$0")"
 
-ZEUS="../cli/zeus.sh"
+SCHEMAF="../cli/schemaf.sh"
 COMPOSE="../compose/test.yml"
 BACKEND_PORT=7001
 BACKEND_URL="http://localhost:${BACKEND_PORT}"
 
-# Start Postgres via zeus ctl
-$ZEUS ctl start --wait "$COMPOSE"
-trap '$ZEUS ctl stop '"$COMPOSE" EXIT
+# Start Postgres via schemaf ctl
+$SCHEMAF ctl start --wait "$COMPOSE"
+trap '$SCHEMAF ctl stop '"$COMPOSE" EXIT
 
 # Start the native backend in the background (connects to localhost:7003 per PORTS.md convention)
 (cd ../backend && PORT=$BACKEND_PORT go run .) &
 BACKEND_PID=$!
-trap "kill $BACKEND_PID 2>/dev/null; $ZEUS ctl stop $COMPOSE" EXIT
+trap "kill $BACKEND_PID 2>/dev/null; $SCHEMAF ctl stop $COMPOSE" EXIT
 
 # Wait for backend to be ready (up to 30s)
 echo "waiting for backend on $BACKEND_URL ..."

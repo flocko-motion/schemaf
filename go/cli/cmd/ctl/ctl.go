@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
 )
 
 // SubcommandProvider returns the ctl subcommand tree.
@@ -18,7 +18,7 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 		Short: "Control project services",
 		Long: `Resolve, merge and run multi-service Docker Compose stacks.
 
-Each service has its own compose file declaring dependencies via x-atlas.
+Each service has its own compose file declaring dependencies via x-schemaf.
 The ctl tool resolves the dependency graph and delegates to Docker Compose.`,
 	}
 
@@ -71,7 +71,7 @@ func resolveAndPrint(path string) ([]*ComposeFile, error) {
 // dockerEnv returns the environment to use for docker commands.
 // On WSL2 with Docker Desktop, the default credsStore "desktop.exe" fails
 // when called from inside WSL2. We detect this and transparently redirect
-// DOCKER_CONFIG to ~/.atlas/docker with a clean config (no credsStore).
+// DOCKER_CONFIG to ~/.schemaf/docker with a clean config (no credsStore).
 func dockerEnv() []string {
 	env := os.Environ()
 
@@ -88,12 +88,12 @@ func dockerEnv() []string {
 		return env
 	}
 
-	// Use a clean config under ~/.atlas/docker
-	atlasDockerDir, err := cli.EnsureProjectDir("docker")
+	// Use a clean config under ~/.schemaf/docker
+	schemafDockerDir, err := cli.EnsureProjectDir("docker")
 	if err != nil {
 		return env
 	}
-	cleanConfig := filepath.Join(atlasDockerDir, "config.json")
+	cleanConfig := filepath.Join(schemafDockerDir, "config.json")
 	if _, err := os.Stat(cleanConfig); os.IsNotExist(err) {
 		_ = os.WriteFile(cleanConfig, []byte("{}"), 0644)
 	}
@@ -105,7 +105,7 @@ func dockerEnv() []string {
 			result = append(result, e)
 		}
 	}
-	return append(result, "DOCKER_CONFIG="+atlasDockerDir)
+	return append(result, "DOCKER_CONFIG="+schemafDockerDir)
 }
 
 // runDockerCompose runs docker compose with the given arguments, inheriting stdio.
@@ -127,7 +127,7 @@ func runDockerComposeCapture(args []string) (string, error) {
 	return string(out), err
 }
 
-// setupEnv symlinks ~/.atlas/.env → .env in the directory of the first compose file.
+// setupEnv symlinks ~/.schemaf/.env → .env in the directory of the first compose file.
 func setupEnv(files []*ComposeFile, homeDir string) {
 	if len(files) == 0 {
 		return
@@ -146,12 +146,12 @@ func setupEnv(files []*ComposeFile, homeDir string) {
 }
 
 // runNativeStop executes the native-stop command for a service (fire and forget).
-func runNativeStop(svcName string, atlas *AtlasExtension) {
-	if atlas == nil || atlas.NativeStop == "" {
+func runNativeStop(svcName string, schemaf *SchemafExtension) {
+	if schemaf == nil || schemaf.NativeStop == "" {
 		return
 	}
-	cli.Info("Stopping native %s: %s", svcName, atlas.NativeStop)
-	cmd := exec.Command("bash", "-c", atlas.NativeStop)
+	cli.Info("Stopping native %s: %s", svcName, schemaf.NativeStop)
+	cmd := exec.Command("bash", "-c", schemaf.NativeStop)
 	// Ignore errors — service may not be running
 	_ = cmd.Run()
 }
@@ -196,24 +196,24 @@ func runShell(script, dir string) error {
 	return cmd.Run()
 }
 
-// injectProjectEnv reads x-atlas metadata from the entry (last) compose file
+// injectProjectEnv reads x-schemaf metadata from the entry (last) compose file
 // and injects environment variables before docker compose runs:
-//   - PROJECT_NAME  from x-atlas.project
-//   - DB_PASS       from x-atlas.dev-db-pass (only when DB_PASS is not already set)
+//   - PROJECT_NAME  from x-schemaf.project
+//   - DB_PASS       from x-schemaf.dev-db-pass (only when DB_PASS is not already set)
 func injectProjectEnv(files []*ComposeFile) {
 	if len(files) == 0 {
 		return
 	}
 	entry := files[len(files)-1]
-	if entry.Atlas == nil || entry.Atlas.Project == "" {
-		cli.Warning("x-atlas.project not set in entry compose file; PROJECT_NAME not injected")
+	if entry.Schemaf == nil || entry.Schemaf.Project == "" {
+		cli.Warning("x-schemaf.project not set in entry compose file; PROJECT_NAME not injected")
 		return
 	}
-	os.Setenv("PROJECT_NAME", entry.Atlas.Project)
-	cli.Info("PROJECT_NAME=%s", entry.Atlas.Project)
+	os.Setenv("PROJECT_NAME", entry.Schemaf.Project)
+	cli.Info("PROJECT_NAME=%s", entry.Schemaf.Project)
 
-	if entry.Atlas.DevDBPass != "" && os.Getenv("DB_PASS") == "" {
-		os.Setenv("DB_PASS", entry.Atlas.DevDBPass)
+	if entry.Schemaf.DevDBPass != "" && os.Getenv("DB_PASS") == "" {
+		os.Setenv("DB_PASS", entry.Schemaf.DevDBPass)
 		cli.Info("DB_PASS=<from dev-db-pass>")
 	}
 }

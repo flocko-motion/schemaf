@@ -142,7 +142,7 @@ func apiProvider(ctx *Context) []*cobra.Command {
 	apiCmd := &cobra.Command{
 		Use:   "api",
 		Short: "Manage and monitor registered APIs",
-		Long:  "View and check the health status of registered Atlas APIs.",
+		Long:  "View and check the health status of registered Schemaf APIs.",
 	}
 
 	// Add 'list' subcommand
@@ -292,7 +292,7 @@ func newEventsCommand(ctx *Context) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "events",
 		Short: "Event stream operations",
-		Long:  "Listen to and manage Atlas event streams from registered APIs",
+		Long:  "Listen to and manage Schemaf event streams from registered APIs",
 	}
 
 	cmd.AddCommand(newListenCommand(ctx))
@@ -309,24 +309,24 @@ func newListenCommand(ctx *Context) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "listen [port]",
-		Short: "Listen to Atlas event stream",
-		Long: `Connect to an Atlas service WebSocket and stream events.
+		Short: "Listen to Schemaf event stream",
+		Long: `Connect to a Schemaf service WebSocket and stream events.
 
-All Atlas services expose events at /events endpoint using WebSocket.
+All Schemaf services expose events at /events endpoint using WebSocket.
 Events follow the canonical format:
   {
     "event": "service.entity.action",
     "ts": "2026-02-28T12:00:00Z",
-    "source": "atlas-graph",
+    "source": "schemaf-graph",
     "user": "florian",
     "payload": {...}
   }
 
 Examples:
-  atlas api events listen 7110                 # Listen to port 7110
-  atlas api events listen --api graph          # Listen to registered 'graph' API
-  atlas api events listen 7110 -u florian      # Filter by user
-  atlas api events listen 7200 --raw           # Show raw JSON`,
+  schemaf api events listen 7110                 # Listen to port 7110
+  schemaf api events listen --api graph          # Listen to registered 'graph' API
+  schemaf api events listen 7110 -u florian      # Filter by user
+  schemaf api events listen 7200 --raw           # Show raw JSON`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var port string
@@ -365,7 +365,7 @@ Examples:
 	return cmd
 }
 
-// CanonicalEvent represents the standardized Atlas event format
+// CanonicalEvent represents the standardized Schemaf event format
 type CanonicalEvent struct {
 	Event   string                 `json:"event"`
 	TS      string                 `json:"ts"`
@@ -392,7 +392,7 @@ func listenToEvents(port, username string, raw bool) error {
 	// Connect to WebSocket
 	headers := make(map[string][]string)
 	if username != "" {
-		headers["X-Atlas-User"] = []string{username}
+		headers["X-Schemaf-User"] = []string{username}
 	}
 
 	dialer := websocket.Dialer{

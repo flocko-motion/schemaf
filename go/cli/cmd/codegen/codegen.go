@@ -1,8 +1,8 @@
 package codegen
 
 import (
-	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
 )
 
 // SubcommandProvider returns the codegen subcommand tree for use in a CLI.

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"text/template"
 
-	cli "atlas.local/base/cli"
 	"github.com/spf13/cobra"
+	cli "schemaf.local/base/cli"
 )
 
 //go:embed sqlc.yaml.tmpl

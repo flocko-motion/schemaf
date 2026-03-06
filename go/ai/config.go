@@ -14,7 +14,7 @@ var (
 	envMutex  sync.Mutex
 )
 
-// LoadEnv loads environment variables from ~/.atlas/.env if not already loaded.
+// LoadEnv loads environment variables from ~/.schemaf/.env if not already loaded.
 // This is called automatically by GetAPIKey but can be called explicitly if needed.
 func LoadEnv() error {
 	envMutex.Lock()
@@ -29,7 +29,7 @@ func LoadEnv() error {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	envPath := filepath.Join(home, ".atlas", ".env")
+	envPath := filepath.Join(home, ".schemaf", ".env")
 
 	// Check if file exists
 	if _, err := os.Stat(envPath); os.IsNotExist(err) {
@@ -46,7 +46,7 @@ func LoadEnv() error {
 }
 
 // GetAPIKey retrieves the API key for the specified provider.
-// It automatically loads ~/.atlas/.env if not already loaded.
+// It automatically loads ~/.schemaf/.env if not already loaded.
 // Supported providers: "anthropic", "openai".
 func GetAPIKey(provider string) (string, error) {
 	if err := LoadEnv(); err != nil {
@@ -66,7 +66,7 @@ func GetAPIKey(provider string) (string, error) {
 	key := os.Getenv(envVar)
 	if key == "" {
 		home, _ := os.UserHomeDir()
-		envPath := filepath.Join(home, ".atlas", ".env")
+		envPath := filepath.Join(home, ".schemaf", ".env")
 		return "", fmt.Errorf("%s not set in %s", envVar, envPath)
 	}
 

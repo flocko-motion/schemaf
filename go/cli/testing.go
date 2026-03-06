@@ -8,9 +8,9 @@ import (
 	"os"
 	"testing"
 
-	"atlas.local/base/compose"
-	basedb "atlas.local/base/db"
 	"github.com/spf13/viper"
+	"schemaf.local/base/compose"
+	basedb "schemaf.local/base/db"
 )
 
 // NewTestContext creates a Context for testing with in-memory config/state
@@ -27,7 +27,7 @@ func NewTestContext() *Context {
 		Config:     &Config{v: configViper},
 		State:      &State{v: stateViper, path: ":memory:"},
 		HTTPClient: NewHTTPClient(false),
-		HomeDir:    "/tmp/test-atlas",
+		HomeDir:    "/tmp/test-schemaf",
 		Verbose:    false,
 	}
 }
@@ -42,8 +42,8 @@ func (ctx *Context) SetTestState(key string, value interface{}) {
 	ctx.State.v.Set(key, value)
 }
 
-// TestDB opens a database connection derived from an atlas compose file.
-// It reads the x-atlas metadata (project name, db-port, dev-db-pass) from
+// TestDB opens a database connection derived from a schemaf compose file.
+// It reads the x-schemaf metadata (project name, db-port, dev-db-pass) from
 // the resolved compose files so tests never need to hardcode credentials or
 // set DATABASE_URL manually.
 //
@@ -66,37 +66,37 @@ func TestDB(t *testing.T, composeFile string) *sql.DB {
 		return db
 	}
 
-	// Resolve the compose file to extract x-atlas metadata.
+	// Resolve the compose file to extract x-schemaf metadata.
 	files, err := compose.Resolve([]string{composeFile})
 	if err != nil {
 		t.Fatalf("TestDB: resolve %q: %v", composeFile, err)
 	}
 
-	// Find the entry file's x-atlas extension (last in resolution order).
-	var atlas *compose.AtlasExtension
+	// Find the entry file's x-schemaf extension (last in resolution order).
+	var schemaf *compose.SchemafExtension
 	for i := len(files) - 1; i >= 0; i-- {
-		if files[i].Atlas != nil && files[i].Atlas.Project != "" {
-			atlas = files[i].Atlas
+		if files[i].Schemaf != nil && files[i].Schemaf.Project != "" {
+			schemaf = files[i].Schemaf
 			break
 		}
 	}
-	if atlas == nil {
-		t.Fatalf("TestDB: no x-atlas.project found in %q", composeFile)
+	if schemaf == nil {
+		t.Fatalf("TestDB: no x-schemaf.project found in %q", composeFile)
 	}
 
-	port := atlas.DBPort
+	port := schemaf.DBPort
 	if port == 0 {
-		t.Fatalf("TestDB: x-atlas.db-port not set in %q", composeFile)
+		t.Fatalf("TestDB: x-schemaf.db-port not set in %q", composeFile)
 	}
 
-	pass := atlas.DevDBPass
+	pass := schemaf.DevDBPass
 	if pass == "" {
 		pass = "dev"
 	}
 
 	dsn := fmt.Sprintf(
-		"postgres://atlas:%s@127.0.0.1:%d/%s?sslmode=disable",
-		pass, port, atlas.Project,
+		"postgres://schemaf:%s@127.0.0.1:%d/%s?sslmode=disable",
+		pass, port, schemaf.Project,
 	)
 
 	db, err := basedb.Open(dsn)
