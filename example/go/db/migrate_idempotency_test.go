@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	frameworkdb "schemaf.local/base/db"
+	frameworkdb "github.com/flocko-motion/schemaf/db"
 	"schemaf.local/example/db"
 )
 

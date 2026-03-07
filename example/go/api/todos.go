@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	schemafapi "schemaf.local/base/api"
+	schemafapi "github.com/flocko-motion/schemaf/api"
 )
 
 // ─── Shared types ──────────────────────────────────────────────────────────────

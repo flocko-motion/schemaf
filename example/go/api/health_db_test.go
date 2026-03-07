@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	schemafdb "schemaf.local/base/db"
+	schemafdb "github.com/flocko-motion/schemaf/db"
 )
 
 func TestHealthWithDB(t *testing.T) {

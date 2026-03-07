@@ -1,9 +1,4 @@
-# schemaf
-
-> **⚠️ SPECIFICATION-FIRST PROJECT**  
-> This project is designed **documentation-first**. The README is the source of truth.  
-> **DO NOT modify the architecture without first discussing and implementing changes to the documentation together with the user.**  
-> All design decisions are made through pair programming and captured here before implementation.
+# Schema F
 
 schemaf is an opinionated framework that eliminates infrastructure churn by making all the boring decisions for you. Build production-ready applications with Go backend, Postgres, and static frontend immediately - no setup, no bikeshedding.
 
@@ -24,6 +19,7 @@ schemaf deliberately reduces degrees of freedom. We cement:
 
 You focus on:
 - Your database schema
+- Your business logic
 - Your API endpoints
 - Your frontend UI
 
@@ -31,7 +27,7 @@ This repository is the framework itself. The example project lives in `example/`
 
 ## Prerequisites
 
-- Go 1.22+
+- Go
 - Docker + Docker Compose
 - Node.js (for TypeScript codegen and frontend)
 - `gotestsum` for pretty test output (recommended):

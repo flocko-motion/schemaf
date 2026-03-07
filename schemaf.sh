@@ -20,10 +20,10 @@ shift 2>/dev/null || true
 
 case "$CMD" in
   codegen)
-    exec go run schemaf.local/base/cmd/schemaf codegen all
+    exec go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
     ;;
   test)
-    go run schemaf.local/base/cmd/schemaf codegen all
+    go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
 
     # Start ephemeral test environment (no volumes — all data discarded after tests).
     PROJECT=$(grep '^name' schemaf.toml | cut -d= -f2)
@@ -38,7 +38,7 @@ case "$CMD" in
     source gen/test-env.sh
 
     # Run tests, capture exit code, then tear down regardless of result.
-    go run schemaf.local/base/cmd/schemaf test "$@"
+    go run github.com/flocko-motion/schemaf/cmd/schemaf test "$@"
     TEST_EXIT=$?
     docker compose -f gen/compose.test.yml down
     exit $TEST_EXIT

@@ -3,7 +3,7 @@
 
 package api
 
-import schemafapi "schemaf.local/base/api"
+import schemafapi "github.com/flocko-motion/schemaf/api"
 
 // Provider registers all API endpoints with the schemaf framework.
 // Wire up in go/main.go: app.AddApi(api.Provider)

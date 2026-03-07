@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	schemafapi "schemaf.local/base/api"
+	schemafapi "github.com/flocko-motion/schemaf/api"
 	"schemaf.local/example/api"
 )
 

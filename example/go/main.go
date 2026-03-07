@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"schemaf.local/base/schemaf"
+	"github.com/flocko-motion/schemaf/schemaf"
 
 	// Generated providers — regenerate with: ./codegen.sh
 	"schemaf.local/example/api"

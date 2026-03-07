@@ -1,5 +1,10 @@
 # CLAUDE.md — schemaf
 
+> **⚠️ SPECIFICATION-FIRST PROJECT**  
+> This project is designed **documentation-first**. The README is the source of truth.  
+> **DO NOT modify the architecture without first discussing and implementing changes to the documentation together with the user.**  
+> All design decisions are made through pair programming and captured here before implementation.
+
 ## MANDATORY: Use td for Task Management
 
 **td** is the task system for this project (part of the [Sidecar](https://sidecar.haplab.com) workflow). All state lives in `.todos/db.sqlite` — local only, never transmitted.
@@ -97,13 +102,15 @@ When you identify a need for an architectural change: surface it, propose it, an
 ## Repository Structure
 
 ```
-go/api/          - API registry + OpenAPI generation
-go/server/       - Server framework (gateway, routing, frontend proxy/embed)
-go/schemaf/      - App lifecycle (schemaf.New, app.Run)
-go/cli/          - CLI framework (subcommands, config/state)
-go/compose/      - Compose dependency resolver (x-schemaf metadata)
-go/db/           - Database helpers + migrations
-compose/         - Reusable compose blocks (postgres, etc.)
+api/             - API registry + OpenAPI generation
+schemaf/         - App lifecycle (schemaf.New, app.Run)
+cli/             - CLI framework (subcommands, config/state)
+compose/         - Compose dependency resolver (x-schemaf metadata)
+db/              - Database helpers + migrations
+ai/              - AI provider integrations
+log/             - Logging
+cmd/schemaf/     - CLI entrypoint
+gateway/         - nginx gateway (Dockerfile + config)
 example/         - Example project consuming the framework
 ```
 
@@ -114,12 +121,12 @@ These are framework-wide conventions. Do not deviate.
 **Generated files** use `.gen.` infix: `*.gen.go`, `*.gen.ts`
 
 **Project layout** (enforced, not configurable):
-- `go/db/migrations/` → input migrations
-- `go/db/queries/` → sqlc input
-- `go/db/migrations.gen.go` → generated `db.Provider`
-- `go/db/queries.gen.go` → generated sqlc query functions
-- `go/api/*.go` → endpoint struct implementations
-- `go/api/endpoints.gen.go` → generated `api.Provider`
+- `db/migrations/` → input migrations
+- `db/queries/` → sqlc input
+- `db/migrations.gen.go` → generated `db.Provider`
+- `db/queries.gen.go` → generated sqlc query functions
+- `api/*.go` → endpoint struct implementations
+- `api/endpoints.gen.go` → generated `api.Provider`
 - `frontend/src/api/generated/api.gen.ts` → generated TypeScript client
 - `compose.gen.yml` → generated base compose (postgres + backend)
 - `compose.dev.yml` → generated dev overlay (exposed ports)

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	schemafapi "github.com/flocko-motion/schemaf/api"
-	"schemaf.local/example/api"
+	"{{.Module}}/api"
 )
 
 func newTSTestServer(t *testing.T) *httptest.Server {
@@ -31,14 +31,13 @@ func runTSTest(t *testing.T, funcName string, srv *httptest.Server) {
 		t.Fatalf("TS test %q failed", funcName)
 	}
 }
-
-func TestHealth(t *testing.T) {
+{{range .Tests}}
+func Test{{.GoName}}(t *testing.T) {
+{{- if .Skip}}
+	t.Skip({{printf "%q" .Skip}})
+{{- else}}
 	srv := newTSTestServer(t)
-	runTSTest(t, "testHealth", srv)
+	runTSTest(t, {{printf "%q" .FuncName}}, srv)
+{{- end}}
 }
-
-func TestClockTime(t *testing.T) {
-	srv := newTSTestServer(t)
-	runTSTest(t, "testClockTime", srv)
-}
-
+{{end}}
