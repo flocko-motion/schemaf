@@ -74,6 +74,14 @@ func (a *App) Run() error {
 		}
 	}
 
+	// Initialize the database before command dispatch so all commands
+	// (server, subcommands, etc.) have access to schemafdb.DB().
+	if a.hasDB {
+		if err := a.initDB(); err != nil {
+			return err
+		}
+	}
+
 	projectHome := cli.ProjectHome(a.project)
 
 	c, err := cli.New(projectHome)
@@ -93,6 +101,19 @@ func (a *App) Run() error {
 	c.AddSubcommands(a.subcommands...)
 
 	return c.Execute()
+}
+
+// initDB connects to the database and runs migrations.
+func (a *App) initDB() error {
+	slog.Info("connecting to database", "project", a.project)
+	if err := db.Init(a.dsn()); err != nil {
+		return fmt.Errorf("db init: %w", err)
+	}
+	slog.Info("running migrations")
+	if err := db.RunMigrations(a.ctx); err != nil {
+		return fmt.Errorf("migrations: %w", err)
+	}
+	return nil
 }
 
 // shellStubProvider registers placeholder commands for operations handled by schemaf.sh.
@@ -138,17 +159,9 @@ func (a *App) serverProvider(_ *cli.Context) []*cobra.Command {
 	return []*cobra.Command{cmd}
 }
 
-// serve initializes the database (if configured) and starts the HTTP server.
+// serve starts the HTTP server. DB is already initialized by Run().
 func (a *App) serve() error {
 	if a.hasDB {
-		slog.Info("connecting to database", "project", a.project)
-		if err := db.Init(a.dsn()); err != nil {
-			return fmt.Errorf("db init: %w", err)
-		}
-		slog.Info("running migrations")
-		if err := db.RunMigrations(a.ctx); err != nil {
-			return fmt.Errorf("migrations: %w", err)
-		}
 		if err := a.initAuth(); err != nil {
 			return fmt.Errorf("auth init: %w", err)
 		}
