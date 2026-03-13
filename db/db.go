@@ -18,8 +18,17 @@ const (
 // conn is the package-level singleton database connection pool.
 var conn *sql.DB
 
+// dsnValue stores the DSN for lazy initialization.
+var dsnValue string
+
+// SetDSN stores the DSN for lazy initialization. The actual connection
+// is deferred until the first call to DB().
+func SetDSN(dsn string) {
+	dsnValue = dsn
+}
+
 // Init opens a new Postgres connection pool, pings the server, and stores it
-// as the package-level singleton. Call once at startup before any handlers run.
+// as the package-level singleton. Use this for eager initialization (e.g. server startup).
 func Init(dsn string) error {
 	db, err := open(dsn)
 	if err != nil {
@@ -29,9 +38,18 @@ func Init(dsn string) error {
 	return nil
 }
 
-// DB returns the raw *sql.DB singleton. Prefer the package-level helpers
-// (QueryContext, ExecContext, QueryRowContext) over this where possible.
+// DB returns the raw *sql.DB singleton. If the connection hasn't been
+// opened yet but a DSN was registered via SetDSN, it initializes lazily.
 func DB() *sql.DB {
+	if conn == nil && dsnValue != "" {
+		if err := Init(dsnValue); err != nil {
+			panic(fmt.Sprintf("lazy db init: %v", err))
+		}
+		// Run migrations lazily too.
+		if err := RunMigrations(context.Background()); err != nil {
+			panic(fmt.Sprintf("lazy db migrations: %v", err))
+		}
+	}
 	return conn
 }
 

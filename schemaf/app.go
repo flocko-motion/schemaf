@@ -74,12 +74,10 @@ func (a *App) Run() error {
 		}
 	}
 
-	// Initialize the database before command dispatch so all commands
-	// (server, subcommands, etc.) have access to schemafdb.DB().
+	// Register the DSN for lazy DB initialization. Subcommands that call
+	// db.DB() will connect on first use. The server command inits eagerly.
 	if a.hasDB {
-		if err := a.initDB(); err != nil {
-			return err
-		}
+		db.SetDSN(a.dsn())
 	}
 
 	projectHome := cli.ProjectHome(a.project)
@@ -159,9 +157,12 @@ func (a *App) serverProvider(_ *cli.Context) []*cobra.Command {
 	return []*cobra.Command{cmd}
 }
 
-// serve starts the HTTP server. DB is already initialized by Run().
+// serve eagerly initializes the database and starts the HTTP server.
 func (a *App) serve() error {
 	if a.hasDB {
+		if err := a.initDB(); err != nil {
+			return err
+		}
 		if err := a.initAuth(); err != nil {
 			return fmt.Errorf("auth init: %w", err)
 		}
