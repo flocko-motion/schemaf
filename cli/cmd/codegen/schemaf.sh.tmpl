@@ -38,6 +38,9 @@ _schemaf_load_env() {
 }
 _schemaf_load_env "$HOME/.${PROJECT_NAME}/dev/etc/env"
 
+SCHEMAF_VER=$(cd go && go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
+echo "schemaf ${SCHEMAF_VER} — ${PROJECT_NAME}"
+
 CMD="${1:-}"
 shift 2>/dev/null || true
 
@@ -88,14 +91,15 @@ case "$CMD" in
     esac
     ;;
   upgrade)
-    echo "Upgrading schemaf framework..."
+    TARGET="${1:-latest}"
+    echo "Upgrading schemaf framework to ${TARGET}..."
     cd go
     OLD_VER=$(go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
-    go get github.com/flocko-motion/schemaf@latest
+    go get "github.com/flocko-motion/schemaf@${TARGET}"
     NEW_VER=$(go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/flocko-motion/schemaf)
     cd ..
     if [ "$OLD_VER" = "$NEW_VER" ]; then
-      echo "Already at latest: $NEW_VER"
+      echo "Already at ${NEW_VER}"
     else
       echo "Upgraded: $OLD_VER → $NEW_VER"
     fi
