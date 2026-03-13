@@ -77,10 +77,46 @@ func (a *App) Run() error {
 	// Mount the built-in server command as the default action.
 	c.AddSubcommands(a.serverProvider)
 
+	// Mount stub commands for schemaf.sh-handled operations so they
+	// appear in --help output. Running them directly tells the user
+	// to use schemaf.sh instead.
+	c.AddSubcommands(shellStubProvider)
+
 	// Mount user-registered subcommands.
 	c.AddSubcommands(a.subcommands...)
 
 	return c.Execute()
+}
+
+// shellStubProvider registers placeholder commands for operations handled by schemaf.sh.
+// They appear in --help but redirect users to schemaf.sh when invoked directly.
+func shellStubProvider(_ *cli.Context) []*cobra.Command {
+	stub := func(use, short string) *cobra.Command {
+		return &cobra.Command{
+			Use:   use,
+			Short: short + " (use ./schemaf.sh)",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return fmt.Errorf("run this via: ./schemaf.sh %s", cmd.Name())
+			},
+		}
+	}
+
+	devCmd := stub("dev", "Start development compose setup")
+	devCmd.AddCommand(&cobra.Command{
+		Use:   "db",
+		Short: "Start only postgres (use ./schemaf.sh)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("run this via: ./schemaf.sh dev db")
+		},
+	})
+
+	return []*cobra.Command{
+		stub("codegen", "Generate all code"),
+		stub("test", "Run all tests"),
+		stub("run", "Start production compose setup"),
+		devCmd,
+		stub("upgrade", "Upgrade schemaf to latest version"),
+	}
 }
 
 // serverProvider returns the built-in "server" command that starts the HTTP server.

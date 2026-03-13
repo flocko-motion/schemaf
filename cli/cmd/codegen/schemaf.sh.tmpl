@@ -90,9 +90,9 @@ case "$CMD" in
   upgrade)
     echo "Upgrading schemaf framework..."
     cd go
-    OLD_VER=$(go list -m -f '{{.Version}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
+    OLD_VER=$(go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
     go get github.com/flocko-motion/schemaf@latest
-    NEW_VER=$(go list -m -f '{{.Version}}' github.com/flocko-motion/schemaf)
+    NEW_VER=$(go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/flocko-motion/schemaf)
     cd ..
     if [ "$OLD_VER" = "$NEW_VER" ]; then
       echo "Already at latest: $NEW_VER"
@@ -114,8 +114,6 @@ case "$CMD" in
     exit 0
     ;;
   *)
-    echo "Unknown command: $CMD" >&2
-    echo "Run ./schemaf.sh --help for usage." >&2
-    exit 1
+    exec go run ./go "$CMD" "$@"
     ;;
 esac
