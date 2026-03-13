@@ -31,7 +31,7 @@ services:
 
   backend:
     build:
-      context: ./go
+      context: ../go
     container_name: {{.Name}}-backend
     environment:
       SCHEMAF_ENV: docker
