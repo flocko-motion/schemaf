@@ -76,12 +76,12 @@ td critical-path                  # optimal work sequence
 
 ## Documentation-First
 
-**The README is the source of truth.**
+**The documentation (`README.md`, `INSTALL.md`, `EXTEND.md`) is the source of truth.**
 
-This project is designed documentation-first. Features are designed by writing the README and docs _before_ implementation. If the README doesn't describe it, the feature doesn't exist yet.
+This project is designed documentation-first. Features are designed by writing the docs _before_ implementation. If the docs don't describe it, the feature doesn't exist yet.
 
-- Read `README.md` before touching any code
-- If implementation diverges from the README, the README wins — fix the code, not the docs
+- Read `README.md`, `INSTALL.md`, and `EXTEND.md` before touching any code
+- If implementation diverges from the docs, the docs win — fix the code, not the docs
 - Never modify the architecture without first discussing and updating the documentation together with the user
 
 ## Pair Programming Approach

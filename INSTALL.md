@@ -1,0 +1,211 @@
+# Setting Up a New Project
+
+Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
+
+## Prerequisites
+
+- Go
+- Docker + Docker Compose
+- Node.js (for TypeScript codegen and frontend)
+- `gotestsum` for pretty test output (recommended):
+  ```bash
+  go install gotest.tools/gotestsum@latest
+  ```
+
+## 1. Create the project
+
+```bash
+mkdir myapp && cd myapp
+mkdir -p go/db/migrations go/db/queries go/api frontend
+```
+
+Create `schemaf.toml`:
+```toml
+title = "My Application"
+name = "myapp"
+```
+
+Copy `schemaf.sh` from the schemaf repo into your project root (next to `schemaf.toml`).
+
+Initialize Go modules:
+```bash
+cd go && go mod init myapp && go get github.com/flocko-motion/schemaf@latest && cd ..
+```
+
+If you're developing schemaf itself alongside the project, create a `go.work` in the parent directory:
+```
+go 1.25.0
+
+use (
+    ./myapp/go
+    ./schemaf
+)
+```
+
+## 2. Wire up main.go
+
+Create `go/main.go`:
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/flocko-motion/schemaf/schemaf"
+
+    "myapp/api"
+    "myapp/db"
+)
+
+func main() {
+    ctx := context.Background()
+    app := schemaf.New(ctx)
+
+    app.AddDb(db.Provider)
+    app.AddApi(api.Provider)
+
+    log.Fatal(app.Run())
+}
+```
+
+`schemaf.New(ctx)` reads the project name from `schemaf.toml`. `app.Run()` hands over to Cobra — the `server` command starts the HTTP server, and any custom subcommands you register are available alongside it.
+
+## 3. Add a database migration
+
+Create `go/db/migrations/0001_users.sql`:
+```sql
+CREATE TABLE users (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email      TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Migrations are plain SQL files, auto-discovered by codegen. They run automatically on server startup.
+
+## 4. Add database queries
+
+Create `go/db/queries/users.sql`:
+```sql
+-- name: ListUsers :many
+SELECT * FROM users ORDER BY created_at DESC;
+
+-- name: GetUser :one
+SELECT * FROM users WHERE id = $1;
+
+-- name: CreateUser :one
+INSERT INTO users (email) VALUES ($1) RETURNING *;
+```
+
+This is [sqlc](https://sqlc.dev) syntax. Codegen generates type-safe Go functions: `ListUsers(ctx)`, `GetUser(ctx, id)`, `CreateUser(ctx, email)`.
+
+## 5. Add an API endpoint
+
+Create `go/api/users.go`:
+```go
+package api
+
+import (
+    "context"
+
+    "myapp/db"
+)
+
+// ListUsersEndpoint returns all users ordered by creation date.
+type ListUsersEndpoint struct{}
+
+func (e ListUsersEndpoint) Method() string { return "GET" }
+func (e ListUsersEndpoint) Path() string   { return "/api/users" }
+func (e ListUsersEndpoint) Auth() bool     { return false }
+func (e ListUsersEndpoint) Handle(ctx context.Context, req ListUsersReq) (ListUsersResp, error) {
+    users, err := db.ListUsers(ctx)
+    if err != nil {
+        return ListUsersResp{}, err
+    }
+    return ListUsersResp{Users: users}, nil
+}
+
+type ListUsersReq struct{}
+
+type ListUsersResp struct {
+    Users []db.User `json:"users"`
+}
+```
+
+See [Endpoint Interface](EXTEND.md#endpoint-interface) for the full pattern.
+
+## 6. Generate and run
+
+```bash
+./schemaf.sh codegen    # generates all glue code
+./schemaf.sh dev        # starts the full dev stack
+```
+
+Codegen produces:
+- `go/db/migrations.gen.go` → `db.Provider` (embedded SQL)
+- `go/db/queries.gen.go` → type-safe query functions (sqlc)
+- `go/api/endpoints.gen.go` → `api.Provider` (handler registration)
+- `gen/openapi.json` → OpenAPI spec
+- `frontend/src/api/generated/api.gen.ts` → TypeScript client
+
+## schemaf.sh
+
+`schemaf.sh` is a thin bootstrap wrapper that delegates to the Go CLI via `go run`. It should not be modified — all CLI logic lives in Go.
+
+```bash
+./schemaf.sh codegen         # Generate all code (SQL, endpoints, TypeScript client)
+./schemaf.sh test            # Regenerate, then run all tests
+./schemaf.sh test --verbose  # Verbose test output
+./schemaf.sh test --no-cache # Bypass test cache
+./schemaf.sh run             # Start production compose stack
+./schemaf.sh dev             # Start dev compose stack (exposes service ports)
+./schemaf.sh dev postgres    # Start only specific services
+```
+
+`run` and `dev` exec into `docker compose` and exit — the actual server runs inside the container.
+
+To add custom commands, use `app.AddSubcommand()` in your Go code — see [CLI Subcommands](EXTEND.md#cli-subcommands).
+
+## schemaf.toml
+
+Projects have a minimal `schemaf.toml` file:
+
+```toml
+title = "My Application"
+name = "myapp"
+```
+
+That's it. The `name` field determines the database name, Docker container prefixes, and config directory. Everything else is normative — no configuration needed.
+
+## Docker Compose
+
+schemaf ships with a **built-in compose configuration** that covers the full standard stack:
+
+- Go backend (port 7000)
+- Frontend dev server (port 7002)
+- Postgres (port 7003)
+
+You never write or maintain these service definitions. They are part of the framework.
+
+**Extending with project services:**
+
+If your project needs additional services (Redis, a worker container, a vector DB, etc.), add a `compose/` directory to your project:
+
+```
+myapp/
+└── compose/
+    └── services.yml    # Your additional services only
+```
+
+Codegen merges the framework's built-in compose with everything in your `compose/` and produces `gen/compose.gen.yml`.
+
+**Running the stack:**
+
+```bash
+./schemaf.sh run              # Full stack, production mode
+./schemaf.sh dev              # Full stack, dev mode (exposes service ports)
+./schemaf.sh dev postgres     # Only specific services (useful during development)
+```
+
+`./schemaf.sh dev <args>` passes extra args through to `docker compose up` — useful for starting only a subset of services while running the Go server directly on the host (e.g. with a debugger).
