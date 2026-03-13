@@ -24,10 +24,22 @@ type App struct {
 	subcommands []cli.SubcommandProvider
 }
 
-// New creates a new App with the given project name.
+// projectName is set by the generated constants.gen.go init() function.
+var projectName string
+
+// SetProjectName is called from the generated constants.gen.go to register
+// the project name at init time, before New is called.
+func SetProjectName(name string) {
+	projectName = name
+}
+
+// New creates a new App using the project name registered via SetProjectName.
 // The project name determines the database name, host, and migration prefix.
-// Pass the generated ProjectName constant from constants.gen.go.
-func New(ctx context.Context, projectName string) *App {
+func New(ctx context.Context) *App {
+	if projectName == "" {
+		slog.Error("project name not set — missing constants.gen.go? Run codegen.")
+		os.Exit(1)
+	}
 	return &App{ctx: ctx, project: projectName}
 }
 

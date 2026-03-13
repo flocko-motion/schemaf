@@ -3,5 +3,8 @@
 
 package main
 
-// ProjectName is the project name from schemaf.toml, embedded at build time.
-const ProjectName = "schemaf-example"
+import "github.com/flocko-motion/schemaf/schemaf"
+
+func init() {
+	schemaf.SetProjectName("schemaf-example")
+}
