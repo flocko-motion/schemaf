@@ -178,6 +178,37 @@ name = "myapp"
 
 That's it. The `name` field determines the database name, Docker container prefixes, and config directory. Everything else is normative — no configuration needed.
 
+## Secrets
+
+schemaf keeps secrets **out of the project directory**. The database password and any other sensitive values are stored per-project under your home directory:
+
+| Environment | Path |
+|-------------|------|
+| Dev/local   | `~/.<name>/dev/etc/env` |
+| Production  | `~/.<name>/etc/env` |
+
+The file format is plain `KEY=VALUE`, one per line. Comments (`#`) and blank lines are allowed.
+
+**Minimum required: `DB_PASS`**
+
+The Postgres container and backend both need `DB_PASS`. Set it up before your first `run` or `dev`:
+
+```bash
+# For a project named "myapp":
+mkdir -p ~/.myapp/dev/etc
+echo "DB_PASS=changeme" > ~/.myapp/dev/etc/env
+```
+
+For production, use a strong password:
+```bash
+mkdir -p ~/.myapp/etc
+echo "DB_PASS=$(openssl rand -hex 16)" > ~/.myapp/etc/env
+```
+
+**How secrets reach containers:** `schemaf.sh` automatically loads `~/.<name>/dev/etc/env` on every invocation, setting any variables not already in your environment. Docker Compose then picks up `${DB_PASS}` via environment variable substitution. Secrets flow from your home directory into containers without ever touching version control.
+
+> **Never commit secrets.** The `~/.<name>/` directory is outside your project tree by design. If you see `The "DB_PASS" variable is not set` warnings from Docker Compose, create the env file above.
+
 ## Docker Compose
 
 schemaf ships with a **built-in compose configuration** that covers the full standard stack:

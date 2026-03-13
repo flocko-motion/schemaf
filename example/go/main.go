@@ -15,7 +15,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	app := schemaf.New(ctx)
+	app := schemaf.New(ctx, ProjectName)
 
 	app.AddApi(api.Provider)
 	app.AddDb(db.Provider)

@@ -18,6 +18,25 @@ fi
 
 cd "$(dirname "$0")"
 
+# Load project name from schemaf.toml.
+PROJECT_NAME=$(grep '^name' schemaf.toml | cut -d= -f2 | tr -d ' "')
+
+# Load secrets from ~/.<name>/dev/etc/env (dev) or ~/.<name>/etc/env (prod).
+# Only sets variables that are not already in the environment.
+_schemaf_load_env() {
+  local envfile="$1"
+  [ -f "$envfile" ] || return 0
+  while IFS='=' read -r key val; do
+    key=$(echo "$key" | xargs)
+    [ -z "$key" ] || [[ "$key" == \#* ]] && continue
+    val=$(echo "$val" | xargs)
+    if [ -z "${!key:-}" ]; then
+      export "$key=$val"
+    fi
+  done < "$envfile"
+}
+_schemaf_load_env "$HOME/.${PROJECT_NAME}/dev/etc/env"
+
 CMD="${1:-}"
 shift 2>/dev/null || true
 

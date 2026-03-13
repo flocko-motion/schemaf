@@ -13,6 +13,7 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 		Long:  `Generate code from your project's SQL queries, schemas, and API definitions.`,
 	}
 
+	cmd.AddCommand(newConstantsCmd(ctx))
 	cmd.AddCommand(newMigrationsCmd(ctx))
 	cmd.AddCommand(newSQLCCmd(ctx))
 	cmd.AddCommand(newEndpointsCmd(ctx))
@@ -28,8 +29,11 @@ func newAllCmd(ctx *cli.Context) *cobra.Command {
 	return &cobra.Command{
 		Use:   "all",
 		Short: "Run all codegen steps",
-		Long:  `Runs compose, migrations, sqlc, endpoints, apits, and tests codegen in order.`,
+		Long:  `Runs constants, compose, migrations, sqlc, endpoints, apits, and tests codegen in order.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := runConstantsGen(); err != nil {
+				return err
+			}
 			if err := runComposeGen(); err != nil {
 				return err
 			}
