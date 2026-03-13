@@ -4,7 +4,7 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go/ ./
-RUN go build -o /app ./main.go
+RUN go build -o /app .
 
 FROM alpine:latest
 COPY --from=build /app /app
