@@ -8,15 +8,15 @@ import (
 
 	// Generated providers — regenerate with: ./codegen.sh
 	"schemaf.local/example/api"
-	// "schemaf.local/example/db"
+	"schemaf.local/example/db"
 )
 
 func main() {
 	ctx := context.Background()
-	app := schemaf.New(ctx, "schemaf-example")
+	app := schemaf.New(ctx)
 
 	app.AddApi(api.Provider)
-	// app.AddDb(db.Provider)
+	app.AddDb(db.Provider)
 
 	log.Fatal(app.Run())
 }

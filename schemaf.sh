@@ -18,10 +18,6 @@ fi
 
 cd "$(dirname "$0")"
 
-if [ -f go.work ]; then
-  export GOWORK="$(pwd)/go.work"
-fi
-
 CMD="${1:-}"
 shift 2>/dev/null || true
 

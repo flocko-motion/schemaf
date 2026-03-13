@@ -24,10 +24,15 @@ type App struct {
 	subcommands []cli.SubcommandProvider
 }
 
-// New creates a new App for the given project name (e.g. "schemaf-example").
+// New creates a new App by reading the project name from schemaf.toml.
 // The project name determines the database name, host, and migration prefix.
-func New(ctx context.Context, project string) *App {
-	return &App{ctx: ctx, project: project}
+func New(ctx context.Context) *App {
+	name, err := cli.ReadProjectName()
+	if err != nil {
+		slog.Error("reading project name from schemaf.toml", "error", err)
+		os.Exit(1)
+	}
+	return &App{ctx: ctx, project: name}
 }
 
 // AddApi registers all API endpoints by calling the generated provider function.
