@@ -27,6 +27,9 @@ var composeTestTemplate string
 //go:embed test-env.sh.tmpl
 var testEnvShTemplate string
 
+//go:embed Dockerfile.tmpl
+var dockerfileTemplate string
+
 func newComposeCmd(_ *cli.Context) *cobra.Command {
 	return &cobra.Command{
 		Use:   "compose",
@@ -77,6 +80,11 @@ func runComposeGen() error {
 		return err
 	}
 	cli.Success("Generated gen/compose.test.yml")
+
+	if err := renderTemplate(dockerfileTemplate, "gen/Dockerfile", data); err != nil {
+		return err
+	}
+	cli.Success("Generated gen/Dockerfile")
 
 	if err := renderTemplate(testEnvShTemplate, "gen/test-env.sh", data); err != nil {
 		return err

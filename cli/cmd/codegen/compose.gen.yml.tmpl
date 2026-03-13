@@ -31,7 +31,8 @@ services:
 
   backend:
     build:
-      context: ../go
+      context: ..
+      dockerfile: gen/Dockerfile
     container_name: {{.Name}}-backend
     environment:
       SCHEMAF_ENV: docker
