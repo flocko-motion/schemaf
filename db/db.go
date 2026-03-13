@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"time"
 
 	_ "github.com/lib/pq"
+
+	slog "github.com/flocko-motion/schemaf/log"
 )
 
 const (
@@ -43,11 +46,12 @@ func Init(dsn string) error {
 func DB() *sql.DB {
 	if conn == nil && dsnValue != "" {
 		if err := Init(dsnValue); err != nil {
-			panic(fmt.Sprintf("lazy db init: %v", err))
+			slog.Error("database connection failed", "error", err)
+			os.Exit(1)
 		}
-		// Run migrations lazily too.
 		if err := RunMigrations(context.Background()); err != nil {
-			panic(fmt.Sprintf("lazy db migrations: %v", err))
+			slog.Error("database migrations failed", "error", err)
+			os.Exit(1)
 		}
 	}
 	return conn

@@ -1,4 +1,4 @@
-// schemaf is the standalone framework CLI used by codegen.sh.
+// schemaf is the standalone framework CLI used by schemaf.sh codegen.
 // It has no knowledge of any specific project — it reads project files from disk.
 // Projects invoke it via: go run github.com/yourorg/schemaf/cmd/schemaf <command>
 package main

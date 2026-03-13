@@ -117,17 +117,6 @@ case "$CMD" in
     echo "Running codegen..."
     exec go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
     ;;
-  ""|--help|-h)
-    echo "Usage: ./schemaf.sh <command> [args]"
-    echo ""
-    echo "  codegen    Generate all code (SQL, endpoints, TypeScript API client)"
-    echo "  test       Regenerate code, then run all tests [--verbose] [--no-cache]"
-    echo "  run        Start production compose setup"
-    echo "  dev        Start development compose setup"
-    echo "  dev db     Start only postgres (for running the backend manually)"
-    echo "  upgrade    Upgrade schemaf to latest version and regenerate code"
-    exit 0
-    ;;
   *)
     SCHEMAF_CWD="$ORIG_PWD" exec go run "${PROJECT_ROOT}/go" "$CMD" "$@"
     ;;
