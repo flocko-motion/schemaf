@@ -93,7 +93,16 @@ case "$CMD" in
     esac
     ;;
   upgrade)
-    TARGET="${1:-latest}"
+    TARGET="${1:-}"
+    if [ -z "$TARGET" ]; then
+      # Query GitHub for the latest tag instead of Go proxy (which caches @latest for ~30min).
+      TARGET=$(git ls-remote --tags --sort=-v:refname https://github.com/flocko-motion/schemaf.git 'v*' \
+        | head -1 | sed 's|.*/||')
+      if [ -z "$TARGET" ]; then
+        echo "ERROR: could not determine latest version from GitHub" >&2
+        exit 1
+      fi
+    fi
     echo "Upgrading schemaf framework to ${TARGET}..."
     cd go
     OLD_VER=$(go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
