@@ -1,6 +1,13 @@
 #!/bin/bash
-# schemaf.sh — project entrypoint. Copy this file next to your schemaf.toml.
-# (Note: In the example project, this is a symlink to the actual schemaf.sh in the base directory)
+# schemaf.sh — runnable entrypoint for your project CLI. DO NOT EDIT.
+#
+# This script is a thin bootstrap wrapper. It delegates to `go run` so your
+# compiled binary doesn't need to exist yet. The actual CLI — both framework
+# commands (codegen, test, run, dev) and any custom subcommands you register
+# via app.AddSubcommand() in main.go — lives entirely in Go.
+#
+# To add custom commands, use app.AddSubcommand() in your Go code.
+# Do not add case branches here.
 set -euo pipefail
 
 if [ ! -f "$(dirname "$0")/schemaf.toml" ]; then

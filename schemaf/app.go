@@ -8,16 +8,20 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/flocko-motion/schemaf/api"
+	"github.com/flocko-motion/schemaf/cli"
 	"github.com/flocko-motion/schemaf/db"
 	slog "github.com/flocko-motion/schemaf/log"
 )
 
-// App is a configured schemaf server. Use New to create one.
+// App is a configured schemaf application. Use New to create one.
 type App struct {
-	ctx     context.Context
-	project string
-	hasDB   bool
+	ctx        context.Context
+	project    string
+	hasDB      bool
+	subcommands []cli.SubcommandProvider
 }
 
 // New creates a new App for the given project name (e.g. "schemaf-example").
@@ -39,9 +43,47 @@ func (a *App) AddDb(provider func() embed.FS) {
 	db.RegisterMigrations(db.MigrationSet{Prefix: a.project, Files: provider()})
 }
 
-// Run starts the HTTP server, connecting to the database first if AddDb was called.
-// Blocks until the server exits.
+// AddSubcommand registers a subcommand provider. Providers follow the same
+// pattern as framework CLI subcommands (see cli/cmd/* for examples).
+// Wire up in go/main.go: app.AddSubcommand(importer.SubcommandProvider)
+func (a *App) AddSubcommand(provider cli.SubcommandProvider) {
+	a.subcommands = append(a.subcommands, provider)
+}
+
+// Run hands over to Cobra for command routing. The "server" command (default
+// when no subcommand is given) starts the HTTP server. Custom subcommands
+// registered via AddSubcommand are mounted alongside it.
 func (a *App) Run() error {
+	projectHome := cli.ProjectHome(a.project)
+
+	c, err := cli.New(projectHome)
+	if err != nil {
+		return fmt.Errorf("init cli: %w", err)
+	}
+
+	// Mount the built-in server command as the default action.
+	c.AddSubcommands(a.serverProvider)
+
+	// Mount user-registered subcommands.
+	c.AddSubcommands(a.subcommands...)
+
+	return c.Execute()
+}
+
+// serverProvider returns the built-in "server" command that starts the HTTP server.
+func (a *App) serverProvider(_ *cli.Context) []*cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "server",
+		Short: "Run the HTTP server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.serve()
+		},
+	}
+	return []*cobra.Command{cmd}
+}
+
+// serve initializes the database (if configured) and starts the HTTP server.
+func (a *App) serve() error {
 	if a.hasDB {
 		slog.Info("connecting to database", "project", a.project)
 		if err := db.Init(a.dsn()); err != nil {

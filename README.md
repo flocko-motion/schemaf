@@ -251,7 +251,7 @@ Your built binary has additional built-in commands and can be extended with your
 ./myapp import               # Example custom subcommand — does whatever you implement
 ```
 
-Custom subcommands added via `app.AddSubcommand()` run directly — no server, no compose, just your code. Use them for data imports, admin tasks, one-off scripts, anything that benefits from being bundled in the same binary.
+Custom subcommands added via `app.AddSubcommand()` run directly — no server, no compose, just your code. Providers follow the same `cli.SubcommandProvider` pattern used by the framework itself (see `cli/cmd/*` for examples). Use them for data imports, admin tasks, one-off scripts, anything that benefits from being bundled in the same binary.
 
 **The CLI uses Cobra for command routing:**
 - `app.Run()` hands over to Cobra
@@ -372,8 +372,8 @@ func main() {
     app.AddDb(db.Provider)
     app.AddApi(api.Provider)
     
-    // Optional: mount custom CLI commands
-    app.AddSubcommand("import", importer.SubcommandProvider)
+    // Optional: mount custom CLI commands (same provider pattern as cli/cmd/*)
+    app.AddSubcommand(importer.SubcommandProvider)
     
     // Optional: register background services
     // These only run when "server" or "dev" command is used
