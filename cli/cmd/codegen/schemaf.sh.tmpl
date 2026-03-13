@@ -77,7 +77,15 @@ case "$CMD" in
       echo "gen/ not found — running codegen first..."
       go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
     fi
-    exec docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up "$@"
+    case "${1:-}" in
+      db)
+        shift
+        exec docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up postgres -d --wait "$@"
+        ;;
+      *)
+        exec docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up "$@"
+        ;;
+    esac
     ;;
   ""|--help|-h)
     echo "Usage: ./schemaf.sh <command> [args]"
@@ -86,6 +94,7 @@ case "$CMD" in
     echo "  test       Regenerate code, then run all tests [--verbose] [--no-cache]"
     echo "  run        Start production compose setup"
     echo "  dev        Start development compose setup"
+    echo "  dev db     Start only postgres (for running the backend manually)"
     exit 0
     ;;
   *)
