@@ -22,7 +22,7 @@ services:
     networks:
       - net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U schemaf"]
+      test: ["CMD-SHELL", "pg_isready -U schemaf -d {{.Name}}"]
       interval: 5s
       timeout: 5s
       retries: 10
