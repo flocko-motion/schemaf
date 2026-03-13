@@ -1,3 +1,5 @@
+// api.test.ts — TypeScript integration tests. Export async test* functions.
+// Codegen wraps these in Go test harnesses. See EXTEND.md#typescript-tests.
 import { Api } from "../../frontend/src/api/generated/api.gen"
 
 export async function testHealth(baseUrl: string) {

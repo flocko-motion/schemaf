@@ -1,3 +1,5 @@
+// auth_test.go — Integration test for the JWT auth flow.
+// Requires Postgres (started by ./schemaf.sh test).
 package tests
 
 import (

@@ -47,9 +47,17 @@ case "$CMD" in
     exit $TEST_EXIT
     ;;
   run)
+    if [ ! -f gen/compose.gen.yml ]; then
+      echo "gen/ not found — running codegen first..."
+      go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
+    fi
     exec docker compose -f gen/compose.gen.yml up "$@"
     ;;
   dev)
+    if [ ! -f gen/compose.gen.yml ]; then
+      echo "gen/ not found — running codegen first..."
+      go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
+    fi
     exec docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up "$@"
     ;;
   ""|--help|-h)

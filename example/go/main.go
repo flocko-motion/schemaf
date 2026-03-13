@@ -1,3 +1,6 @@
+// main.go — Application entry point. Wires up generated providers and starts the app.
+// See INSTALL.md for setup and EXTEND.md for adding providers.
+// Rule: only add app.Add*() calls here — all logic belongs in provider packages.
 package main
 
 import (
@@ -6,7 +9,6 @@ import (
 
 	"github.com/flocko-motion/schemaf/schemaf"
 
-	// Generated providers — regenerate with: ./codegen.sh
 	"schemaf.local/example/api"
 	"schemaf.local/example/db"
 )

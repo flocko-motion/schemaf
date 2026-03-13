@@ -1,3 +1,5 @@
+// api_test.go — Go unit tests for API endpoints using httptest.
+// Tests run without Docker — no server or database needed.
 package api_test
 
 import (

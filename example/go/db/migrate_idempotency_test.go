@@ -1,3 +1,5 @@
+// migrate_idempotency_test.go — Verifies migrations can be re-applied safely.
+// Requires Postgres (started by ./schemaf.sh test).
 package db_test
 
 import (

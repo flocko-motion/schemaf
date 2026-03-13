@@ -1,3 +1,6 @@
+// todos.go — API endpoint implementations for the todo resource.
+// Each endpoint is a struct with Method/Path/Auth/Handle methods.
+// See EXTEND.md#endpoint-interface for the pattern.
 package api
 
 import (

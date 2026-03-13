@@ -1,3 +1,6 @@
+-- queries/ — sqlc query definitions. Codegen generates type-safe Go functions from these.
+-- Syntax: "-- name: FuncName :many|:one|:exec". See EXTEND.md#database.
+
 -- name: ListTodos :many
 SELECT * FROM todos ORDER BY created_at DESC;
 

@@ -1,3 +1,5 @@
+// health_db_test.go — Integration test for /health with a real database.
+// Requires Postgres (started by ./schemaf.sh test).
 package api_test
 
 import (

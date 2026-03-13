@@ -1,3 +1,5 @@
+// clock.go — Example endpoint that calls a sidecar Docker service.
+// Demonstrates compose extensions (compose/clock.yml) integrated with the backend.
 package api
 
 import (

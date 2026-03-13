@@ -1,3 +1,5 @@
+// reset_test.go — Tests that project table reset works correctly.
+// Requires Postgres (started by ./schemaf.sh test).
 package db_test
 
 import (
