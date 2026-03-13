@@ -87,6 +87,21 @@ case "$CMD" in
         ;;
     esac
     ;;
+  upgrade)
+    echo "Upgrading schemaf framework..."
+    cd go
+    OLD_VER=$(go list -m -f '{{.Version}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
+    go get github.com/flocko-motion/schemaf@latest
+    NEW_VER=$(go list -m -f '{{.Version}}' github.com/flocko-motion/schemaf)
+    cd ..
+    if [ "$OLD_VER" = "$NEW_VER" ]; then
+      echo "Already at latest: $NEW_VER"
+    else
+      echo "Upgraded: $OLD_VER → $NEW_VER"
+    fi
+    echo "Running codegen..."
+    exec go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
+    ;;
   ""|--help|-h)
     echo "Usage: ./schemaf.sh <command> [args]"
     echo ""
@@ -95,6 +110,7 @@ case "$CMD" in
     echo "  run        Start production compose setup"
     echo "  dev        Start development compose setup"
     echo "  dev db     Start only postgres (for running the backend manually)"
+    echo "  upgrade    Upgrade schemaf to latest version and regenerate code"
     exit 0
     ;;
   *)
