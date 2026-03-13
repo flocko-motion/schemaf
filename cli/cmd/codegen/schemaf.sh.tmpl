@@ -17,7 +17,9 @@ if [ ! -f "$(dirname "$0")/schemaf.toml" ]; then
   exit 1
 fi
 
-cd "$(dirname "$0")"
+ORIG_PWD="$PWD"
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_ROOT"
 
 # Load project name from schemaf.toml.
 PROJECT_NAME=$(grep '^name' schemaf.toml | cut -d= -f2 | tr -d ' "')
@@ -118,6 +120,6 @@ case "$CMD" in
     exit 0
     ;;
   *)
-    exec go run ./go "$CMD" "$@"
+    SCHEMAF_CWD="$ORIG_PWD" exec go run "${PROJECT_ROOT}/go" "$CMD" "$@"
     ;;
 esac

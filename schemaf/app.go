@@ -67,6 +67,13 @@ func (a *App) AddSubcommand(provider cli.SubcommandProvider) {
 // when no subcommand is given) starts the HTTP server. Custom subcommands
 // registered via AddSubcommand are mounted alongside it.
 func (a *App) Run() error {
+	// Restore the caller's working directory if schemaf.sh passed it.
+	if cwd := os.Getenv("SCHEMAF_CWD"); cwd != "" {
+		if err := os.Chdir(cwd); err != nil {
+			return fmt.Errorf("chdir to SCHEMAF_CWD: %w", err)
+		}
+	}
+
 	projectHome := cli.ProjectHome(a.project)
 
 	c, err := cli.New(projectHome)
