@@ -30,6 +30,9 @@ var testEnvShTemplate string
 //go:embed Dockerfile.tmpl
 var dockerfileTemplate string
 
+//go:embed schemaf.sh.tmpl
+var schemafShTemplate string
+
 func newComposeCmd(_ *cli.Context) *cobra.Command {
 	return &cobra.Command{
 		Use:   "compose",
@@ -93,6 +96,14 @@ func runComposeGen() error {
 		return fmt.Errorf("chmod gen/test-env.sh: %w", err)
 	}
 	cli.Success("Generated gen/test-env.sh")
+
+	if err := renderTemplate(schemafShTemplate, "schemaf.sh", data); err != nil {
+		return err
+	}
+	if err := os.Chmod("schemaf.sh", 0755); err != nil {
+		return fmt.Errorf("chmod schemaf.sh: %w", err)
+	}
+	cli.Success("Generated schemaf.sh")
 
 	return nil
 }
