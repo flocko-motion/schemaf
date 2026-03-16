@@ -123,11 +123,6 @@ func renderTemplate(tmplStr, outPath string, data map[string]any) error {
 	return nil
 }
 
-// readProjectName reads the `name` field from schemaf.toml.
-func readProjectName() (string, error) {
-	return cli.ReadProjectName()
-}
-
 // scanComposeExtensions returns relative paths to *.yml files in compose/.
 func scanComposeExtensions() ([]string, error) {
 	entries, err := os.ReadDir("compose")

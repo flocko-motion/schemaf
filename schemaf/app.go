@@ -12,35 +12,24 @@ import (
 
 	"github.com/flocko-motion/schemaf/api"
 	"github.com/flocko-motion/schemaf/cli"
+	"github.com/flocko-motion/schemaf/constants"
 	"github.com/flocko-motion/schemaf/db"
 	slog "github.com/flocko-motion/schemaf/log"
 )
 
 // App is a configured schemaf application. Use New to create one.
 type App struct {
-	ctx        context.Context
-	project    string
-	hasDB      bool
+	ctx         context.Context
+	project     string
+	hasDB       bool
 	subcommands []cli.SubcommandProvider
 }
 
-// projectName is set by the generated constants.gen.go init() function.
-var projectName string
-
-// SetProjectName is called from the generated constants.gen.go to register
-// the project name at init time, before New is called.
-func SetProjectName(name string) {
-	projectName = name
-}
-
-// New creates a new App using the project name registered via SetProjectName.
+// New creates a new App using the project name registered via constants.SetProjectName.
 // The project name determines the database name, host, and migration prefix.
 func New(ctx context.Context) *App {
-	if projectName == "" {
-		slog.Error("project name not set — missing constants.gen.go? Run codegen.")
-		os.Exit(1)
-	}
-	return &App{ctx: ctx, project: projectName}
+	name := constants.ProjectName()
+	return &App{ctx: ctx, project: name}
 }
 
 // AddApi registers all API endpoints by calling the generated provider function.
@@ -80,9 +69,7 @@ func (a *App) Run() error {
 		db.SetDSN(a.dsn())
 	}
 
-	projectHome := cli.ProjectHome(a.project)
-
-	c, err := cli.New(projectHome)
+	c, err := cli.New()
 	if err != nil {
 		return fmt.Errorf("init cli: %w", err)
 	}

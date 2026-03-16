@@ -1,6 +1,8 @@
-// schemaf is the standalone framework CLI used by schemaf.sh codegen.
-// It has no knowledge of any specific project — it reads project files from disk.
-// Projects invoke it via: go run github.com/yourorg/schemaf/cmd/schemaf <command>
+// This is a CLI built from the extensible, modular CLI kit provided by the framwork. Users will
+// build their own CLI extending(!) the built in features - so the users project CLI is an *extended*
+// version of this CLI, not a seperate CLI. The single CLI will be used for framwork operations like
+// codegen and running the server, but also for user defined commands. The user will write his own main.go
+// to mount all subcommands and call Execute().
 package main
 
 import (
@@ -12,28 +14,8 @@ import (
 	"github.com/flocko-motion/schemaf/cli/cmd/run"
 )
 
-
 func main() {
-	// Change to the project root (directory containing schemaf.toml) so all
-	// commands can use paths relative to the project root regardless of where
-	// the script was invoked from.
-	if root, err := cli.FindProjectRoot(); err == nil {
-		if err := os.Chdir(root); err != nil {
-			log.Fatalf("chdir to project root: %v", err)
-		}
-	}
-
-	// Derive project home from schemaf.toml; fall back to ~/.schemaf for non-project contexts.
-	projectHome := func() string {
-		name, err := cli.ReadProjectName()
-		if err != nil {
-			home, _ := os.UserHomeDir()
-			return home + "/.schemaf"
-		}
-		return cli.ProjectHome(name)
-	}()
-
-	c, err := cli.New(projectHome)
+	c, err := cli.New()
 	if err != nil {
 		log.Fatalf("init cli: %v", err)
 	}

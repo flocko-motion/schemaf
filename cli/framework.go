@@ -1,22 +1,22 @@
 package cli
 
 import (
-	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/flocko-motion/schemaf/files"
 )
 
 // CLI represents the composable CLI framework
 type CLI struct {
-	root    *cobra.Command
-	ctx     *Context
-	opts    *cliOptions
-	homeDir string
+	root *cobra.Command
+	ctx  *Context
+	opts *cliOptions
 }
 
 // New creates a new CLI framework instance
-func New(homeDir string, opts ...Option) (*CLI, error) {
-	// Apply options
+func New(opts ...Option) (*CLI, error) {
 	cliOpts := &cliOptions{
 		verbose: false,
 		version: "dev",
@@ -25,16 +25,20 @@ func New(homeDir string, opts ...Option) (*CLI, error) {
 		opt(cliOpts)
 	}
 
-	// Load config and state
-	config, err := loadConfig(homeDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
-	state, err := loadState(homeDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load state: %w", err)
-	}
+	// ProjectHome panics if project name isn't set yet (first run, before codegen).
+	// Only codegen can run without it — all other commands need the project name.
+	var homeDir string
+	var config *Config
+	var state *State
+	isCodegen := len(os.Args) > 1 && os.Args[1] == "codegen"
+	func() {
+		if isCodegen {
+			defer func() { recover() }()
+		}
+		homeDir = files.ProjectHome()
+		config, _ = loadConfig(homeDir)
+		state, _ = loadState(homeDir)
+	}()
 
 	// Create HTTP client
 	httpClient := NewHTTPClient(cliOpts.verbose)
@@ -42,7 +46,6 @@ func New(homeDir string, opts ...Option) (*CLI, error) {
 	// Create API registry
 	apiRegistry := NewAPIRegistry()
 
-	// Create context
 	ctx := &Context{
 		APIs:       apiRegistry,
 		Config:     config,
@@ -52,7 +55,6 @@ func New(homeDir string, opts ...Option) (*CLI, error) {
 		Verbose:    cliOpts.verbose,
 	}
 
-	// Create root command
 	rootCmd := &cobra.Command{
 		Use:     "schemaf",
 		Short:   "Schemaf CLI - unified tooling for the Schemaf ecosystem",
@@ -60,14 +62,12 @@ func New(homeDir string, opts ...Option) (*CLI, error) {
 		Version: cliOpts.version,
 	}
 
-	// Add persistent flags
 	rootCmd.PersistentFlags().BoolVar(&ctx.Verbose, "verbose", false, "Enable verbose output")
 
 	cli := &CLI{
-		root:    rootCmd,
-		ctx:     ctx,
-		opts:    cliOpts,
-		homeDir: homeDir,
+		root: rootCmd,
+		ctx:  ctx,
+		opts: cliOpts,
 	}
 
 	return cli, nil
@@ -83,16 +83,14 @@ func (c *CLI) Subcommand(use, short, long string) *CLI {
 
 	c.root.AddCommand(subCmd)
 
-	// Return new CLI instance with this subcommand as root
 	return &CLI{
-		root:    subCmd,
-		ctx:     c.ctx,
-		opts:    c.opts,
-		homeDir: c.homeDir,
+		root: subCmd,
+		ctx:  c.ctx,
+		opts: c.opts,
 	}
 }
 
-// Add mounts subcommand providers to this CLI
+// AddSubcommands mounts subcommand providers to this CLI
 func (c *CLI) AddSubcommands(providers ...SubcommandProvider) *CLI {
 	for _, provider := range providers {
 		commands := provider(c.ctx)
@@ -113,7 +111,6 @@ func (c *CLI) AddApis(apiProviders ...ApiProvider) *CLI {
 		}
 	}
 
-	// Auto-mount the api commands if this is the first API registered
 	if !hadAPIs && len(c.ctx.APIs.apis) > 0 {
 		c.AddSubcommands(apiProvider)
 	}

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	cli "github.com/flocko-motion/schemaf/cli"
+	"github.com/spf13/cobra"
 )
 
 //go:embed constants.gen.go.tmpl

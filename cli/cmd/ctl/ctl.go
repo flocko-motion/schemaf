@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	cli "github.com/flocko-motion/schemaf/cli"
+	"github.com/flocko-motion/schemaf/files"
+	"github.com/spf13/cobra"
 )
 
 // SubcommandProvider returns the ctl subcommand tree.
@@ -89,7 +90,7 @@ func dockerEnv() []string {
 	}
 
 	// Use a clean config under ~/.schemaf/docker
-	schemafDockerDir, err := cli.EnsureProjectDir("docker")
+	schemafDockerDir, err := files.EnsureDir(files.DockerDir())
 	if err != nil {
 		return env
 	}
@@ -130,8 +131,8 @@ func runDockerComposeCapture(args []string) (string, error) {
 // loadProjectEnv loads secrets from ~/.<name>/etc/env into the process environment.
 // Variables already set in the environment are not overwritten.
 func loadProjectEnv(homeDir string, dev bool) {
-	etcDir := cli.EtcDir(homeDir, dev)
-	if err := cli.LoadEnv(etcDir); err != nil {
+	etcDir := files.ConfigDir()
+	if err := files.LoadEnv(etcDir); err != nil {
 		cli.Warning("loading env from %s: %v", etcDir, err)
 	}
 }
