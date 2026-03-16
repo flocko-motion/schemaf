@@ -42,15 +42,12 @@ func Init(dsn string) error {
 }
 
 // DB returns the raw *sql.DB singleton. If the connection hasn't been
-// opened yet but a DSN was registered via SetDSN, it initializes lazily.
+// opened yet but a DSN was registered via SetDSN, it connects lazily
+// (without running migrations).
 func DB() *sql.DB {
 	if conn == nil && dsnValue != "" {
 		if err := Init(dsnValue); err != nil {
 			slog.Error("database connection failed", "error", err)
-			os.Exit(1)
-		}
-		if err := RunMigrations(context.Background()); err != nil {
-			slog.Error("database migrations failed", "error", err)
 			os.Exit(1)
 		}
 	}
