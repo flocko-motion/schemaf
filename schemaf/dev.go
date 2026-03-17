@@ -108,9 +108,9 @@ func (a *App) runDev(spec string) error {
 
 	compose := []string{"docker", "compose", "-f", "gen/compose.gen.yml", "-f", "gen/compose.dev.yml"}
 
-	// Start Docker services.
+	// Start Docker services (skip building backend — it runs natively in dev).
 	if svc.infra {
-		args := append(compose, "up", "--scale", "backend=0", "-d", "--wait")
+		args := append(compose, "up", "--scale", "backend=0", "--no-build", "-d", "--wait")
 		if err := runCmd(args...); err != nil {
 			return fmt.Errorf("starting infrastructure: %w", err)
 		}
