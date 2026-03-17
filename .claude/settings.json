@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Read(//r/priv/schemaf/**)"
+      "Read(//r/priv/schemaf/**)",
+      "Bash(curl -s http://localhost:7000/api/health)",
+      "Bash(kill -9 18760)"
     ]
   }
 }
