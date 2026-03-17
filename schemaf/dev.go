@@ -92,6 +92,11 @@ func (a *App) runDev(spec string) error {
 	}
 
 	// Check ports before starting anything.
+	if svc.db || svc.infra {
+		if err := checkPort(7003, "postgres"); err != nil {
+			return err
+		}
+	}
 	if svc.backend {
 		if err := checkPort(7000, "backend"); err != nil {
 			return err
