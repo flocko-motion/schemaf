@@ -15,7 +15,7 @@ services:
     container_name: {{.Name}}-postgres
     environment:
       POSTGRES_USER: schemaf
-      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_PASSWORD: ${DB_PASS:-dev}
       POSTGRES_DB: {{.Name}}
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -36,7 +36,7 @@ services:
     container_name: {{.Name}}-backend
     environment:
       SCHEMAF_ENV: docker
-      DB_PASS: ${DB_PASS}
+      DB_PASS: ${DB_PASS:-dev}
       PORT: "7000"
     networks:
       - net
