@@ -82,31 +82,41 @@ case "$CMD" in
       echo "gen/ not found — running codegen first..."
       go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
     fi
-    case "${1:-}" in
-      db)
-        shift
-        exec docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up postgres -d --wait "$@"
-        ;;
-      backend)
-        shift
-        docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up -d --wait "$@"
-        exec go run ./go server
-        ;;
-      all)
-        shift
-        docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up -d --wait "$@"
-        if [ -d frontend ]; then
-          (cd frontend && npm run dev) &
-          FRONTEND_PID=$!
-          trap "kill $FRONTEND_PID 2>/dev/null" EXIT
-        fi
-        exec go run ./go server
-        ;;
-      *)
-        # Infrastructure only — developer runs backend/frontend manually.
-        exec docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up "$@"
-        ;;
-    esac
+    SERVICES="${1:-}"
+    shift 2>/dev/null || true
+    COMPOSE="docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml"
+
+    # "dev db" is shorthand for just postgres.
+    if [ "$SERVICES" = "db" ]; then
+      exec $COMPOSE up postgres -d --wait "$@"
+    fi
+
+    # Start infrastructure (everything except the Docker backend).
+    $COMPOSE up --scale backend=0 -d --wait "$@"
+
+    # Parse comma-separated list of native services to run.
+    RUN_BACKEND=false
+    RUN_FRONTEND=false
+    IFS=',' read -ra PARTS <<< "$SERVICES"
+    for part in "${PARTS[@]}"; do
+      case "$(echo "$part" | xargs)" in
+        backend)  RUN_BACKEND=true ;;
+        frontend) RUN_FRONTEND=true ;;
+        all)      RUN_BACKEND=true; RUN_FRONTEND=true ;;
+        "")       ;; # no services specified — infrastructure only
+        *)        echo "Unknown dev service: $part (available: backend, frontend, all)" >&2; exit 1 ;;
+      esac
+    done
+
+    if $RUN_FRONTEND && [ -d frontend ]; then
+      (cd frontend && npm run dev) &
+      FRONTEND_PID=$!
+      trap "kill $FRONTEND_PID 2>/dev/null" EXIT
+    fi
+
+    if $RUN_BACKEND; then
+      exec go run ./go server
+    fi
     ;;
   upgrade)
     TARGET="${1:-}"

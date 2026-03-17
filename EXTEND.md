@@ -58,10 +58,11 @@ app.SetFrontend(FrontendFS())
 ### Development workflow
 
 ```bash
-./schemaf.sh dev             # infrastructure only (postgres + services) — run backend/frontend manually
-./schemaf.sh dev backend     # infrastructure + Go server on :7000
-./schemaf.sh dev all         # infrastructure + Go server + frontend dev server
-./schemaf.sh dev db          # just postgres
+./schemaf.sh dev                      # infrastructure only — run backend/frontend manually
+./schemaf.sh dev backend              # infrastructure + Go server on :7000
+./schemaf.sh dev frontend             # infrastructure + Vite on :7002
+./schemaf.sh dev backend,frontend     # infrastructure + both
+./schemaf.sh dev db                   # just postgres
 ```
 
 In dev mode, the Go server reverse-proxies all non-API requests to `localhost:7002` (Vite). Start the frontend dev server separately or use `dev all`:
