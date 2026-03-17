@@ -87,7 +87,23 @@ case "$CMD" in
         shift
         exec docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up postgres -d --wait "$@"
         ;;
+      backend)
+        shift
+        docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up -d --wait "$@"
+        exec go run ./go server
+        ;;
+      all)
+        shift
+        docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up -d --wait "$@"
+        if [ -d frontend ]; then
+          (cd frontend && npm run dev) &
+          FRONTEND_PID=$!
+          trap "kill $FRONTEND_PID 2>/dev/null" EXIT
+        fi
+        exec go run ./go server
+        ;;
       *)
+        # Infrastructure only — developer runs backend/frontend manually.
         exec docker compose -f gen/compose.gen.yml -f gen/compose.dev.yml up "$@"
         ;;
     esac

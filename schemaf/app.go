@@ -9,6 +9,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -62,6 +63,13 @@ func (a *App) AddSubcommand(provider cli.SubcommandProvider) {
 // Wire up in go/main.go: app.AddService(myworker.Run)
 func (a *App) AddService(fn func(context.Context)) {
 	a.services = append(a.services, fn)
+}
+
+// SetFrontend registers an embedded frontend filesystem for production serving.
+// In dev mode, the server proxies to the frontend dev server on port 7002 instead.
+// Wire up in go/main.go: app.SetFrontend(FrontendFS())
+func (a *App) SetFrontend(fsys fs.FS) {
+	api.SetFrontend(fsys)
 }
 
 // Run hands over to Cobra for command routing. The "server" command (default
@@ -179,7 +187,7 @@ func (a *App) serve() error {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "7001"
+		port = "7000"
 	}
 
 	slog.Info("starting server", "addr", ":"+port)

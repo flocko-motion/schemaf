@@ -19,6 +19,7 @@ func main() {
 
 	app.AddApi(api.Provider)
 	app.AddDb(db.Provider)
+	app.SetFrontend(FrontendFS())
 
 	log.Fatal(app.Run())
 }

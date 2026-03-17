@@ -17,6 +17,7 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 	}
 
 	cmd.AddCommand(newConstantsCmd(ctx))
+	cmd.AddCommand(newFrontendCmd(ctx))
 	cmd.AddCommand(newMigrationsCmd(ctx))
 	cmd.AddCommand(newSQLCCmd(ctx))
 	cmd.AddCommand(newEndpointsCmd(ctx))
@@ -35,6 +36,9 @@ func newAllCmd(ctx *cli.Context) *cobra.Command {
 		Long:  `Runs constants, compose, migrations, sqlc, endpoints, apits, and tests codegen in order.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := runConstantsGen(); err != nil {
+				return err
+			}
+			if err := runFrontendGen(); err != nil {
 				return err
 			}
 			if err := runComposeGen(); err != nil {

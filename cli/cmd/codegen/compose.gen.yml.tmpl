@@ -37,11 +37,11 @@ services:
     environment:
       SCHEMAF_ENV: docker
       DB_PASS: ${DB_PASS}
-      PORT: "7001"
+      PORT: "7000"
     networks:
       - net
     ports:
-      - "7001:7001"
+      - "7000:7000"
     depends_on:
       postgres:
         condition: service_healthy

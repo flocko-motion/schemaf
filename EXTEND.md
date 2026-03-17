@@ -26,6 +26,7 @@ func main() {
 
     app.AddDb(db.Provider)                        // generated: migrations + queries
     app.AddApi(api.Provider)                       // generated: endpoint registration
+    app.SetFrontend(FrontendFS())                  // generated: embedded frontend assets
     app.AddSubcommand(importer.SubcommandProvider) // custom: CLI commands
 
     log.Fatal(app.Run())
@@ -33,6 +34,45 @@ func main() {
 ```
 
 `app.Run()` hands over to Cobra. The `server` command (default) starts the HTTP server. Custom subcommands are available alongside it.
+
+## Frontend
+
+The Go server on port 7000 is the single gateway — it serves both API routes and the frontend:
+
+```
+localhost:7000
+├── /api/*   → Go handlers
+└── /*       → Frontend
+    ├── Dev:  reverse proxy to Vite dev server (port 7002)
+    └── Prod: embedded static files from frontend/dist/
+```
+
+### Wiring
+
+Codegen generates `go/frontend.gen.go` (when `frontend/` exists) with `FrontendFS()` returning the embedded assets. Wire it in `main.go`:
+
+```go
+app.SetFrontend(FrontendFS())
+```
+
+### Development workflow
+
+```bash
+./schemaf.sh dev             # infrastructure only (postgres + services) — run backend/frontend manually
+./schemaf.sh dev backend     # infrastructure + Go server on :7000
+./schemaf.sh dev all         # infrastructure + Go server + frontend dev server
+./schemaf.sh dev db          # just postgres
+```
+
+In dev mode, the Go server reverse-proxies all non-API requests to `localhost:7002` (Vite). Start the frontend dev server separately or use `dev all`:
+
+```bash
+cd frontend && npm run dev   # starts Vite on port 7002
+```
+
+### Production
+
+The generated `Dockerfile` includes a Node build stage that compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
 
 ## Endpoint Interface
 

@@ -66,7 +66,8 @@ func runComposeGen() error {
 		return err
 	}
 
-	data := map[string]any{"Name": name, "Extensions": extensions, "ExtServices": extServices}
+	_, hasFrontend := os.Stat("frontend")
+	data := map[string]any{"Name": name, "Extensions": extensions, "ExtServices": extServices, "HasFrontend": hasFrontend == nil}
 
 	if err := os.MkdirAll("gen", 0755); err != nil {
 		return fmt.Errorf("creating gen/: %w", err)

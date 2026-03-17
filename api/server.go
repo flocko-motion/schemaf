@@ -18,11 +18,15 @@ func NewMux() *http.ServeMux {
 	for _, r := range Routes() {
 		mux.Handle(r.Method+" "+r.Path, r.Handler)
 	}
+
+	// Catch-all: serve frontend (dev proxy or embedded static files).
+	mux.Handle("/", frontendHandler())
+
 	return mux
 }
 
 // Serve starts the HTTP server on the given address using the registered routes.
-// addr should be in the form ":7001".
+// addr should be in the form ":7000".
 func Serve(addr string) error {
 	return http.ListenAndServe(addr, NewMux())
 }
