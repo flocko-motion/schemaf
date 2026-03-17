@@ -139,14 +139,7 @@ func shellStubProvider(_ *cli.Context) []*cobra.Command {
 		}
 	}
 
-	devCmd := stub("dev", "Start development compose setup")
-	devCmd.AddCommand(&cobra.Command{
-		Use:   "db",
-		Short: "Start only postgres (use ./schemaf.sh)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("run this via: ./schemaf.sh dev db")
-		},
-	})
+	devCmd := stub("dev", "Start dev services: db, infrastructure, backend, frontend, all")
 
 	return []*cobra.Command{
 		stub("codegen", "Generate all code"),

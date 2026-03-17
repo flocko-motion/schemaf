@@ -37,6 +37,25 @@ func main() {
 
 ## Frontend
 
+### Stack & conventions
+
+Schemaf enforces a **Vite + React + TypeScript** frontend. If `frontend/` doesn't exist when you run codegen, it's scaffolded automatically with a minimal working setup. If it exists, codegen validates that the required files are present.
+
+**Normative decisions (framework-enforced):**
+- Vite as build tool and dev server
+- React + TypeScript
+- Port 7002 with `strictPort: true`
+- Entry point: `index.html` → `src/main.tsx`
+- npm as package manager
+
+**Project decisions (up to you):**
+- UI framework (MUI, Tailwind, shadcn, etc.)
+- State management (Redux, Zustand, etc.)
+- Routing (React Router, TanStack, etc.)
+- Any additional dependencies
+
+### Architecture
+
 The Go server on port 7000 is the single gateway — it serves both API routes and the frontend:
 
 ```
@@ -49,27 +68,35 @@ localhost:7000
 
 ### Wiring
 
-Codegen generates `go/frontend.gen.go` (when `frontend/` exists) with `FrontendFS()` returning the embedded assets. Wire it in `main.go`:
+Codegen generates `go/frontend.gen.go` with `FrontendFS()` returning the embedded assets. Wire it in `main.go`:
 
 ```go
 app.SetFrontend(FrontendFS())
 ```
 
+### Codegen
+
+`./schemaf.sh codegen` does two things for the frontend:
+
+1. **Scaffold** — if `frontend/` doesn't exist, creates the full React+Vite+TS setup and runs `npm install`
+2. **Generate** — creates `go/frontend.gen.go` (embeds `frontend/dist/` into the Go binary) and `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec)
+
 ### Development workflow
 
-```bash
-./schemaf.sh dev                      # infrastructure only — run backend/frontend manually
-./schemaf.sh dev backend              # infrastructure + Go server on :7000
-./schemaf.sh dev frontend             # infrastructure + Vite on :7002
-./schemaf.sh dev backend,frontend     # infrastructure + both
-./schemaf.sh dev db                   # just postgres
-```
-
-In dev mode, the Go server reverse-proxies all non-API requests to `localhost:7002` (Vite). Start the frontend dev server separately or use `dev all`:
+Each service is started explicitly. Combine with commas:
 
 ```bash
-cd frontend && npm run dev   # starts Vite on port 7002
+./schemaf.sh dev                          # no args: shows available services
+./schemaf.sh dev db                       # just postgres
+./schemaf.sh dev infrastructure           # postgres + project compose services
+./schemaf.sh dev backend                  # Go server on :7000 (warns if postgres not running)
+./schemaf.sh dev frontend                 # Vite on :7002
+./schemaf.sh dev db,backend               # postgres + Go server
+./schemaf.sh dev db,backend,frontend      # postgres + Go server + Vite
+./schemaf.sh dev all                      # everything
 ```
+
+In dev mode, the Go server reverse-proxies all non-API requests to `localhost:7002` (Vite).
 
 ### Production
 
