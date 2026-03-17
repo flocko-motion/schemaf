@@ -226,6 +226,7 @@ func (a *App) dsn() string {
 		pass := os.Getenv("DB_PASS")
 		return fmt.Sprintf("postgres://schemaf:%s@%s-postgres:5432/%s?sslmode=disable", pass, a.project, a.project)
 	}
-	// Native: use port 7003 per PORTS.md convention
-	return fmt.Sprintf("postgres://schemaf:dev@localhost:7003/%s?sslmode=disable", a.project)
+	// Native: use port 7003 per PORTS.md convention.
+	// Explicit 127.0.0.1 — Docker binds to IPv4 only, and "localhost" may resolve to IPv6.
+	return fmt.Sprintf("postgres://schemaf:dev@127.0.0.1:7003/%s?sslmode=disable", a.project)
 }
