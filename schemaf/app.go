@@ -94,8 +94,9 @@ func (a *App) Run() error {
 		return fmt.Errorf("init cli: %w", err)
 	}
 
-	// Mount the built-in server command as the default action.
+	// Mount built-in commands.
 	c.AddSubcommands(a.serverProvider)
+	c.AddSubcommands(a.devProvider)
 
 	// Mount stub commands for schemaf.sh-handled operations so they
 	// appear in --help output. Running them directly tells the user
@@ -139,13 +140,10 @@ func shellStubProvider(_ *cli.Context) []*cobra.Command {
 		}
 	}
 
-	devCmd := stub("dev", "Start dev services: db, infrastructure, backend, frontend, all")
-
 	return []*cobra.Command{
 		stub("codegen", "Generate all code"),
 		stub("test", "Run all tests"),
 		stub("run", "Start production compose setup"),
-		devCmd,
 		stub("upgrade", "Upgrade schemaf to latest version"),
 	}
 }
