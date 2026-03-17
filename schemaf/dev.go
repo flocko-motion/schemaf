@@ -185,26 +185,26 @@ func (a *App) runDev(spec string) error {
 
 // checkPort verifies a port is free. If busy, asks the user to kill the blocking process.
 func checkPort(port int, service string) error {
-	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
+	portStr := strconv.Itoa(port)
+	ln, err := net.Listen("tcp", ":"+portStr)
 	if err == nil {
 		ln.Close()
 		return nil
 	}
 
-	// Port is busy — find the PID.
-	out, _ := exec.Command("lsof", "-ti", ":"+strconv.Itoa(port)).Output()
-	pid := strings.TrimSpace(strings.Split(string(out), "\n")[0])
-	if pid == "" {
-		return fmt.Errorf("port %d is in use (needed for %s) but could not identify the process", port, service)
+	// Port is busy — find the PID using fuser (works on Linux/WSL, unlike lsof).
+	pid := findPortPID(port)
+	if pid == 0 {
+		return fmt.Errorf("port %d is in use (needed for %s) — kill the process manually and retry", port, service)
 	}
 
-	procOut, _ := exec.Command("ps", "-p", pid, "-o", "comm=").Output()
+	procOut, _ := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
 	proc := strings.TrimSpace(string(procOut))
 	if proc == "" {
 		proc = "unknown"
 	}
 
-	fmt.Fprintf(os.Stderr, "Port %d is in use by %s (PID %s) — needed for %s.\n", port, proc, pid, service)
+	fmt.Fprintf(os.Stderr, "Port %d is in use by %s (PID %d) — needed for %s.\n", port, proc, pid, service)
 	fmt.Fprint(os.Stderr, "Kill it? [y/N] ")
 
 	var answer string
@@ -213,13 +213,12 @@ func checkPort(port int, service string) error {
 		return fmt.Errorf("port %d is required for %s — aborting", port, service)
 	}
 
-	pidInt, _ := strconv.Atoi(pid)
-	if p, err := os.FindProcess(pidInt); err == nil {
+	if p, err := os.FindProcess(pid); err == nil {
 		_ = p.Signal(syscall.SIGTERM)
 		time.Sleep(500 * time.Millisecond)
 
 		// Check if still alive, force kill.
-		if _, err := net.DialTimeout("tcp", ":"+strconv.Itoa(port), 200*time.Millisecond); err == nil {
+		if _, err := net.DialTimeout("tcp", ":"+portStr, 200*time.Millisecond); err == nil {
 			_ = p.Signal(syscall.SIGKILL)
 			time.Sleep(300 * time.Millisecond)
 		}
@@ -227,6 +226,45 @@ func checkPort(port int, service string) error {
 
 	fmt.Fprintln(os.Stderr, "Killed.")
 	return nil
+}
+
+// findPortPID returns the PID holding a TCP port, trying multiple methods.
+func findPortPID(port int) int {
+	portStr := strconv.Itoa(port)
+
+	// Try fuser first (most reliable on Linux/WSL).
+	if out, err := exec.Command("fuser", portStr+"/tcp").CombinedOutput(); err == nil {
+		for _, field := range strings.Fields(string(out)) {
+			if pid, err := strconv.Atoi(field); err == nil {
+				return pid
+			}
+		}
+	}
+
+	// Fallback: parse ss output.
+	if out, err := exec.Command("ss", "-tlnp", "sport", "=", ":"+portStr).Output(); err == nil {
+		// Look for pid=NNNN in the output.
+		for _, line := range strings.Split(string(out), "\n") {
+			if idx := strings.Index(line, "pid="); idx >= 0 {
+				rest := line[idx+4:]
+				end := strings.IndexAny(rest, ",) ")
+				if end > 0 {
+					if pid, err := strconv.Atoi(rest[:end]); err == nil {
+						return pid
+					}
+				}
+			}
+		}
+	}
+
+	// Last resort: lsof (doesn't work on WSL but works on macOS).
+	if out, err := exec.Command("lsof", "-ti", ":"+portStr).Output(); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(strings.Split(string(out), "\n")[0])); err == nil {
+			return pid
+		}
+	}
+
+	return 0
 }
 
 // runCmd executes a command with stdout/stderr connected to the terminal.
