@@ -1,0 +1,4 @@
+constants.gen.go
+frontend.gen.go
+frontend_dist/
+!frontend_dist/.gitkeep

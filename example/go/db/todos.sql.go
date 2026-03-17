@@ -53,9 +53,12 @@ func (q *Queries) GetTodo(ctx context.Context, id uuid.UUID) (Todo, error) {
 }
 
 const listTodos = `-- name: ListTodos :many
+
 SELECT id, text, done, created_at FROM todos ORDER BY created_at DESC
 `
 
+// queries/ — sqlc query definitions. Codegen generates type-safe Go functions from these.
+// Syntax: "-- name: FuncName :many|:one|:exec". See EXTEND.md#database.
 func (q *Queries) ListTodos(ctx context.Context) ([]Todo, error) {
 	rows, err := q.db.QueryContext(ctx, listTodos)
 	if err != nil {
