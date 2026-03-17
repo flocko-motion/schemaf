@@ -188,7 +188,8 @@ func (a *App) runDev(spec string) error {
 	return nil
 }
 
-// checkPort verifies a port is free. If busy, asks the user to kill the blocking process.
+// checkPort verifies a port is free. If busy, asks the user to kill the blocking process
+// or stop the Docker container holding it.
 func checkPort(port int, service string) error {
 	portStr := strconv.Itoa(port)
 	ln, err := net.Listen("tcp", ":"+portStr)
@@ -197,7 +198,23 @@ func checkPort(port int, service string) error {
 		return nil
 	}
 
-	// Port is busy — find the PID using fuser (works on Linux/WSL, unlike lsof).
+	// Check if a Docker container holds the port.
+	if container := findDockerContainer(port); container != "" {
+		fmt.Fprintf(os.Stderr, "Port %d is in use by Docker container %q — needed for %s.\n", port, container, service)
+		fmt.Fprint(os.Stderr, "Stop it? [y/N] ")
+		var answer string
+		fmt.Scanln(&answer)
+		if strings.ToLower(answer) != "y" {
+			return fmt.Errorf("port %d is required for %s — aborting", port, service)
+		}
+		if err := exec.Command("docker", "stop", container).Run(); err != nil {
+			return fmt.Errorf("stopping container %s: %w", container, err)
+		}
+		fmt.Fprintln(os.Stderr, "Stopped.")
+		return nil
+	}
+
+	// Try to find a native process holding the port.
 	pid := findPortPID(port)
 	if pid == 0 {
 		return fmt.Errorf("port %d is in use (needed for %s) — kill the process manually and retry", port, service)
@@ -231,6 +248,22 @@ func checkPort(port int, service string) error {
 
 	fmt.Fprintln(os.Stderr, "Killed.")
 	return nil
+}
+
+// findDockerContainer returns the name of a Docker container using the given host port.
+func findDockerContainer(port int) string {
+	portStr := strconv.Itoa(port)
+	out, err := exec.Command("docker", "ps", "--format", "{{.Names}} {{.Ports}}").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		// Ports look like: 127.0.0.1:7003->5432/tcp or 0.0.0.0:7000->7000/tcp
+		if strings.Contains(line, ":"+portStr+"->") {
+			return strings.Fields(line)[0]
+		}
+	}
+	return ""
 }
 
 // findPortPID returns the PID holding a TCP port, trying multiple methods.
