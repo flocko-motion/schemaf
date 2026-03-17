@@ -1,3 +1,6 @@
+// Part of the schemaf framework — https://github.com/flocko-motion/schemaf
+// Read the docs, report bugs and feature requests as GitHub issues. We respond quickly.
+
 // Package log provides the framework's centralized logger.
 // By default it writes structured JSON to stderr via slog.
 // Replace the logger via Set() to wire telemetry or change format.

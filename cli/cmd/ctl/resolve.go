@@ -1,3 +1,6 @@
+// Part of the schemaf framework — https://github.com/flocko-motion/schemaf
+// Read the docs, report bugs and feature requests as GitHub issues. We respond quickly.
+
 // Package ctl re-exports the compose resolver types from github.com/flocko-motion/schemaf/compose
 // for use by the CLI subcommands.
 package ctl

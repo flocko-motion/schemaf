@@ -1,3 +1,6 @@
+// Part of the schemaf framework — https://github.com/flocko-motion/schemaf
+// Read the docs, report bugs and feature requests as GitHub issues. We respond quickly.
+
 package api
 
 import "net/http"

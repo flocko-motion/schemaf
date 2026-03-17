@@ -1,3 +1,6 @@
+// Part of the schemaf framework — https://github.com/flocko-motion/schemaf
+// Read the docs, report bugs and feature requests as GitHub issues. We respond quickly.
+
 package schemaf
 
 import (
@@ -23,6 +26,7 @@ type App struct {
 	project     string
 	hasDB       bool
 	subcommands []cli.SubcommandProvider
+	services    []func(context.Context)
 }
 
 // New creates a new App using the project name registered via constants.SetProjectName.
@@ -50,6 +54,14 @@ func (a *App) AddDb(provider func() embed.FS) {
 // Wire up in go/main.go: app.AddSubcommand(importer.SubcommandProvider)
 func (a *App) AddSubcommand(provider cli.SubcommandProvider) {
 	a.subcommands = append(a.subcommands, provider)
+}
+
+// AddService registers a background function that runs as a goroutine when
+// the server starts (after DB init and migrations). The context is cancelled
+// on server shutdown. Services are not started for CLI subcommands.
+// Wire up in go/main.go: app.AddService(myworker.Run)
+func (a *App) AddService(fn func(context.Context)) {
+	a.services = append(a.services, fn)
 }
 
 // Run hands over to Cobra for command routing. The "server" command (default
@@ -158,6 +170,11 @@ func (a *App) serve() error {
 		if err := a.initAuth(); err != nil {
 			return fmt.Errorf("auth init: %w", err)
 		}
+	}
+
+	// Launch registered services as background goroutines.
+	for _, svc := range a.services {
+		go svc(a.ctx)
 	}
 
 	port := os.Getenv("PORT")

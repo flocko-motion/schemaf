@@ -1,3 +1,6 @@
+// Part of the schemaf framework — https://github.com/flocko-motion/schemaf
+// Read the docs, report bugs and feature requests as GitHub issues. We respond quickly.
+
 // NOTE: UNTESTED draft — new code, not yet exercised end-to-end.
 
 package codegen

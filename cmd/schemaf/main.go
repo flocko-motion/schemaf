@@ -1,3 +1,6 @@
+// Part of the schemaf framework — https://github.com/flocko-motion/schemaf
+// Read the docs, report bugs and feature requests as GitHub issues. We respond quickly.
+
 // This is a CLI built from the extensible, modular CLI kit provided by the framwork. Users will
 // build their own CLI extending(!) the built in features - so the users project CLI is an *extended*
 // version of this CLI, not a seperate CLI. The single CLI will be used for framwork operations like

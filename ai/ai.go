@@ -1,3 +1,6 @@
+// Part of the schemaf framework — https://github.com/flocko-motion/schemaf
+// Read the docs, report bugs and feature requests as GitHub issues. We respond quickly.
+
 // Package ai provides a unified interface for working with multiple LLM providers.
 // It offers a simple, opinionated abstraction layer designed for tool-building workflows.
 package ai

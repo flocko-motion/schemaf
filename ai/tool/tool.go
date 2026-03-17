@@ -1,3 +1,6 @@
+// Part of the schemaf framework — https://github.com/flocko-motion/schemaf
+// Read the docs, report bugs and feature requests as GitHub issues. We respond quickly.
+
 // Package tool provides high-level utilities for common AI workflows.
 // It simplifies single-shot "tool call" patterns where a consistent action
 // is applied to varying inputs.
