@@ -40,6 +40,33 @@ _schemaf_load_env() {
 }
 _schemaf_load_env "$HOME/.${PROJECT_NAME}/dev/etc/env"
 
+# Check if a port is in use. If so, offer to kill the blocking process.
+# Usage: _schemaf_check_port <port> <service_name>
+_schemaf_check_port() {
+  local port="$1" name="$2"
+  local pid
+  pid=$(lsof -ti :"$port" 2>/dev/null | head -1) || true
+  [ -z "$pid" ] && return 0
+
+  local proc
+  proc=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+  echo "Port $port is in use by $proc (PID $pid) — needed for $name." >&2
+  printf "Kill it? [y/N] " >&2
+  read -r answer
+  if [[ "$answer" =~ ^[Yy]$ ]]; then
+    kill "$pid" 2>/dev/null
+    sleep 0.5
+    if lsof -ti :"$port" >/dev/null 2>&1; then
+      kill -9 "$pid" 2>/dev/null
+      sleep 0.3
+    fi
+    echo "Killed." >&2
+  else
+    echo "ERROR: Port $port is required for $name. Aborting." >&2
+    exit 1
+  fi
+}
+
 SCHEMAF_VER=$(cd go && go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
 echo "schemaf ${SCHEMAF_VER} — ${PROJECT_NAME}"
 
@@ -135,16 +162,30 @@ case "$CMD" in
       fi
     fi
 
-    # Start frontend dev server in background.
+    # Check ports before starting.
+    if $RUN_BACKEND; then
+      _schemaf_check_port 7000 "backend"
+    fi
     if $RUN_FRONTEND; then
+      _schemaf_check_port 7002 "frontend"
       if [ ! -d frontend ]; then
         echo "ERROR: frontend/ directory not found. Run ./schemaf.sh codegen first." >&2
         exit 1
       fi
+    fi
+
+    # Start frontend dev server.
+    if $RUN_FRONTEND; then
       if $RUN_BACKEND; then
         (cd frontend && npm run dev) &
         FRONTEND_PID=$!
         trap "kill $FRONTEND_PID 2>/dev/null" EXIT
+        # Give Vite a moment to bind — fail fast if it crashes.
+        sleep 1
+        if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+          echo "ERROR: frontend dev server failed to start." >&2
+          exit 1
+        fi
       else
         exec sh -c 'cd frontend && npm run dev'
       fi
