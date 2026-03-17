@@ -38,6 +38,19 @@ func main() {
 
 API endpoints are structs implementing a typed interface — not plain `http.HandlerFunc` functions. This gives the framework enough information to handle serialization, auth, and OpenAPI generation automatically.
 
+The interface (defined in `api/endpoint.go`):
+
+```go
+type Endpoint[Req, Resp any] interface {
+    Method() string                                    // HTTP method: "GET", "POST", "PUT", "DELETE"
+    Path() string                                      // Route path, e.g. "/api/todos/{id}"
+    Auth() bool                                        // Whether JWT authentication is required
+    Handle(ctx context.Context, req Req) (Resp, error) // Your business logic
+}
+```
+
+Example implementation:
+
 ```go
 // go/api/users.go
 type GetUserEndpoint struct{}
