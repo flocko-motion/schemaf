@@ -30,13 +30,12 @@ Initialize Go modules:
 cd go && go mod init myapp && go get github.com/flocko-motion/schemaf@latest && cd ..
 ```
 
-If you're developing schemaf itself alongside the project, create a `go.work` in the parent directory:
+Create `go.work` in the project root (required — `schemaf.sh` runs Go from the project root):
 ```
 go 1.25.0
 
 use (
-    ./myapp/go
-    ./schemaf
+    ./go
 )
 ```
 
@@ -136,8 +135,8 @@ See [Endpoint Interface](EXTEND.md#endpoint-interface) for the full pattern.
 ## 6. Generate and run
 
 ```bash
-# First run — bootstrap from go/ where go.mod lives:
-cd go && go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all && cd ..
+# First run — generates schemaf.sh + all glue code:
+go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
 
 # From now on, use the generated script:
 ./schemaf.sh codegen    # regenerate all glue code
