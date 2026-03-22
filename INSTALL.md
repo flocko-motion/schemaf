@@ -136,8 +136,8 @@ See [Endpoint Interface](EXTEND.md#endpoint-interface) for the full pattern.
 ## 6. Generate and run
 
 ```bash
-# First run — generates schemaf.sh + all glue code:
-go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
+# First run — bootstrap from go/ where go.mod lives:
+cd go && go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all && cd ..
 
 # From now on, use the generated script:
 ./schemaf.sh codegen    # regenerate all glue code

@@ -11,7 +11,18 @@ import (
 	"strings"
 )
 
-// FindProjectRoot walks up from the current directory looking for schemaf.toml
+// chdirToProjectRoot finds the project root (directory containing schemaf.toml)
+// and changes the working directory to it. This ensures codegen output paths
+// resolve correctly regardless of where the command is invoked from.
+func chdirToProjectRoot() error {
+	root, err := findProjectRoot()
+	if err != nil {
+		return err
+	}
+	return os.Chdir(root)
+}
+
+// findProjectRoot walks up from the current directory looking for schemaf.toml
 // and returns the directory that contains it.
 func findProjectRoot() (string, error) {
 	dir, err := os.Getwd()

@@ -14,6 +14,9 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 		Use:   "codegen",
 		Short: "Code generation utilities",
 		Long:  `Generate code from your project's SQL queries, schemas, and API definitions.`,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return chdirToProjectRoot()
+		},
 	}
 
 	cmd.AddCommand(newConstantsCmd(ctx))
