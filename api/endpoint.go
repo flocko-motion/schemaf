@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -61,7 +62,7 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
 		}
 		// Decode body for methods that carry one.
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 				writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 				return
 			}
