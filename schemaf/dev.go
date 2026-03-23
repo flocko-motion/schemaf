@@ -201,17 +201,21 @@ func checkPort(port int, service string) error {
 	// Check if a Docker container holds the port.
 	if container := findDockerContainer(port); container != "" {
 		fmt.Fprintf(os.Stderr, "Port %d is in use by Docker container %q — needed for %s.\n", port, container, service)
-		fmt.Fprint(os.Stderr, "Stop it? [y/N] ")
+		fmt.Fprint(os.Stderr, "Stop it? [y/N/c(ontinue)] ")
 		var answer string
 		fmt.Scanln(&answer)
-		if strings.ToLower(answer) != "y" {
+		switch strings.ToLower(answer) {
+		case "c":
+			return nil
+		case "y":
+			if err := exec.Command("docker", "stop", container).Run(); err != nil {
+				return fmt.Errorf("stopping container %s: %w", container, err)
+			}
+			fmt.Fprintln(os.Stderr, "Stopped.")
+			return nil
+		default:
 			return fmt.Errorf("port %d is required for %s — aborting", port, service)
 		}
-		if err := exec.Command("docker", "stop", container).Run(); err != nil {
-			return fmt.Errorf("stopping container %s: %w", container, err)
-		}
-		fmt.Fprintln(os.Stderr, "Stopped.")
-		return nil
 	}
 
 	// Try to find a native process holding the port.
@@ -227,27 +231,29 @@ func checkPort(port int, service string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "Port %d is in use by %s (PID %d) — needed for %s.\n", port, proc, pid, service)
-	fmt.Fprint(os.Stderr, "Kill it? [y/N] ")
+	fmt.Fprint(os.Stderr, "Kill it? [y/N/c(ontinue)] ")
 
 	var answer string
 	fmt.Scanln(&answer)
-	if strings.ToLower(answer) != "y" {
+	switch strings.ToLower(answer) {
+	case "c":
+		return nil
+	case "y":
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Signal(syscall.SIGTERM)
+			time.Sleep(500 * time.Millisecond)
+
+			// Check if still alive, force kill.
+			if _, err := net.DialTimeout("tcp", ":"+portStr, 200*time.Millisecond); err == nil {
+				_ = p.Signal(syscall.SIGKILL)
+				time.Sleep(300 * time.Millisecond)
+			}
+		}
+		fmt.Fprintln(os.Stderr, "Killed.")
+		return nil
+	default:
 		return fmt.Errorf("port %d is required for %s — aborting", port, service)
 	}
-
-	if p, err := os.FindProcess(pid); err == nil {
-		_ = p.Signal(syscall.SIGTERM)
-		time.Sleep(500 * time.Millisecond)
-
-		// Check if still alive, force kill.
-		if _, err := net.DialTimeout("tcp", ":"+portStr, 200*time.Millisecond); err == nil {
-			_ = p.Signal(syscall.SIGKILL)
-			time.Sleep(300 * time.Millisecond)
-		}
-	}
-
-	fmt.Fprintln(os.Stderr, "Killed.")
-	return nil
 }
 
 // findDockerContainer returns the name of a Docker container using the given host port.
