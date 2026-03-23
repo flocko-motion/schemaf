@@ -158,6 +158,7 @@ func (a *App) runDev(spec string) error {
 	if svc.frontend {
 		cmd := exec.Command("npm", "run", "dev")
 		cmd.Dir = "frontend"
+		cmd.Env = append(os.Environ(), "NODE_OPTIONS=--max-http-header-size=32768")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
