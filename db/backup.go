@@ -23,6 +23,25 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// lastBackup tracks the timestamp and result of the most recent backup.
+var lastBackupTime time.Time
+var lastBackupError string
+
+// LastBackupStatus returns the time and error string of the last backup.
+// Returns zero time if no backup has run yet.
+func LastBackupStatus() (time.Time, string) {
+	return lastBackupTime, lastBackupError
+}
+
+func recordBackup(err error) {
+	lastBackupTime = time.Now().UTC()
+	if err != nil {
+		lastBackupError = err.Error()
+	} else {
+		lastBackupError = ""
+	}
+}
+
 // SFTPConfig holds connection details for remote backup storage.
 type SFTPConfig struct {
 	Host   string
@@ -290,6 +309,7 @@ func RunBackupScheduler(ctx context.Context, dsn string, cfg SFTPConfig) {
 
 		slog.Info("starting scheduled backup")
 		filename, err := BackupToSFTP(ctx, dsn, cfg)
+		recordBackup(err)
 		if err != nil {
 			slog.Error("scheduled backup failed", "error", err)
 			continue

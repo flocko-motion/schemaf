@@ -108,6 +108,7 @@ func runSFTPBackup(cmd *cobra.Command, dsn string) error {
 	}
 
 	filename, err := BackupToSFTP(cmd.Context(), dsn, cfg)
+	recordBackup(err)
 	if err != nil {
 		return err
 	}
