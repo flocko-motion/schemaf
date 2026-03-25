@@ -38,6 +38,15 @@ services:
       SCHEMAF_ENV: docker
       DB_PASS: ${DB_PASS:-dev}
       PORT: "7000"
+      BACKUP_SSH_HOST: ${BACKUP_SSH_HOST:-}
+      BACKUP_SSH_PORT: ${BACKUP_SSH_PORT:-22}
+      BACKUP_SSH_USER: ${BACKUP_SSH_USER:-}
+      BACKUP_SSH_KEY: /run/secrets/backup_key
+      BACKUP_PATH: ${BACKUP_PATH:-/backups}
+      BACKUP_RETAIN: ${BACKUP_RETAIN:-30}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+    secrets:
+      - backup_key
     networks:
       - net
     ports:
@@ -46,6 +55,10 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+
+secrets:
+  backup_key:
+    file: ${BACKUP_SSH_KEY_PATH:-/dev/null}
 
 networks:
   net:

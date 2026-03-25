@@ -404,7 +404,7 @@ Set these environment variables in `~/.<name>/etc/env`:
 | `BACKUP_SSH_HOST` | yes | — | SFTP server hostname |
 | `BACKUP_SSH_PORT` | no | `22` | SFTP server port |
 | `BACKUP_SSH_USER` | yes | — | SFTP username |
-| `BACKUP_SSH_KEY` | yes | — | Path to SSH private key file |
+| `BACKUP_SSH_KEY_PATH` | yes | — | Host path to SSH private key (mounted as Docker secret) |
 | `BACKUP_PATH` | no | `/backups` | Remote directory |
 | `BACKUP_RETAIN` | no | `30` | Number of backups to keep |
 | `BACKUP_HOUR` | no | `3` | UTC hour for daily auto-backup (0-23) |
