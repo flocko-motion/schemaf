@@ -171,6 +171,11 @@ func (a *App) serve() error {
 		}
 	}
 
+	// Auto-start backup scheduler if SFTP is configured.
+	if cfg, ok := db.ReadSFTPConfigFromEnv(); ok {
+		go db.RunBackupScheduler(a.ctx, a.dsn(), cfg)
+	}
+
 	// Launch registered services as background goroutines.
 	for _, svc := range a.services {
 		go svc(a.ctx)

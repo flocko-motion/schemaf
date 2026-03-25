@@ -390,3 +390,47 @@ Test output is formatted by [gotestsum](https://github.com/gotestyourself/gotest
 ```bash
 go install gotest.tools/gotestsum@latest
 ```
+
+## Database Backups
+
+Schemaf includes built-in database backup to remote SFTP servers (e.g. Hetzner Storage Box).
+
+### Configuration
+
+Set these environment variables in `~/.<name>/etc/env`:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `BACKUP_SSH_HOST` | yes | — | SFTP server hostname |
+| `BACKUP_SSH_PORT` | no | `22` | SFTP server port |
+| `BACKUP_SSH_USER` | yes | — | SFTP username |
+| `BACKUP_SSH_KEY` | yes | — | Path to SSH private key file |
+| `BACKUP_PATH` | no | `/backups` | Remote directory |
+| `BACKUP_RETAIN` | no | `30` | Number of backups to keep |
+| `BACKUP_HOUR` | no | `3` | UTC hour for daily auto-backup (0-23) |
+
+### Automatic backups
+
+When `BACKUP_SSH_HOST` is set, the server automatically runs daily backups at the configured hour (default: 03:00 UTC). Old backups beyond the retention count are deleted automatically. No cron or external scheduling needed.
+
+### Manual commands
+
+```bash
+# One-shot backup to SFTP
+./myapp db backup
+
+# Backup to local file
+./myapp db backup --local /tmp/backup.sql.gz
+
+# List remote backups
+./myapp db restore
+
+# Restore specific backup
+./myapp db restore myapp-2026-03-25_03-00-00.sql.gz
+
+# Restore most recent backup
+./myapp db restore --latest
+
+# Restore from local file
+./myapp db restore --local /tmp/backup.sql.gz
+```
