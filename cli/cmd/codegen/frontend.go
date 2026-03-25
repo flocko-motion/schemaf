@@ -49,17 +49,6 @@ func runFrontendGen() error {
 		}
 	}
 
-	// Ensure .gitignore excludes built assets but keeps .gitkeep.
-	if err := ensureGitignore("go/.gitignore", "frontend.gen.go"); err != nil {
-		return err
-	}
-	if err := ensureGitignore("go/.gitignore", "frontend_dist/"); err != nil {
-		return err
-	}
-	if err := ensureGitignore("go/.gitignore", "!frontend_dist/.gitkeep"); err != nil {
-		return err
-	}
-
 	cli.Success("Generated %s", outPath)
 	return nil
 }

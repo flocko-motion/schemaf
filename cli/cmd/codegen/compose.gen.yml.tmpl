@@ -6,7 +6,7 @@ name: {{.Name}}
 {{if .Extensions}}
 include:
 {{- range .Extensions}}
-  - ../{{.}}
+  - {{.}}
 {{- end}}
 {{end}}
 services:
@@ -31,8 +31,8 @@ services:
 
   backend:
     build:
-      context: ..
-      dockerfile: gen/Dockerfile
+      context: .
+      dockerfile: Dockerfile.gen
     container_name: {{.Name}}-backend
     environment:
       SCHEMAF_ENV: docker

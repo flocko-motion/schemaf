@@ -84,8 +84,8 @@ func (a *App) runDev(spec string) error {
 	}
 
 	// Ensure codegen has been run.
-	if _, err := os.Stat("gen/compose.gen.yml"); os.IsNotExist(err) {
-		fmt.Fprintln(os.Stderr, "gen/ not found — running codegen first...")
+	if _, err := os.Stat("compose.gen.yml"); os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "compose.gen.yml not found — running codegen first...")
 		if err := runCmd("go", "run", "github.com/flocko-motion/schemaf/cmd/schemaf", "codegen", "all"); err != nil {
 			return fmt.Errorf("codegen: %w", err)
 		}
@@ -111,7 +111,7 @@ func (a *App) runDev(spec string) error {
 		}
 	}
 
-	compose := []string{"docker", "compose", "-f", "gen/compose.gen.yml", "-f", "gen/compose.dev.yml"}
+	compose := []string{"docker", "compose", "-f", "compose.gen.yml", "-f", "compose.dev.gen.yml"}
 
 	// Start Docker services (skip building backend — it runs natively in dev).
 	if svc.infra {

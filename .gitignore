@@ -9,9 +9,6 @@ vendor/
 *.test
 coverage.out
 
-# Generated output directory (codegen writes here)
-gen/
-
 # Node
 node_modules/
 

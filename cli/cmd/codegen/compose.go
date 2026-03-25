@@ -69,29 +69,29 @@ func runComposeGen() error {
 	_, hasFrontend := os.Stat("frontend")
 	data := map[string]any{"Name": name, "Extensions": extensions, "ExtServices": extServices, "HasFrontend": hasFrontend == nil}
 
+	if err := renderTemplate(composeGenTemplate, "compose.gen.yml", data); err != nil {
+		return err
+	}
+	cli.Success("Generated compose.gen.yml (project: %s)", name)
+
+	if err := renderTemplate(composeDevTemplate, "compose.dev.gen.yml", data); err != nil {
+		return err
+	}
+	cli.Success("Generated compose.dev.gen.yml")
+
+	if err := renderTemplate(composeTestTemplate, "compose.test.gen.yml", data); err != nil {
+		return err
+	}
+	cli.Success("Generated compose.test.gen.yml")
+
+	if err := renderTemplate(dockerfileTemplate, "Dockerfile.gen", data); err != nil {
+		return err
+	}
+	cli.Success("Generated Dockerfile.gen")
+
 	if err := os.MkdirAll("gen", 0755); err != nil {
 		return fmt.Errorf("creating gen/: %w", err)
 	}
-
-	if err := renderTemplate(composeGenTemplate, "gen/compose.gen.yml", data); err != nil {
-		return err
-	}
-	cli.Success("Generated gen/compose.gen.yml (project: %s)", name)
-
-	if err := renderTemplate(composeDevTemplate, "gen/compose.dev.yml", data); err != nil {
-		return err
-	}
-	cli.Success("Generated gen/compose.dev.yml")
-
-	if err := renderTemplate(composeTestTemplate, "gen/compose.test.yml", data); err != nil {
-		return err
-	}
-	cli.Success("Generated gen/compose.test.yml")
-
-	if err := renderTemplate(dockerfileTemplate, "gen/Dockerfile", data); err != nil {
-		return err
-	}
-	cli.Success("Generated gen/Dockerfile")
 
 	if err := renderTemplate(testEnvShTemplate, "gen/test-env.sh", data); err != nil {
 		return err

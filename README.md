@@ -81,8 +81,9 @@ schemaf expects a specific directory layout. No configuration, no flexibility - 
 myapp/
 ├── schemaf.toml                    # Minimal config (title, name)
 ├── schemaf.sh                      # Copy from schemaf repo — project entrypoint
-├── gen/                            # All generated files (gitignored)
-│   ├── compose.gen.yml             # Generated: merged compose definition
+├── compose.gen.yml                 # Generated: merged compose definition
+├── Dockerfile.gen                  # Generated: production Dockerfile
+├── gen/                            # Other generated files
 │   └── openapi.json                # Generated: OpenAPI spec
 ├── go/                            # All Go code (CLI + server unified)
 │   ├── main.go                    # Wire up providers, start app
@@ -112,12 +113,7 @@ myapp/
 - Clone any schemaf project and the structure is identical
 
 **Generated file naming:**
-All generated files use `.gen.` infix (e.g., `*.gen.go`, `*.gen.ts`) making them instantly recognizable and easy to `.gitignore`.
-
-**Recommended .gitignore:**
-```gitignore
-gen/
-```
+All generated files use `.gen.` infix (e.g., `*.gen.go`, `*.gen.ts`) making them instantly recognizable. Generated files **must be committed** — they are required for the project to compile and run.
 
 ## Server Architecture
 
@@ -179,7 +175,7 @@ The binary has full knowledge of itself. Its endpoint structs are compiled in �
 **Deployment is therefore trivial:**
 ```bash
 go build -o myapp go/main.go   # one artifact
-./schemaf.sh codegen            # generates gen/compose.gen.yml
+./schemaf.sh codegen            # generates compose.gen.yml, Dockerfile.gen, etc.
 ./schemaf.sh run                # everything runs
 ```
 

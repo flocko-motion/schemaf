@@ -3,5 +3,5 @@
 # Sets URL env vars for project sidecar services after compose.test.yml is up.
 # Usage: source gen/test-env.sh
 {{range .ExtServices}}
-export {{.EnvVar}}="http://localhost:$(docker compose -f gen/compose.test.yml port {{.Name}} {{index .Ports 0}} 2>/dev/null | awk -F: '{print $NF}')"
+export {{.EnvVar}}="http://localhost:$(docker compose -f compose.test.gen.yml port {{.Name}} {{index .Ports 0}} 2>/dev/null | awk -F: '{print $NF}')"
 {{- end}}
