@@ -23,7 +23,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// lastBackup tracks the timestamp and result of the most recent backup.
+const configKeyLastBackup = "last_backup"
+const configKeyLastBackupError = "last_backup_error"
+
+// lastBackup tracks the timestamp and result of the most recent backup (in-memory cache).
 var lastBackupTime time.Time
 var lastBackupError string
 
@@ -33,12 +36,36 @@ func LastBackupStatus() (time.Time, string) {
 	return lastBackupTime, lastBackupError
 }
 
-func recordBackup(err error) {
+// loadLastBackupStatus restores the last backup time from the database.
+func loadLastBackupStatus(ctx context.Context) {
+	if conn == nil {
+		return
+	}
+	val, ok, err := ConfigGet(ctx, configKeyLastBackup)
+	if err != nil || !ok {
+		return
+	}
+	t, err := time.Parse(time.RFC3339, val)
+	if err != nil {
+		return
+	}
+	lastBackupTime = t
+	if errVal, ok, _ := ConfigGet(ctx, configKeyLastBackupError); ok {
+		lastBackupError = errVal
+	}
+}
+
+func recordBackup(ctx context.Context, err error) {
 	lastBackupTime = time.Now().UTC()
 	if err != nil {
 		lastBackupError = err.Error()
 	} else {
 		lastBackupError = ""
+	}
+	// Persist to database (best-effort).
+	if conn != nil {
+		ConfigSet(ctx, configKeyLastBackup, lastBackupTime.Format(time.RFC3339))
+		ConfigSet(ctx, configKeyLastBackupError, lastBackupError)
 	}
 }
 
@@ -295,9 +322,26 @@ func DeleteOldBackups(cfg SFTPConfig) error {
 }
 
 // RunBackupScheduler runs daily backups at the configured UTC hour.
-// It blocks until the context is cancelled.
+// On startup, it checks whether today's backup was missed (e.g. server was down)
+// and runs a catch-up backup if needed. It blocks until the context is cancelled.
 func RunBackupScheduler(ctx context.Context, dsn string, cfg SFTPConfig) {
+	loadLastBackupStatus(ctx)
 	slog.Info("backup scheduler started", "hour", cfg.Hour, "retain", cfg.Retain, "host", cfg.Host)
+
+	// Catch-up: if the last backup is more than 24h ago, run one now.
+	if shouldCatchUp(cfg.Hour) {
+		slog.Info("running catch-up backup (last backup is stale or missing)")
+		filename, err := BackupToSFTP(ctx, dsn, cfg)
+		recordBackup(ctx, err)
+		if err != nil {
+			slog.Error("catch-up backup failed", "error", err)
+		} else {
+			slog.Info("catch-up backup complete", "file", filename)
+			if err := DeleteOldBackups(cfg); err != nil {
+				slog.Error("backup retention cleanup failed", "error", err)
+			}
+		}
+	}
 
 	for {
 		next := nextRunTime(cfg.Hour)
@@ -309,7 +353,7 @@ func RunBackupScheduler(ctx context.Context, dsn string, cfg SFTPConfig) {
 
 		slog.Info("starting scheduled backup")
 		filename, err := BackupToSFTP(ctx, dsn, cfg)
-		recordBackup(err)
+		recordBackup(ctx, err)
 		if err != nil {
 			slog.Error("scheduled backup failed", "error", err)
 			continue
@@ -320,6 +364,23 @@ func RunBackupScheduler(ctx context.Context, dsn string, cfg SFTPConfig) {
 			slog.Error("backup retention cleanup failed", "error", err)
 		}
 	}
+}
+
+// shouldCatchUp returns true if a backup should run immediately on startup.
+// This happens when: no backup has ever run, or the last successful backup
+// was more than 24 hours ago and today's scheduled hour has already passed.
+func shouldCatchUp(hour int) bool {
+	if lastBackupTime.IsZero() || lastBackupError != "" {
+		return true
+	}
+	now := time.Now().UTC()
+	todayScheduled := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, time.UTC)
+	// If the scheduled time hasn't passed yet today, no catch-up needed.
+	if now.Before(todayScheduled) {
+		return time.Since(lastBackupTime) > 24*time.Hour
+	}
+	// Scheduled time passed — did a backup run since then?
+	return lastBackupTime.Before(todayScheduled)
 }
 
 // nextRunTime returns the next occurrence of the given UTC hour.
