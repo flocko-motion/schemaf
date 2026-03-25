@@ -17,7 +17,7 @@ COPY --from=frontend /src/dist ./frontend_dist/
 RUN go mod tidy && go build -o /app .
 
 FROM alpine:latest
-RUN apk add --no-cache postgresql17-client
+RUN apk add --no-cache postgresql17-client openssh-client
 COPY --from=build /app /app
 ENTRYPOINT ["/app"]
 CMD ["server"]

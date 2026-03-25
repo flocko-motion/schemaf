@@ -85,42 +85,62 @@ Use --local to restore from a local file.`,
 }
 
 func runLocalBackup(cmd *cobra.Command, dsn, path string) error {
+	fmt.Fprintf(os.Stderr, "→ Creating local backup to %s\n", path)
+	fmt.Fprintf(os.Stderr, "  DSN: %s\n", redactDSN(dsn))
+
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", path, err)
 	}
 	defer f.Close()
 
+	fmt.Fprintf(os.Stderr, "  Running pg_dump...\n")
 	if err := Backup(cmd.Context(), dsn, f); err != nil {
 		os.Remove(path)
 		return err
 	}
 
 	info, _ := f.Stat()
-	fmt.Fprintf(os.Stderr, "Backup saved to %s (%d bytes)\n", path, info.Size())
+	fmt.Fprintf(os.Stderr, "✓ Backup saved to %s (%s)\n", path, formatSize(info.Size()))
 	return nil
 }
 
 func runSFTPBackup(cmd *cobra.Command, dsn string) error {
+	fmt.Fprintf(os.Stderr, "→ Starting SFTP backup\n")
+	fmt.Fprintf(os.Stderr, "  DSN: %s\n", redactDSN(dsn))
+
+	fmt.Fprintf(os.Stderr, "  Reading SFTP config from environment...\n")
 	cfg, ok := ReadSFTPConfigFromEnv()
 	if !ok {
 		return fmt.Errorf("SFTP not configured — set BACKUP_SSH_HOST, BACKUP_SSH_USER, BACKUP_SSH_KEY")
 	}
+	fmt.Fprintf(os.Stderr, "  Host: %s:%d\n", cfg.Host, cfg.Port)
+	fmt.Fprintf(os.Stderr, "  User: %s\n", cfg.User)
+	fmt.Fprintf(os.Stderr, "  Path: %s\n", cfg.Path)
+	fmt.Fprintf(os.Stderr, "  Retain: %d backups\n", cfg.Retain)
+	fmt.Fprintf(os.Stderr, "  Key: %d bytes loaded\n", len(cfg.Key))
 
+	fmt.Fprintf(os.Stderr, "  Connecting to SFTP server...\n")
 	filename, err := BackupToSFTP(cmd.Context(), dsn, cfg)
 	recordBackup(cmd.Context(), err)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "✗ Backup failed: %v\n", err)
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "Backup uploaded: %s\n", filename)
+	fmt.Fprintf(os.Stderr, "✓ Backup uploaded: %s\n", filename)
 
+	fmt.Fprintf(os.Stderr, "  Running retention cleanup (keep %d)...\n", cfg.Retain)
 	if err := DeleteOldBackups(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: retention cleanup failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Warning: retention cleanup failed: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "✓ Retention cleanup done\n")
 	}
 	return nil
 }
 
 func runListBackups(cfg SFTPConfig) error {
+	fmt.Fprintf(os.Stderr, "→ Listing backups on %s:%d%s\n", cfg.Host, cfg.Port, cfg.Path)
+
 	backups, err := ListRemoteBackups(cfg)
 	if err != nil {
 		return err
@@ -143,6 +163,7 @@ func runListBackups(cfg SFTPConfig) error {
 }
 
 func runLatestRestore(cmd *cobra.Command, dsn string, cfg SFTPConfig) error {
+	fmt.Fprintf(os.Stderr, "→ Finding latest backup...\n")
 	backups, err := ListRemoteBackups(cfg)
 	if err != nil {
 		return err
@@ -150,30 +171,38 @@ func runLatestRestore(cmd *cobra.Command, dsn string, cfg SFTPConfig) error {
 	if len(backups) == 0 {
 		return fmt.Errorf("no backups found")
 	}
+	fmt.Fprintf(os.Stderr, "  Latest: %s (%s)\n", backups[0].Name, formatSize(backups[0].Size))
 	return runSFTPRestore(cmd, dsn, cfg, backups[0].Name)
 }
 
 func runSFTPRestore(cmd *cobra.Command, dsn string, cfg SFTPConfig, filename string) error {
-	fmt.Fprintf(os.Stderr, "Restoring from %s...\n", filename)
+	fmt.Fprintf(os.Stderr, "→ Restoring from %s\n", filename)
+	fmt.Fprintf(os.Stderr, "  DSN: %s\n", redactDSN(dsn))
+	fmt.Fprintf(os.Stderr, "  Downloading and restoring...\n")
 	if err := RestoreFromSFTP(cmd.Context(), dsn, cfg, filename); err != nil {
+		fmt.Fprintf(os.Stderr, "✗ Restore failed: %v\n", err)
 		return err
 	}
-	fmt.Fprintln(os.Stderr, "Restore complete.")
+	fmt.Fprintf(os.Stderr, "✓ Restore complete\n")
 	return nil
 }
 
 func runLocalRestore(cmd *cobra.Command, dsn, path string) error {
+	fmt.Fprintf(os.Stderr, "→ Restoring from local file %s\n", path)
+	fmt.Fprintf(os.Stderr, "  DSN: %s\n", redactDSN(dsn))
+
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
 	defer f.Close()
 
-	fmt.Fprintf(os.Stderr, "Restoring from %s...\n", path)
+	fmt.Fprintf(os.Stderr, "  Running psql restore...\n")
 	if err := Restore(cmd.Context(), dsn, f); err != nil {
+		fmt.Fprintf(os.Stderr, "✗ Restore failed: %v\n", err)
 		return err
 	}
-	fmt.Fprintln(os.Stderr, "Restore complete.")
+	fmt.Fprintf(os.Stderr, "✓ Restore complete\n")
 	return nil
 }
 
@@ -188,4 +217,13 @@ func formatSize(bytes int64) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
+}
+
+// redactDSN masks the password in a DSN for safe logging.
+func redactDSN(dsn string) string {
+	h, p, u, _, db, err := parseDSN(dsn)
+	if err != nil {
+		return "<invalid DSN>"
+	}
+	return fmt.Sprintf("postgres://%s:***@%s:%s/%s", u, h, p, db)
 }
