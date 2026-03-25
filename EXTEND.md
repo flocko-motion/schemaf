@@ -339,7 +339,7 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
    - Generates `frontend/src/api/generated/api.gen.ts` — type-safe client for your frontend
    - No running server needed
 
-5. **Compose → gen/compose.gen.yml**
+5. **Compose → compose.gen.yml**
    - Merges schemaf's built-in compose (backend, Postgres) with your `compose/*.yml`
    - Used by `./schemaf.sh run` and `./schemaf.sh dev`
 

@@ -216,7 +216,7 @@ func (a *App) initAuth() error {
 //
 // In Docker (SCHEMAF_ENV=docker):
 //
-//	postgres://schemaf:{DB_PASS}@{project}-postgres:5432/{project}
+//	postgres://schemaf:{DB_PASS}@{DB_HOST|postgres}:5432/{project}
 //
 // Native (dev/test):
 //
@@ -224,7 +224,11 @@ func (a *App) initAuth() error {
 func (a *App) dsn() string {
 	if os.Getenv("SCHEMAF_ENV") == "docker" {
 		pass := os.Getenv("DB_PASS")
-		return fmt.Sprintf("postgres://schemaf:%s@%s-postgres:5432/%s?sslmode=disable", pass, a.project, a.project)
+		host := os.Getenv("DB_HOST")
+		if host == "" {
+			host = "postgres"
+		}
+		return fmt.Sprintf("postgres://schemaf:%s@%s:5432/%s?sslmode=disable", pass, host, a.project)
 	}
 	// Native: use port 7003 per PORTS.md convention.
 	// Explicit 127.0.0.1 — Docker binds to IPv4 only, and "localhost" may resolve to IPv6.

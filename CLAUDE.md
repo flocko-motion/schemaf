@@ -129,7 +129,7 @@ These are framework-wide conventions. Do not deviate.
 - `api/endpoints.gen.go` → generated `api.Provider`
 - `frontend/src/api/generated/api.gen.ts` → generated TypeScript client
 - `compose.gen.yml` → generated base compose (postgres + backend)
-- `compose.dev.yml` → generated dev overlay (exposed ports)
+- `compose.dev.gen.yml` → generated dev overlay (exposed ports)
 - `compose/*.yml` → project-specific compose extensions
 
 **Port allocation** (fixed):

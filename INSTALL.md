@@ -231,7 +231,7 @@ myapp/
     └── services.yml    # Your additional services only
 ```
 
-Codegen merges the framework's built-in compose with everything in your `compose/` and produces `gen/compose.gen.yml`.
+Codegen merges the framework's built-in compose with everything in your `compose/` and produces `compose.gen.yml` at the project root.
 
 **Running the stack:**
 
