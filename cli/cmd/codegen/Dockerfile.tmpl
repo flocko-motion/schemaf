@@ -10,8 +10,6 @@ RUN npm run build
 {{end}}
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY go/go.mod go/go.sum ./
-RUN go mod download
 COPY go/ ./
 {{- if .HasFrontend}}
 COPY --from=frontend /src/dist ./frontend_dist/
