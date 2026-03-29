@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"strings"
 	"text/template"
 
 	sqllcpkg "github.com/sqlc-dev/sqlc/pkg/cli"
@@ -44,11 +45,28 @@ sqlc runs embedded — no external sqlc binary required.`,
 }
 
 func runSQLC(_ *cli.Context) error {
-	// Verify normative directories exist
+	// Ensure normative directories exist
 	for _, dir := range []string{queriesDir, migrationsDir} {
-		if _, err := os.Stat(dir); err != nil {
-			return fmt.Errorf("required directory %q not found (run from project root): %w", dir, err)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("creating %s: %w", dir, err)
 		}
+	}
+
+	// Skip sqlc if there are no query files
+	entries, err := os.ReadDir(queriesDir)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", queriesDir, err)
+	}
+	hasSQL := false
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			hasSQL = true
+			break
+		}
+	}
+	if !hasSQL {
+		cli.Warning("no .sql files found in %s — skipping sqlc", queriesDir)
+		return nil
 	}
 
 	// Generate sqlc.yaml — package is always "db", output always goes to go/db/

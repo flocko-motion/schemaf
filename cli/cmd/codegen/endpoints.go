@@ -77,8 +77,8 @@ type structInfo struct {
 }
 
 func runEndpointsGen(_ *cli.Context) error {
-	if _, err := os.Stat(apiDir); err != nil {
-		return fmt.Errorf("api directory %q not found (run from project root): %w", apiDir, err)
+	if err := os.MkdirAll(apiDir, 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", apiDir, err)
 	}
 
 	endpoints, structs, err := scanAPIDir(apiDir)

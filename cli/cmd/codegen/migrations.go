@@ -34,9 +34,9 @@ for use in main.go: app.AddDb(db.Provider)`,
 }
 
 func runMigrationsGen(_ *cli.Context) error {
-	// Verify normative migrations directory exists
-	if _, err := os.Stat(migrationsDir); err != nil {
-		return fmt.Errorf("migrations directory %q not found (run from project root): %w", migrationsDir, err)
+	// Ensure normative migrations directory exists
+	if err := os.MkdirAll(migrationsDir, 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", migrationsDir, err)
 	}
 
 	// Check there is at least one .sql file to embed

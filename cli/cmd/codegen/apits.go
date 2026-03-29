@@ -25,7 +25,8 @@ func newAPITSCmd(_ *cli.Context) *cobra.Command {
 
 func runAPITS() error {
 	if _, err := os.Stat("gen/openapi.json"); os.IsNotExist(err) {
-		return fmt.Errorf("gen/openapi.json not found — run 'codegen endpoints' first")
+		cli.Warning("gen/openapi.json not found — skipping TypeScript client generation")
+		return nil
 	}
 	cmd := exec.Command("npx", "--yes", "swagger-typescript-api", "generate",
 		"-p", "gen/openapi.json",
