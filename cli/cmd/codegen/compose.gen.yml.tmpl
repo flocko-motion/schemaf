@@ -49,8 +49,6 @@ services:
       - backup_key
     networks:
       - net
-    ports:
-      - "7000:7000"
     depends_on:
       postgres:
         condition: service_healthy
