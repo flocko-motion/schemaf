@@ -9,6 +9,10 @@ import schemafapi "github.com/flocko-motion/schemaf/api"
 // Wire up in go/main.go: app.AddApi(api.Provider)
 func Provider() {
 {{- range .Endpoints}}
+{{- if .IsRaw}}
+	schemafapi.Register(schemafapi.NewRawRoute({{.StructName}}{}, {{printf "%q" .Summary}}, {{printf "%q" .Description}}))
+{{- else}}
 	schemafapi.Register(schemafapi.NewRoute[{{.ReqType}}, {{.RespType}}]({{.StructName}}{}, {{printf "%q" .Summary}}, {{printf "%q" .Description}}))
+{{- end}}
 {{- end}}
 }

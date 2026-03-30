@@ -81,6 +81,50 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
 	})
 }
 
+// RawEndpoint is an alternative to Endpoint for handlers that need direct
+// HTTP access — binary uploads, streaming downloads, SSE, etc.
+//
+// Define HandleRaw instead of Handle on your endpoint struct. Exactly one
+// of Handle or HandleRaw must be present; codegen will error if both exist.
+//
+// The framework does not decode the request or encode the response — you
+// have full control over http.ResponseWriter and *http.Request.
+// If HandleRaw returns a non-nil error and no response has been written yet,
+// the framework writes a JSON error response using the standard error mapping.
+type RawEndpoint interface {
+	Method() string
+	Path() string
+	Auth() bool
+	HandleRaw(w http.ResponseWriter, r *http.Request) error
+}
+
+// NewRawRoute creates a Route from a RawEndpoint. No JSON decode/encode is
+// performed; the handler receives the raw http.ResponseWriter and *http.Request.
+func NewRawRoute(e RawEndpoint, summary, description string) Route {
+	h := newRawHandler(e)
+	if e.Auth() {
+		h = requireAuth(h)
+	}
+	return Route{
+		Method:      e.Method(),
+		Path:        e.Path(),
+		Auth:        e.Auth(),
+		Summary:     summary,
+		Description: description,
+		Handler:     h,
+		ReqType:     nil,
+		RespType:    nil,
+	}
+}
+
+func newRawHandler(e RawEndpoint) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := e.HandleRaw(w, r); err != nil {
+			writeJSONError(w, statusFor(err), err.Error())
+		}
+	})
+}
+
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

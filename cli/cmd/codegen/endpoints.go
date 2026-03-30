@@ -56,10 +56,11 @@ type endpointInfo struct {
 	Method      string
 	Path        string
 	Auth        bool
-	ReqType     string
-	RespType    string
+	ReqType     string // empty for raw endpoints
+	RespType    string // empty for raw endpoints
 	Summary     string
 	Description string
+	IsRaw       bool
 }
 
 // fieldInfo describes one field of a Go struct for OpenAPI/TS generation.
@@ -164,14 +165,22 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 		}
 	}
 
-	// Identify endpoint structs: must have Method, Path, Auth, Handle methods
+	// Identify endpoint structs: must have Method, Path, Auth, and exactly one of Handle or HandleRaw
 	var endpoints []endpointInfo
 	for name := range allStructs {
 		methodFn, hasMethod := methods[methodKey{name, "Method"}]
 		pathFn, hasPath := methods[methodKey{name, "Path"}]
 		authFn, hasAuth := methods[methodKey{name, "Auth"}]
 		handleFn, hasHandle := methods[methodKey{name, "Handle"}]
-		if !hasMethod || !hasPath || !hasAuth || !hasHandle {
+		_, hasHandleRaw := methods[methodKey{name, "HandleRaw"}]
+
+		if !hasMethod || !hasPath || !hasAuth {
+			continue
+		}
+		if hasHandle && hasHandleRaw {
+			return nil, nil, fmt.Errorf("endpoint %s has both Handle and HandleRaw — exactly one is allowed", name)
+		}
+		if !hasHandle && !hasHandleRaw {
 			continue
 		}
 
@@ -187,9 +196,14 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 		if !ok {
 			continue
 		}
-		reqType, respType, ok := extractHandleTypes(handleFn.Type)
-		if !ok {
-			continue
+
+		isRaw := hasHandleRaw
+		var reqType, respType string
+		if !isRaw {
+			reqType, respType, ok = extractHandleTypes(handleFn.Type)
+			if !ok {
+				continue
+			}
 		}
 
 		summary, description := splitDocComment(docComments[name], name)
@@ -203,6 +217,7 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 			RespType:    respType,
 			Summary:     summary,
 			Description: description,
+			IsRaw:       isRaw,
 		})
 	}
 
@@ -461,7 +476,7 @@ func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) e
 		}
 
 		// Request body for non-GET methods with a non-empty Req type
-		if ep.Method != "GET" && ep.Method != "DELETE" {
+		if !ep.IsRaw && ep.Method != "GET" && ep.Method != "DELETE" {
 			if st, ok := structs[ep.ReqType]; ok && len(st.Fields) > 0 {
 				op["requestBody"] = map[string]any{
 					"required": true,
@@ -475,14 +490,16 @@ func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) e
 		}
 
 		// Response schema
-		if st, ok := structs[ep.RespType]; ok && len(st.Fields) > 0 {
-			op["responses"].(map[string]any)["200"] = map[string]any{
-				"description": "OK",
-				"content": map[string]any{
-					"application/json": map[string]any{
-						"schema": map[string]any{"$ref": "#/components/schemas/" + ep.RespType},
+		if !ep.IsRaw {
+			if st, ok := structs[ep.RespType]; ok && len(st.Fields) > 0 {
+				op["responses"].(map[string]any)["200"] = map[string]any{
+					"description": "OK",
+					"content": map[string]any{
+						"application/json": map[string]any{
+							"schema": map[string]any{"$ref": "#/components/schemas/" + ep.RespType},
+						},
 					},
-				},
+				}
 			}
 		}
 
@@ -532,6 +549,9 @@ func buildSchemas(endpoints []endpointInfo, structs map[string]structInfo) map[s
 	referenced := map[string]bool{}
 	queue := []string{}
 	for _, ep := range endpoints {
+		if ep.IsRaw {
+			continue
+		}
 		queue = append(queue, ep.ReqType, ep.RespType)
 	}
 	for len(queue) > 0 {

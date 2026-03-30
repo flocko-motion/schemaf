@@ -319,6 +319,20 @@ export class Api<
 > extends HttpClient<SecurityDataType> {
   api = {
     /**
+     * @description Demonstrates HandleRaw for non-JSON binary endpoints.
+     *
+     * @name PostApiEcho
+     * @summary Echoes the request body back as-is.
+     * @request POST:/api/echo
+     */
+    postApiEcho: (params: RequestParams = {}) =>
+      this.request<void, void>({
+        path: `/api/echo`,
+        method: "POST",
+        ...params,
+      }),
+
+    /**
      * @description Demonstrates how project compose extensions integrate with the backend.
      *
      * @name GetApiTime

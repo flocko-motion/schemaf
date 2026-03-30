@@ -179,6 +179,47 @@ type CreateUserEndpoint struct{}
 
 You write the struct. Everything else is generated or framework-provided.
 
+## Raw Endpoints
+
+For endpoints that need direct HTTP access — binary uploads, streaming downloads, SSE, or any non-JSON content — use `HandleRaw` instead of `Handle`:
+
+```go
+// go/api/blobs.go
+// DownloadBlobEndpoint streams a file download.
+type DownloadBlobEndpoint struct{}
+
+func (e DownloadBlobEndpoint) Method() string { return "GET" }
+func (e DownloadBlobEndpoint) Path() string   { return "/api/blobs/{id}" }
+func (e DownloadBlobEndpoint) Auth() bool     { return true }
+
+func (e DownloadBlobEndpoint) HandleRaw(w http.ResponseWriter, r *http.Request) error {
+    id := r.PathValue("id")
+    blob, err := storage.Get(r.Context(), id)
+    if err != nil {
+        return api.ErrNotFound
+    }
+    w.Header().Set("Content-Type", blob.ContentType)
+    _, err = io.Copy(w, blob.Reader)
+    return err
+}
+```
+
+Same struct pattern, same `Method()`, `Path()`, `Auth()`. The only difference is the handler method:
+
+| | `Handle` | `HandleRaw` |
+|---|---|---|
+| Signature | `Handle(ctx, Req) (Resp, error)` | `HandleRaw(w, r) error` |
+| Request decoding | Automatic (JSON + path params) | You handle it |
+| Response encoding | Automatic (JSON) | You handle it |
+| OpenAPI schemas | Auto-generated from types | Summary/description only |
+| Auth | Framework-managed | Framework-managed |
+
+**Rules:**
+- Define exactly one of `Handle` or `HandleRaw` — codegen will error if both are present
+- If `HandleRaw` returns a non-nil error and you haven't written a response yet, the framework writes a JSON error response with the standard status code mapping (`ErrNotFound` → 404, etc.)
+- If you've already started writing a response (set headers, streamed bytes), return `nil` and handle errors yourself
+- Auth works identically — if `Auth()` returns `true`, the JWT is validated before `HandleRaw` is called, and `api.Subject(r.Context())` returns the authenticated user ID
+
 ## Database
 
 ### Migrations
