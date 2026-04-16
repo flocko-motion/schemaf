@@ -23,6 +23,8 @@ func newAPIGoCmd(_ *cli.Context) *cobra.Command {
 	}
 }
 
+const oapiCodegenPkg = "github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen"
+
 func runAPIGo() error {
 	if _, err := os.Stat("gen/openapi.json"); os.IsNotExist(err) {
 		cli.Warning("gen/openapi.json not found — skipping Go client generation")
@@ -33,8 +35,16 @@ func runAPIGo() error {
 		return fmt.Errorf("creating go/apiclient/: %w", err)
 	}
 
-	cmd := exec.Command("go", "run",
-		"github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen",
+	// Ensure oapi-codegen is available as a module dependency.
+	get := exec.Command("go", "get", oapiCodegenPkg)
+	get.Dir = "go"
+	get.Stdout = os.Stdout
+	get.Stderr = os.Stderr
+	if err := get.Run(); err != nil {
+		return fmt.Errorf("go get oapi-codegen: %w", err)
+	}
+
+	cmd := exec.Command("go", "run", oapiCodegenPkg,
 		"--package", "apiclient",
 		"--generate", "types,client",
 		"-o", "apiclient/client.gen.go",
