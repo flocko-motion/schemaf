@@ -106,7 +106,7 @@ case "$CMD" in
     if [ -n "$SCHEMAF_DIR" ] && [ -d "$SCHEMAF_DIR" ]; then
       mkdir -p docs/schemaf
       for f in README.md INSTALL.md EXTEND.md; do
-        [ -f "$SCHEMAF_DIR/$f" ] && cp "$SCHEMAF_DIR/$f" "docs/schemaf/$f"
+        [ -f "$SCHEMAF_DIR/$f" ] && rm -f "docs/schemaf/$f" && cp "$SCHEMAF_DIR/$f" "docs/schemaf/$f" && chmod 644 "docs/schemaf/$f"
       done
       echo "Synced framework docs → docs/schemaf/"
     fi
