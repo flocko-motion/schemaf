@@ -104,6 +104,11 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		return err
 	}
 
+	// Backend needs all infrastructure, not just postgres.
+	if svc.backend && !svc.infra {
+		svc.infra = true
+	}
+
 	// --reset-db requires the database to be started.
 	if resetDB && !svc.db && !svc.infra {
 		svc.db = true
