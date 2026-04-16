@@ -21,5 +21,7 @@ func main() {
 	app.AddDb(db.Provider)
 	app.SetFrontend(FrontendFS())
 
-	log.Fatal(app.Run())
+	if err := app.Run(); err != nil {
+		log.Fatal(err)
+	}
 }

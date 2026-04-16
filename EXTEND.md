@@ -29,7 +29,9 @@ func main() {
     app.SetFrontend(FrontendFS())                  // generated: embedded frontend assets
     app.AddSubcommand(importer.SubcommandProvider) // custom: CLI commands
 
-    log.Fatal(app.Run())
+    if err := app.Run(); err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 

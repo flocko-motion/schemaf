@@ -101,6 +101,22 @@ func BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return conn.BeginTx(ctx, opts)
 }
 
+// ResetSchema drops and recreates the public schema, wiping all tables.
+// Used by `dev --reset-db` to start fresh during development.
+func ResetSchema(ctx context.Context) error {
+	d := DB()
+	if d == nil {
+		return fmt.Errorf("database not available")
+	}
+	if _, err := d.ExecContext(ctx, "DROP SCHEMA public CASCADE"); err != nil {
+		return fmt.Errorf("dropping public schema: %w", err)
+	}
+	if _, err := d.ExecContext(ctx, "CREATE SCHEMA public"); err != nil {
+		return fmt.Errorf("creating public schema: %w", err)
+	}
+	return nil
+}
+
 // HealthCheck pings the singleton database and returns an error if unhealthy.
 func HealthCheck() error {
 	if conn == nil {

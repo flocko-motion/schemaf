@@ -4,6 +4,7 @@
 package schemaf
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -17,10 +18,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/flocko-motion/schemaf/cli"
+	"github.com/flocko-motion/schemaf/db"
 )
 
 // devProvider returns the built-in "dev" command for starting development services.
 func (a *App) devProvider(_ *cli.Context) []*cobra.Command {
+	var resetDB bool
+
 	cmd := &cobra.Command{
 		Use:   "dev [services]",
 		Short: "Start dev services: db, infrastructure, backend, frontend, all",
@@ -34,15 +38,17 @@ func (a *App) devProvider(_ *cli.Context) []*cobra.Command {
 
 Examples:
   ./schemaf.sh dev db,backend
-  ./schemaf.sh dev all`,
+  ./schemaf.sh dev all
+  ./schemaf.sh dev all --reset-db`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				return cmd.Help()
 			}
-			return a.runDev(args[0])
+			return a.runDev(args[0], resetDB)
 		},
 	}
+	cmd.Flags().BoolVar(&resetDB, "reset-db", false, "Drop and recreate the database schema before starting")
 	return []*cobra.Command{cmd}
 }
 
@@ -77,7 +83,7 @@ func parseDevServices(spec string) (devServices, error) {
 	return s, nil
 }
 
-func (a *App) runDev(spec string) error {
+func (a *App) runDev(spec string, resetDB bool) error {
 	svc, err := parseDevServices(spec)
 	if err != nil {
 		return err
@@ -89,6 +95,11 @@ func (a *App) runDev(spec string) error {
 		if err := runCmd("go", "run", "github.com/flocko-motion/schemaf/cmd/schemaf", "codegen", "all"); err != nil {
 			return fmt.Errorf("codegen: %w", err)
 		}
+	}
+
+	// --reset-db requires the database to be started.
+	if resetDB && !svc.db && !svc.infra {
+		svc.db = true
 	}
 
 	// Check ports before starting anything.
@@ -124,6 +135,19 @@ func (a *App) runDev(spec string) error {
 		if err := runCmd(args...); err != nil {
 			return fmt.Errorf("starting postgres: %w", err)
 		}
+	}
+
+	// Reset the database schema if requested.
+	if resetDB && a.hasDB {
+		fmt.Fprintln(os.Stderr, "Resetting database schema...")
+		db.SetDSN(a.dsn())
+		if err := db.ResetSchema(context.Background()); err != nil {
+			return fmt.Errorf("reset-db: %w", err)
+		}
+		if err := db.RunMigrations(context.Background()); err != nil {
+			return fmt.Errorf("reset-db migrations: %w", err)
+		}
+		fmt.Fprintln(os.Stderr, "Database reset complete — all migrations re-applied.")
 	}
 
 	// Warn if backend requested but postgres might not be running.

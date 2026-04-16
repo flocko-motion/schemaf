@@ -62,7 +62,9 @@ func main() {
     app.AddDb(db.Provider)
     app.AddApi(api.Provider)
 
-    log.Fatal(app.Run())
+    if err := app.Run(); err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
