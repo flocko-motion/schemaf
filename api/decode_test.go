@@ -52,6 +52,44 @@ func TestDecodeQueryParams_Missing(t *testing.T) {
 	}
 }
 
+func TestDecodeQueryParams_Pointer(t *testing.T) {
+	type req struct {
+		Name  *string `query:"name"`
+		Limit *int    `query:"limit"`
+	}
+
+	r := &http.Request{URL: &url.URL{RawQuery: "name=hello&limit=5"}}
+
+	var got req
+	if err := decodeQueryParams(r, &got); err != nil {
+		t.Fatalf("decodeQueryParams: %v", err)
+	}
+
+	if got.Name == nil || *got.Name != "hello" {
+		t.Errorf("Name = %v, want pointer to %q", got.Name, "hello")
+	}
+	if got.Limit == nil || *got.Limit != 5 {
+		t.Errorf("Limit = %v, want pointer to %d", got.Limit, 5)
+	}
+}
+
+func TestDecodeQueryParams_PointerMissing(t *testing.T) {
+	type req struct {
+		Name *string `query:"name"`
+	}
+
+	r := &http.Request{URL: &url.URL{RawQuery: ""}}
+
+	var got req
+	if err := decodeQueryParams(r, &got); err != nil {
+		t.Fatalf("decodeQueryParams: %v", err)
+	}
+
+	if got.Name != nil {
+		t.Errorf("Name = %v, want nil", got.Name)
+	}
+}
+
 func TestDecodeQueryParams_InvalidInt(t *testing.T) {
 	type req struct {
 		Limit int `query:"limit"`

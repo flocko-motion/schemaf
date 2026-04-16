@@ -37,24 +37,42 @@ func decodeQueryParams(r *http.Request, v any) error {
 		if !fv.CanSet() {
 			continue
 		}
-		switch fv.Kind() {
-		case reflect.String:
-			fv.SetString(val)
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			n, err := strconv.ParseInt(val, 10, 64)
-			if err != nil {
-				return fmt.Errorf("query param %q: invalid integer: %w", tag, err)
-			}
-			fv.SetInt(n)
-		case reflect.Bool:
-			b, err := strconv.ParseBool(val)
-			if err != nil {
-				return fmt.Errorf("query param %q: invalid boolean: %w", tag, err)
-			}
-			fv.SetBool(b)
-		default:
-			return fmt.Errorf("query param %q: unsupported type %s", tag, fv.Kind())
+		if err := setFieldValue(fv, tag, val); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// setFieldValue sets a reflect.Value from a string, supporting direct and pointer types.
+func setFieldValue(fv reflect.Value, tag, val string) error {
+	// For pointer types, allocate and set the pointed-to value.
+	if fv.Kind() == reflect.Ptr {
+		ptr := reflect.New(fv.Type().Elem())
+		if err := setFieldValue(ptr.Elem(), tag, val); err != nil {
+			return err
+		}
+		fv.Set(ptr)
+		return nil
+	}
+
+	switch fv.Kind() {
+	case reflect.String:
+		fv.SetString(val)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			return fmt.Errorf("query param %q: invalid integer: %w", tag, err)
+		}
+		fv.SetInt(n)
+	case reflect.Bool:
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return fmt.Errorf("query param %q: invalid boolean: %w", tag, err)
+		}
+		fv.SetBool(b)
+	default:
+		return fmt.Errorf("query param %q: unsupported type %s", tag, fv.Kind())
 	}
 	return nil
 }
