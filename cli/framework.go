@@ -33,7 +33,7 @@ func New(opts ...Option) (*CLI, error) {
 	var homeDir string
 	var config *Config
 	var state *State
-	isBootstrap := len(os.Args) > 1 && (os.Args[1] == "codegen" || os.Args[1] == "prerun")
+	isBootstrap := len(os.Args) > 1 && (os.Args[1] == "codegen" || os.Args[1] == "prerun" || os.Args[1] == "init")
 	func() {
 		if isBootstrap {
 			defer func() { recover() }()

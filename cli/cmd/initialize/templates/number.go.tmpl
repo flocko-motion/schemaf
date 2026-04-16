@@ -1,0 +1,54 @@
+package api
+
+import (
+	"context"
+
+	schemafdb "github.com/flocko-motion/schemaf/db"
+
+	"schemaf.local/{{.Name}}/db"
+)
+
+// GetNumberEndpoint returns the stored number.
+// Returns 0 if no number has been set yet.
+type GetNumberEndpoint struct{}
+
+func (e GetNumberEndpoint) Method() string { return "GET" }
+func (e GetNumberEndpoint) Path() string   { return "/api/number" }
+func (e GetNumberEndpoint) Auth() bool     { return false }
+func (e GetNumberEndpoint) Handle(ctx context.Context, req GetNumberReq) (GetNumberResp, error) {
+	q := db.New(schemafdb.DB())
+	n, err := q.GetNumber(ctx)
+	if err != nil {
+		return GetNumberResp{Number: 0}, nil
+	}
+	return GetNumberResp{Number: int(n)}, nil
+}
+
+type GetNumberReq struct{}
+
+type GetNumberResp struct {
+	Number int `json:"number"`
+}
+
+// SetNumberEndpoint stores a number.
+// Replaces any previously stored value.
+type SetNumberEndpoint struct{}
+
+func (e SetNumberEndpoint) Method() string { return "PUT" }
+func (e SetNumberEndpoint) Path() string   { return "/api/number" }
+func (e SetNumberEndpoint) Auth() bool     { return false }
+func (e SetNumberEndpoint) Handle(ctx context.Context, req SetNumberReq) (SetNumberResp, error) {
+	q := db.New(schemafdb.DB())
+	if err := q.SetNumber(ctx, int32(req.Number)); err != nil {
+		return SetNumberResp{}, err
+	}
+	return SetNumberResp{Number: req.Number}, nil
+}
+
+type SetNumberReq struct {
+	Number int `json:"number"`
+}
+
+type SetNumberResp struct {
+	Number int `json:"number"`
+}

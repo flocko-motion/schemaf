@@ -14,6 +14,7 @@ import (
 
 	"github.com/flocko-motion/schemaf/cli"
 	"github.com/flocko-motion/schemaf/cli/cmd/codegen"
+	"github.com/flocko-motion/schemaf/cli/cmd/initialize"
 	"github.com/flocko-motion/schemaf/cli/cmd/run"
 )
 
@@ -24,6 +25,7 @@ func main() {
 	}
 
 	c.AddSubcommands(codegen.SubcommandProvider)
+	c.AddSubcommands(initialize.SubcommandProvider)
 	c.AddSubcommands(run.SubcommandProvider)
 
 	if err := c.Execute(); err != nil {

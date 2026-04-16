@@ -1,0 +1,6 @@
+CREATE TABLE number (
+    id    INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    value INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO number (value) VALUES (0);
