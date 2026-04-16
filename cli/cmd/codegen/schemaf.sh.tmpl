@@ -74,6 +74,7 @@ case "$CMD" in
       echo "compose.gen.yml not found — running codegen first..."
       go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
     fi
+    go run github.com/flocko-motion/schemaf/cmd/schemaf prerun
     exec docker compose -f compose.gen.yml up "$@"
     ;;
   dev)

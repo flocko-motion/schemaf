@@ -14,7 +14,7 @@ import (
 
 // SubcommandProvider returns top-level run commands (test, etc.).
 func SubcommandProvider(_ *cli.Context) []*cobra.Command {
-	return []*cobra.Command{newTestCmd()}
+	return []*cobra.Command{newTestCmd(), newPrerunCmd()}
 }
 
 func newTestCmd() *cobra.Command {

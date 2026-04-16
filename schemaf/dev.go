@@ -99,6 +99,11 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		}
 	}
 
+	// Stop production compose if running — dev and prod can't coexist.
+	if err := stopProdIfRunning(); err != nil {
+		return err
+	}
+
 	// --reset-db requires the database to be started.
 	if resetDB && !svc.db && !svc.infra {
 		svc.db = true
@@ -212,6 +217,20 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		return err
 	}
 
+	return nil
+}
+
+// stopProdIfRunning checks if production compose services are running and stops them.
+func stopProdIfRunning() error {
+	out, err := exec.Command("docker", "compose", "-f", "compose.gen.yml", "ps", "-q").Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "Stopping production services before dev start...")
+	if err := runCmd("docker", "compose", "-f", "compose.gen.yml", "down"); err != nil {
+		return fmt.Errorf("stopping production services: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "Production services stopped.")
 	return nil
 }
 
