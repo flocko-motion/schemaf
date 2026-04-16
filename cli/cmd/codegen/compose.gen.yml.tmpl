@@ -34,6 +34,9 @@ services:
       context: .
       dockerfile: Dockerfile.gen
     container_name: {{.Name}}-backend
+    env_file:
+      - path: ${HOME}/.{{.Name}}/etc/env
+        required: false
     environment:
       SCHEMAF_ENV: docker
       DB_PASS: ${DB_PASS:-dev}
