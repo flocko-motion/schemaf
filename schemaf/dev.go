@@ -24,7 +24,7 @@ import (
 
 // devProvider returns the built-in "dev" command for starting development services.
 func (a *App) devProvider(_ *cli.Context) []*cobra.Command {
-	var resetDB bool
+	var resetDB, autoYes bool
 
 	cmd := &cobra.Command{
 		Use:   "dev [services]",
@@ -46,10 +46,11 @@ Examples:
 			if len(args) == 0 {
 				return cmd.Help()
 			}
-			return a.runDev(args[0], resetDB)
+			return a.runDev(args[0], resetDB, autoYes)
 		},
 	}
 	cmd.Flags().BoolVar(&resetDB, "reset-db", false, "Drop and recreate the database schema before starting")
+	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "Auto-confirm prompts (e.g. kill blocking processes)")
 	return []*cobra.Command{cmd}
 }
 
@@ -84,7 +85,7 @@ func parseDevServices(spec string) (devServices, error) {
 	return s, nil
 }
 
-func (a *App) runDev(spec string, resetDB bool) error {
+func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 	svc, err := parseDevServices(spec)
 	if err != nil {
 		return err
@@ -105,17 +106,17 @@ func (a *App) runDev(spec string, resetDB bool) error {
 
 	// Check ports before starting anything.
 	if svc.db || svc.infra {
-		if err := checkPort(constants.PostgresPort(), "postgres"); err != nil {
+		if err := checkPort(constants.PostgresPort(), "postgres", autoYes); err != nil {
 			return err
 		}
 	}
 	if svc.backend {
-		if err := checkPort(constants.Port(), "backend"); err != nil {
+		if err := checkPort(constants.Port(), "backend", autoYes); err != nil {
 			return err
 		}
 	}
 	if svc.frontend {
-		if err := checkPort(constants.FrontendPort(), "frontend"); err != nil {
+		if err := checkPort(constants.FrontendPort(), "frontend", autoYes); err != nil {
 			return err
 		}
 		if _, err := os.Stat("frontend"); os.IsNotExist(err) {
@@ -215,8 +216,8 @@ func (a *App) runDev(spec string, resetDB bool) error {
 }
 
 // checkPort verifies a port is free. If busy, asks the user to kill the blocking process
-// or stop the Docker container holding it.
-func checkPort(port int, service string) error {
+// or stop the Docker container holding it. With autoYes, kills without prompting.
+func checkPort(port int, service string, autoYes bool) error {
 	portStr := strconv.Itoa(port)
 	ln, err := net.Listen("tcp", ":"+portStr)
 	if err == nil {
@@ -227,9 +228,11 @@ func checkPort(port int, service string) error {
 	// Check if a Docker container holds the port.
 	if container := findDockerContainer(port); container != "" {
 		fmt.Fprintf(os.Stderr, "Port %d is in use by Docker container %q — needed for %s.\n", port, container, service)
-		fmt.Fprint(os.Stderr, "Stop it? [y/N/c(ontinue)] ")
-		var answer string
-		fmt.Scanln(&answer)
+		answer := "y"
+		if !autoYes {
+			fmt.Fprint(os.Stderr, "Stop it? [y/N/c(ontinue)] ")
+			fmt.Scanln(&answer)
+		}
 		switch strings.ToLower(answer) {
 		case "c":
 			return nil
@@ -257,10 +260,11 @@ func checkPort(port int, service string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "Port %d is in use by %s (PID %d) — needed for %s.\n", port, proc, pid, service)
-	fmt.Fprint(os.Stderr, "Kill it? [y/N/c(ontinue)] ")
-
-	var answer string
-	fmt.Scanln(&answer)
+	answer := "y"
+	if !autoYes {
+		fmt.Fprint(os.Stderr, "Kill it? [y/N/c(ontinue)] ")
+		fmt.Scanln(&answer)
+	}
 	switch strings.ToLower(answer) {
 	case "c":
 		return nil
