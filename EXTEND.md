@@ -108,10 +108,32 @@ The generated `Dockerfile` includes a Node build stage that compiles the fronten
 
 The framework provides these endpoints out of the box:
 
-- `/api/health` — health check (returns `{"status": "ok"}`)
+- `/api/health` — health check (returns `{"status": "ok", "db": "ok", ...}`)
 - `/api/status` — service status (uptime, backup status, custom providers)
 - `/api/user/me` — current user info (requires auth)
 - `/openapi.json` — OpenAPI 3.0 spec
+
+### Extending /api/health
+
+Register custom health checks that are evaluated on every `/api/health` request. If any checker returns an error, the overall status becomes `"error"` and the response code is 503:
+
+```go
+import schemafapi "github.com/flocko-motion/schemaf/api"
+
+schemafapi.RegisterHealth("s3", func() error {
+    return s3Client.Ping()
+})
+```
+
+Response when healthy:
+```json
+{"status": "ok", "db": "ok", "s3": "ok"}
+```
+
+Response when unhealthy:
+```json
+{"status": "error", "db": "ok", "s3": "error: connection refused"}
+```
 
 ### Extending /api/status
 
