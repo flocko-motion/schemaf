@@ -37,7 +37,7 @@ schemaf is **batteries-included**. These are built-in, not optional:
   - Go server is the gateway
   - Binds `/api/*` for your handlers + framework endpoints
   - Binds `/` for frontend (proxy in dev, embed in production)
-  - Single exposed port (7000)
+  - Single exposed port (default 8000, configurable via schemaf.toml)
 - **Authentication**: JWT-based auth, fully managed by the framework
   - Bearer token in `Authorization` header
   - Signing key is auto-generated on first boot and stored in Postgres (`_schemaf_config` table)
@@ -120,14 +120,14 @@ All generated files use `.gen.` infix (e.g., `*.gen.go`, `*.gen.ts`) making them
 The Go server built from schemaf **is the gateway**.
 
 ```
-Your Application (port 7000)
+Your Application (port 8000)
 ├── /api/*        → Go handlers (your business logic)
 └── /*            → Frontend
-    ├── Dev:      Proxy to frontend dev server (port 7002)
+    ├── Dev:      Proxy to frontend dev server (port 8002)
     └── Prod:     Serve embedded static files
 ```
 
-In production, frontend assets are embedded at build time via `//go:embed` and served directly by the Go server. In dev mode, the Go server proxies frontend requests to the dev server on port 7002.
+In production, frontend assets are embedded at build time via `//go:embed` and served directly by the Go server. In dev mode, the Go server proxies frontend requests to the dev server on port 8002.
 
 **Default endpoints:**
 - `/health` - Health check (built-in)
@@ -136,23 +136,28 @@ In production, frontend assets are embedded at build time via `//go:embed` and s
 
 ## Port Convention
 
-schemaf uses a fixed port allocation scheme to eliminate configuration:
+schemaf uses a fixed port allocation scheme based on a single configurable base port (default `8000`):
 
 ```
-7000           - Application server (main entry point)
+port           - Application server (main entry point)
                  Serves /api (Go handlers) and / (frontend)
-7001           - Reserved (future use)
-7002           - Frontend dev server (Vite, Next.js dev, etc.)
-7003           - Postgres
-7004 - 7009    - schemaf framework reserved
-7010+          - Project-specific services (Redis, workers, etc.)
+port + 1       - Reserved (future use)
+port + 2       - Frontend dev server (Vite, Next.js dev, etc.)
+port + 3       - Postgres
+port + 4..9    - schemaf framework reserved
+port + 10+     - Project-specific services (Redis, workers, etc.)
 ```
 
-**Why fixed ports?**
-- No port conflicts across projects (each gets its own range)
+Configure the base port in `schemaf.toml`:
+```toml
+port = 6000    # optional, default 8000
+```
+
+**Why a single port with offsets?**
+- One number to change, all services follow
 - No environment variables needed for service discovery
 - Docker compose networking "just works"
-- Clear convention: 700X for core, 701X+ for project services
+- Clear convention: base+X for core, base+10+ for project services
 
 ## The One Binary Principle
 
@@ -166,7 +171,7 @@ schemaf collapses all of this into a single compiled binary:
 | Compose orchestration | `./schemaf.sh run/dev` — execs docker compose, then exits |
 | Code generation | `./schemaf.sh codegen` — `go run`s the framework CLI, reads your files |
 | Database migrations | embedded SQL, applied automatically on server startup |
-| Frontend | embedded via `//go:embed` in production; proxied from port 7002 in dev (no rebuild needed) |
+| Frontend | embedded via `//go:embed` in production; proxied from frontend dev server in dev (no rebuild needed) |
 | TypeScript API client | generated from compiled-in endpoint structs at codegen time |
 | Admin / custom tools | `./myapp <subcommand>` — anything you add via `app.AddSubcommand()` |
 

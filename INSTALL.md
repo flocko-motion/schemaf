@@ -178,9 +178,10 @@ Projects have a minimal `schemaf.toml` file:
 ```toml
 title = "My Application"
 name = "myapp"
+port = 8000    # optional, default 8000
 ```
 
-That's it. The `name` field determines the database name, Docker container prefixes, and config directory. Everything else is normative — no configuration needed.
+The `name` field determines the database name, Docker container prefixes, and config directory. The optional `port` field sets the base port — all service ports are derived from it (backend = port, frontend dev = port+2, postgres = port+3). Default is 8000.
 
 ## Secrets
 
@@ -217,9 +218,9 @@ echo "DB_PASS=$(openssl rand -hex 16)" > ~/.myapp/etc/env
 
 schemaf ships with a **built-in compose configuration** that covers the full standard stack:
 
-- Go backend (port 7000)
-- Frontend dev server (port 7002)
-- Postgres (port 7003)
+- Go backend (port 8000)
+- Frontend dev server (port 8002)
+- Postgres (port 8003)
 
 You never write or maintain these service definitions. They are part of the framework.
 

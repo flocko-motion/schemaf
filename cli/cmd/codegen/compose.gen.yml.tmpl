@@ -37,7 +37,7 @@ services:
     environment:
       SCHEMAF_ENV: docker
       DB_PASS: ${DB_PASS:-dev}
-      PORT: "7000"
+      PORT: "{{.Port}}"
       BACKUP_SSH_HOST: ${BACKUP_SSH_HOST:-}
       BACKUP_SSH_PORT: ${BACKUP_SSH_PORT:-22}
       BACKUP_SSH_USER: ${BACKUP_SSH_USER:-}

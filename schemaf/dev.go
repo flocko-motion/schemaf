@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/flocko-motion/schemaf/cli"
+	"github.com/flocko-motion/schemaf/constants"
 	"github.com/flocko-motion/schemaf/db"
 )
 
@@ -28,18 +29,18 @@ func (a *App) devProvider(_ *cli.Context) []*cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dev [services]",
 		Short: "Start dev services: db, infrastructure, backend, frontend, all",
-		Long: `Start development services. Specify one or more comma-separated services:
+		Long: fmt.Sprintf(`Start development services. Specify one or more comma-separated services:
 
   db              Postgres database
   infrastructure  Postgres + project compose services
-  backend         Go server on :7000
-  frontend        Vite dev server on :7002
+  backend         Go server on :%d
+  frontend        Vite dev server on :%d
   all             All of the above
 
 Examples:
   ./schemaf.sh dev db,backend
   ./schemaf.sh dev all
-  ./schemaf.sh dev all --reset-db`,
+  ./schemaf.sh dev all --reset-db`, constants.Port(), constants.FrontendPort()),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -104,17 +105,17 @@ func (a *App) runDev(spec string, resetDB bool) error {
 
 	// Check ports before starting anything.
 	if svc.db || svc.infra {
-		if err := checkPort(7003, "postgres"); err != nil {
+		if err := checkPort(constants.PostgresPort(), "postgres"); err != nil {
 			return err
 		}
 	}
 	if svc.backend {
-		if err := checkPort(7000, "backend"); err != nil {
+		if err := checkPort(constants.Port(), "backend"); err != nil {
 			return err
 		}
 	}
 	if svc.frontend {
-		if err := checkPort(7002, "frontend"); err != nil {
+		if err := checkPort(constants.FrontendPort(), "frontend"); err != nil {
 			return err
 		}
 		if _, err := os.Stat("frontend"); os.IsNotExist(err) {

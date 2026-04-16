@@ -52,7 +52,11 @@ func runScaffoldFrontend() error {
 	if err != nil {
 		return err
 	}
-	data := map[string]any{"Name": name}
+	port, err := readPort()
+	if err != nil {
+		return err
+	}
+	data := map[string]any{"Name": name, "Port": port, "FrontendPort": port + 2, "PostgresPort": port + 3}
 
 	if _, err := os.Stat("frontend"); os.IsNotExist(err) {
 		return scaffoldFrontend(data)

@@ -46,7 +46,7 @@ Schemaf enforces a **Vite + React + TypeScript** frontend. If `frontend/` doesn'
 **Normative decisions (framework-enforced):**
 - Vite as build tool and dev server
 - React + TypeScript
-- Port 7002 with `strictPort: true`
+- Port derived from schemaf.toml (default 8002) with `strictPort: true`
 - Entry point: `index.html` → `src/main.tsx`
 - npm as package manager
 
@@ -58,13 +58,13 @@ Schemaf enforces a **Vite + React + TypeScript** frontend. If `frontend/` doesn'
 
 ### Architecture
 
-The Go server on port 7000 is the single gateway — it serves both API routes and the frontend:
+The Go server is the single gateway — it serves both API routes and the frontend:
 
 ```
-localhost:7000
+localhost:{port}
 ├── /api/*   → Go handlers
 └── /*       → Frontend
-    ├── Dev:  reverse proxy to Vite dev server (port 7002)
+    ├── Dev:  reverse proxy to Vite dev server (port+2)
     └── Prod: embedded static files from frontend/dist/
 ```
 
@@ -91,14 +91,14 @@ Each service is started explicitly. Combine with commas:
 ./schemaf.sh dev                          # no args: shows available services
 ./schemaf.sh dev db                       # just postgres
 ./schemaf.sh dev infrastructure           # postgres + project compose services
-./schemaf.sh dev backend                  # Go server on :7000 (warns if postgres not running)
-./schemaf.sh dev frontend                 # Vite on :7002
+./schemaf.sh dev backend                  # Go server (warns if postgres not running)
+./schemaf.sh dev frontend                 # Vite dev server
 ./schemaf.sh dev db,backend               # postgres + Go server
 ./schemaf.sh dev db,backend,frontend      # postgres + Go server + Vite
 ./schemaf.sh dev all                      # everything
 ```
 
-In dev mode, the Go server reverse-proxies all non-API requests to `localhost:7002` (Vite).
+In dev mode, the Go server reverse-proxies all non-API requests to the Vite dev server.
 
 ### Production
 

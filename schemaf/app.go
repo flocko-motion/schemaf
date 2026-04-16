@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -66,7 +67,7 @@ func (a *App) AddService(fn func(context.Context)) {
 }
 
 // SetFrontend registers an embedded frontend filesystem for production serving.
-// In dev mode, the server proxies to the frontend dev server on port 7002 instead.
+// In dev mode, the server proxies to the frontend dev server instead.
 // Wire up in go/main.go: app.SetFrontend(FrontendFS())
 func (a *App) SetFrontend(fsys fs.FS) {
 	api.SetFrontend(fsys)
@@ -183,7 +184,7 @@ func (a *App) serve() error {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "7000"
+		port = strconv.Itoa(constants.Port())
 	}
 
 	slog.Info("starting server", "addr", ":"+port)
@@ -225,7 +226,7 @@ func (a *App) initAuth() error {
 //
 // Native (dev/test):
 //
-//	postgres://schemaf:{DB_PASS|dev}@127.0.0.1:7003/{project}
+//	postgres://schemaf:{DB_PASS|dev}@127.0.0.1:{port+3}/{project}
 func (a *App) dsn() string {
 	if os.Getenv("SCHEMAF_ENV") == "docker" {
 		pass := os.Getenv("DB_PASS")
@@ -235,11 +236,10 @@ func (a *App) dsn() string {
 		}
 		return fmt.Sprintf("postgres://schemaf:%s@%s:5432/%s?sslmode=disable", pass, host, a.project)
 	}
-	// Native: use port 7003 per PORTS.md convention.
-	// Explicit 127.0.0.1 — Docker binds to IPv4 only, and "localhost" may resolve to IPv6.
+	// Native: Explicit 127.0.0.1 — Docker binds to IPv4 only, and "localhost" may resolve to IPv6.
 	pass := os.Getenv("DB_PASS")
 	if pass == "" {
 		pass = "dev"
 	}
-	return fmt.Sprintf("postgres://schemaf:%s@127.0.0.1:7003/%s?sslmode=disable", pass, a.project)
+	return fmt.Sprintf("postgres://schemaf:%s@127.0.0.1:%d/%s?sslmode=disable", pass, constants.PostgresPort(), a.project)
 }

@@ -132,13 +132,13 @@ These are framework-wide conventions. Do not deviate.
 - `compose.dev.gen.yml` → generated dev overlay (exposed ports)
 - `compose/*.yml` → project-specific compose extensions
 
-**Port allocation** (fixed):
-- 7000 — application server
-- 7002 — frontend dev server
-- 7003 — Postgres
-- 7010+ — project-specific services
+**Port allocation** (base port configurable via `port` in schemaf.toml, default 8000):
+- port — application server
+- port+2 — frontend dev server
+- port+3 — Postgres
+- port+10+ — project-specific services
 
-**Config file**: `schemaf.toml` (two fields only: `title`, `name`)
+**Config file**: `schemaf.toml` (fields: `title`, `name`, optional `port` — default 8000)
 
 **Secrets**: stored in `~/.<name>/etc/env` (prod) and `~/.<name>/dev/etc/env` (dev) — never in project directories
 

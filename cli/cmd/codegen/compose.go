@@ -55,6 +55,10 @@ func runComposeGen() error {
 	if err != nil {
 		return err
 	}
+	port, err := readPort()
+	if err != nil {
+		return err
+	}
 
 	extensions, err := scanComposeExtensions()
 	if err != nil {
@@ -67,7 +71,15 @@ func runComposeGen() error {
 	}
 
 	_, hasFrontend := os.Stat("frontend")
-	data := map[string]any{"Name": name, "Extensions": extensions, "ExtServices": extServices, "HasFrontend": hasFrontend == nil}
+	data := map[string]any{
+		"Name":         name,
+		"Extensions":   extensions,
+		"ExtServices":  extServices,
+		"HasFrontend":  hasFrontend == nil,
+		"Port":         port,
+		"FrontendPort": port + 2,
+		"PostgresPort": port + 3,
+	}
 
 	if err := renderTemplate(composeGenTemplate, "compose.gen.yml", data); err != nil {
 		return err

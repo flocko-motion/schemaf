@@ -26,7 +26,7 @@ func NewMux() *http.ServeMux {
 }
 
 // Serve starts the HTTP server on the given address using the registered routes.
-// addr should be in the form ":7000".
+// addr should be in the form ":8000".
 func Serve(addr string) error {
 	return http.ListenAndServe(addr, NewMux())
 }

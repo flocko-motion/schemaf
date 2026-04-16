@@ -4,24 +4,27 @@
 package api
 
 import (
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/flocko-motion/schemaf/constants"
 )
 
 var frontendFS fs.FS
 
 // SetFrontend registers the embedded frontend filesystem for production serving.
-// In dev mode (SCHEMAF_ENV != "docker"), the server proxies to localhost:7002 instead.
+// In dev mode (SCHEMAF_ENV != "docker"), the server proxies to the frontend dev server instead.
 func SetFrontend(fsys fs.FS) {
 	frontendFS = fsys
 }
 
 // frontendHandler returns the appropriate handler for non-API requests:
-//   - Dev: reverse proxy to the frontend dev server on port 7002
+//   - Dev: reverse proxy to the frontend dev server
 //   - Prod: serve embedded static files with SPA fallback
 func frontendHandler() http.Handler {
 	if os.Getenv("SCHEMAF_ENV") != "docker" {
@@ -32,7 +35,7 @@ func frontendHandler() http.Handler {
 
 // devProxy returns a reverse proxy targeting the frontend dev server.
 func devProxy() http.Handler {
-	target, _ := url.Parse("http://localhost:7002")
+	target, _ := url.Parse(fmt.Sprintf("http://localhost:%d", constants.FrontendPort()))
 	return httputil.NewSingleHostReverseProxy(target)
 }
 

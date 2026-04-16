@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -69,4 +70,39 @@ func readNameFromTOML(path string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no 'name' field in %s", path)
+}
+
+const defaultPort = 8000
+
+// readPort reads the port field from schemaf.toml. Returns defaultPort if absent.
+func readPort() (int, error) {
+	root, err := findProjectRoot()
+	if err != nil {
+		return defaultPort, nil
+	}
+	return readPortFromTOML(filepath.Join(root, "schemaf.toml"))
+}
+
+func readPortFromTOML(path string) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return defaultPort, nil
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "port") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				val := strings.TrimSpace(parts[1])
+				port, err := strconv.Atoi(val)
+				if err != nil {
+					return 0, fmt.Errorf("invalid port in %s: %w", path, err)
+				}
+				return port, nil
+			}
+		}
+	}
+	return defaultPort, nil
 }

@@ -32,14 +32,18 @@ func runConstantsGen() error {
 	if err != nil {
 		return err
 	}
+	port, err := readPort()
+	if err != nil {
+		return err
+	}
 
-	data := map[string]any{"Name": name}
+	data := map[string]any{"Name": name, "Port": port}
 
 	const outPath = "go/constants.gen.go"
 	if err := renderTemplate(constantsGenTemplate, outPath, data); err != nil {
 		return fmt.Errorf("generating constants: %w", err)
 	}
 
-	cli.Success("Generated %s (project: %s)", outPath, name)
+	cli.Success("Generated %s (project: %s, port: %d)", outPath, name, port)
 	return nil
 }

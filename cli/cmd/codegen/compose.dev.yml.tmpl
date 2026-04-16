@@ -7,4 +7,4 @@ services:
     environment:
       POSTGRES_PASSWORD: ${DB_PASS:-dev}
     ports:
-      - "127.0.0.1:7003:5432"
+      - "127.0.0.1:{{.PostgresPort}}:5432"
