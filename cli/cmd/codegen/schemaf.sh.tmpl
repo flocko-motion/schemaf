@@ -101,6 +101,15 @@ case "$CMD" in
     else
       echo "Upgraded: $OLD_VER → $NEW_VER"
     fi
+    # Sync framework docs from the installed module into docs/schemaf/.
+    SCHEMAF_DIR=$(cd go && go list -m -f '{{"{{"}}.Dir{{"}}"}}' github.com/flocko-motion/schemaf 2>/dev/null || true)
+    if [ -n "$SCHEMAF_DIR" ] && [ -d "$SCHEMAF_DIR" ]; then
+      mkdir -p docs/schemaf
+      for f in README.md INSTALL.md EXTEND.md CLAUDE.md; do
+        [ -f "$SCHEMAF_DIR/$f" ] && cp "$SCHEMAF_DIR/$f" "docs/schemaf/$f"
+      done
+      echo "Synced framework docs → docs/schemaf/"
+    fi
     echo "Running codegen..."
     exec go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
     ;;
