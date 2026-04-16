@@ -94,9 +94,9 @@ func runComposeGen() error {
 	}
 	cli.Success("Generated compose.gen.yml (project: %s)", name)
 
-	// Dev: shared + dev-only extensions.
+	// Dev: dev-only extensions (shared are already in compose.gen.yml base).
 	devData := copyMap(base)
-	devData["Extensions"] = allExts
+	devData["Extensions"] = devExts
 	devData["ExtServices"] = allServices
 	if err := renderTemplate(composeDevTemplate, "compose.dev.gen.yml", devData); err != nil {
 		return err
