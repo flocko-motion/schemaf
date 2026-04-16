@@ -60,6 +60,11 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// Decode query params (fields tagged with `query:"name"`).
+		if err := decodeQueryParams(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// Decode body for methods that carry one.
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
