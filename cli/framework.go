@@ -33,9 +33,9 @@ func New(opts ...Option) (*CLI, error) {
 	var homeDir string
 	var config *Config
 	var state *State
-	isCodegen := len(os.Args) > 1 && os.Args[1] == "codegen"
+	isBootstrap := len(os.Args) > 1 && (os.Args[1] == "codegen" || os.Args[1] == "prerun")
 	func() {
-		if isCodegen {
+		if isBootstrap {
 			defer func() { recover() }()
 		}
 		homeDir = files.ProjectHome()
