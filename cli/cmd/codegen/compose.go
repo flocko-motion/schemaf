@@ -60,21 +60,24 @@ func runComposeGen() error {
 		return err
 	}
 
-	extensions, err := scanComposeExtensions()
+	sharedExts, devExts, err := scanComposeExtensions()
 	if err != nil {
 		return err
 	}
+	allExts := append(sharedExts, devExts...)
 
-	extServices, err := scanExtServices(extensions)
+	sharedServices, err := scanExtServices(sharedExts)
+	if err != nil {
+		return err
+	}
+	allServices, err := scanExtServices(allExts)
 	if err != nil {
 		return err
 	}
 
 	_, hasFrontend := os.Stat("frontend")
-	data := map[string]any{
+	base := map[string]any{
 		"Name":         name,
-		"Extensions":   extensions,
-		"ExtServices":  extServices,
 		"HasFrontend":  hasFrontend == nil,
 		"Port":         port,
 		"FrontendPort": port + 2,
@@ -82,22 +85,34 @@ func runComposeGen() error {
 		"GoVersion":    readGoVersion(),
 	}
 
-	if err := renderTemplate(composeGenTemplate, "compose.gen.yml", data); err != nil {
+	// Prod: shared extensions only.
+	prodData := copyMap(base)
+	prodData["Extensions"] = sharedExts
+	prodData["ExtServices"] = sharedServices
+	if err := renderTemplate(composeGenTemplate, "compose.gen.yml", prodData); err != nil {
 		return err
 	}
 	cli.Success("Generated compose.gen.yml (project: %s)", name)
 
-	if err := renderTemplate(composeDevTemplate, "compose.dev.gen.yml", data); err != nil {
+	// Dev: shared + dev-only extensions.
+	devData := copyMap(base)
+	devData["Extensions"] = allExts
+	devData["ExtServices"] = allServices
+	if err := renderTemplate(composeDevTemplate, "compose.dev.gen.yml", devData); err != nil {
 		return err
 	}
 	cli.Success("Generated compose.dev.gen.yml")
 
-	if err := renderTemplate(composeTestTemplate, "compose.test.gen.yml", data); err != nil {
+	// Test: shared + dev-only extensions.
+	testData := copyMap(base)
+	testData["Extensions"] = allExts
+	testData["ExtServices"] = allServices
+	if err := renderTemplate(composeTestTemplate, "compose.test.gen.yml", testData); err != nil {
 		return err
 	}
 	cli.Success("Generated compose.test.gen.yml")
 
-	if err := renderTemplate(dockerfileTemplate, "Dockerfile.gen", data); err != nil {
+	if err := renderTemplate(dockerfileTemplate, "Dockerfile.gen", base); err != nil {
 		return err
 	}
 	cli.Success("Generated Dockerfile.gen")
@@ -106,7 +121,7 @@ func runComposeGen() error {
 		return fmt.Errorf("creating gen/: %w", err)
 	}
 
-	if err := renderTemplate(testEnvShTemplate, "gen/test-env.sh", data); err != nil {
+	if err := renderTemplate(testEnvShTemplate, "gen/test-env.sh", testData); err != nil {
 		return err
 	}
 	if err := os.Chmod("gen/test-env.sh", 0755); err != nil {
@@ -114,7 +129,7 @@ func runComposeGen() error {
 	}
 	cli.Success("Generated gen/test-env.sh")
 
-	if err := renderTemplate(schemafShTemplate, "schemaf.sh", data); err != nil {
+	if err := renderTemplate(schemafShTemplate, "schemaf.sh", base); err != nil {
 		return err
 	}
 	if err := os.Chmod("schemaf.sh", 0755); err != nil {
@@ -123,6 +138,14 @@ func runComposeGen() error {
 	cli.Success("Generated schemaf.sh")
 
 	return nil
+}
+
+func copyMap(m map[string]any) map[string]any {
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
 }
 
 func renderTemplate(tmplStr, outPath string, data map[string]any) error {
@@ -140,23 +163,29 @@ func renderTemplate(tmplStr, outPath string, data map[string]any) error {
 	return nil
 }
 
-// scanComposeExtensions returns relative paths to *.yml files in compose/.
-func scanComposeExtensions() ([]string, error) {
+// scanComposeExtensions returns relative paths to *.yml files in compose/,
+// split into shared (all environments) and dev-only (*.dev.yml).
+func scanComposeExtensions() (shared, devOnly []string, err error) {
 	entries, err := os.ReadDir("compose")
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading compose/: %w", err)
+		return nil, nil, fmt.Errorf("reading compose/: %w", err)
 	}
 
-	var paths []string
 	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".yml" {
-			paths = append(paths, "compose/"+e.Name())
+		if e.IsDir() || filepath.Ext(e.Name()) != ".yml" {
+			continue
+		}
+		path := "compose/" + e.Name()
+		if strings.HasSuffix(e.Name(), ".dev.yml") {
+			devOnly = append(devOnly, path)
+		} else {
+			shared = append(shared, path)
 		}
 	}
-	return paths, nil
+	return shared, devOnly, nil
 }
 
 // ExtService describes a project compose extension service that exposes internal ports.

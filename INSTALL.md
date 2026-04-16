@@ -231,10 +231,13 @@ If your project needs additional services (Redis, a worker container, a vector D
 ```
 myapp/
 └── compose/
-    └── services.yml    # Your additional services only
+    ├── redis.yml         # All environments (prod + dev + test)
+    └── minio.dev.yml     # Dev/test only (not included in prod)
 ```
 
-Codegen merges the framework's built-in compose with everything in your `compose/` and produces `compose.gen.yml` at the project root.
+Files ending in `.dev.yml` are only included in the dev and test compose files — not in production. Regular `*.yml` files are included everywhere.
+
+Codegen merges the framework's built-in compose with your extensions and produces `compose.gen.yml` (prod) and `compose.dev.gen.yml` (dev) at the project root.
 
 **Running the stack:**
 

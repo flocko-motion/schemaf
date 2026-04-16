@@ -105,7 +105,7 @@ myapp/
 │   │   └── openapi.gen.ts        # Generated: TypeScript client
 │   ├── src/
 │   └── package.json
-└── compose/                       # Optional: docker-compose overrides
+└── compose/                       # Optional: *.yml for all envs, *.dev.yml for dev only
 ```
 
 **Why normative paths?**

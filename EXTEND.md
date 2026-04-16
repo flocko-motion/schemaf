@@ -384,7 +384,8 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
 
 5. **Compose → compose.gen.yml**
    - Merges schemaf's built-in compose (backend, Postgres) with your `compose/*.yml`
-   - Used by `./schemaf.sh run` and `./schemaf.sh dev`
+   - Files matching `*.dev.yml` are dev/test only — not included in `compose.gen.yml` (prod)
+   - Used by `./schemaf.sh run` (prod) and `./schemaf.sh dev` (dev)
 
 **Zero configuration.** Just run `./schemaf.sh codegen` and all the glue code appears.
 
