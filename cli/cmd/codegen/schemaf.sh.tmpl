@@ -105,7 +105,7 @@ case "$CMD" in
     SCHEMAF_DIR=$(cd go && go list -m -f '{{"{{"}}.Dir{{"}}"}}' github.com/flocko-motion/schemaf 2>/dev/null || true)
     if [ -n "$SCHEMAF_DIR" ] && [ -d "$SCHEMAF_DIR" ]; then
       mkdir -p docs/schemaf
-      for f in README.md INSTALL.md EXTEND.md CLAUDE.md; do
+      for f in README.md INSTALL.md EXTEND.md; do
         [ -f "$SCHEMAF_DIR/$f" ] && cp "$SCHEMAF_DIR/$f" "docs/schemaf/$f"
       done
       echo "Synced framework docs → docs/schemaf/"
