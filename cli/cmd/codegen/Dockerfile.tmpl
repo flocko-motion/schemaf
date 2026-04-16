@@ -8,7 +8,7 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 {{end}}
-FROM golang:1.25-alpine AS build
+FROM golang:{{.GoVersion}}-alpine AS build
 WORKDIR /src
 COPY go/ ./
 {{- if .HasFrontend}}

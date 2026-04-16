@@ -79,6 +79,7 @@ func runComposeGen() error {
 		"Port":         port,
 		"FrontendPort": port + 2,
 		"PostgresPort": port + 3,
+		"GoVersion":    readGoVersion(),
 	}
 
 	if err := renderTemplate(composeGenTemplate, "compose.gen.yml", data); err != nil {

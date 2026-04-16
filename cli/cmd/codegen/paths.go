@@ -72,6 +72,24 @@ func readNameFromTOML(path string) (string, error) {
 	return "", fmt.Errorf("no 'name' field in %s", path)
 }
 
+// readGoVersion reads the go directive from go/go.mod (e.g. "1.26.2").
+// Returns a sensible default if go.mod is missing or unparseable.
+func readGoVersion() string {
+	f, err := os.Open("go/go.mod")
+	if err != nil {
+		return "1.24"
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "go ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "go"))
+		}
+	}
+	return "1.24"
+}
+
 const defaultPort = 8000
 
 // readPort reads the port field from schemaf.toml. Returns defaultPort if absent.
