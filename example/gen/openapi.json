@@ -244,6 +244,16 @@
     "/api/todos/{id}": {
       "delete": {
         "operationId": "deleteApiTodosId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK"
@@ -260,6 +270,16 @@
       "get": {
         "description": "Returns 404 if the todo does not exist.",
         "operationId": "getApiTodosId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -282,6 +302,16 @@
       },
       "put": {
         "operationId": "putApiTodosId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

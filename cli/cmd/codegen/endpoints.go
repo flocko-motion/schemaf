@@ -503,6 +503,11 @@ func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) e
 			}
 		}
 
+		// Declare path parameters (e.g. {id} → parameter "id" in: path)
+		if params := extractPathParams(ep.Path); len(params) > 0 {
+			op["parameters"] = params
+		}
+
 		if _, ok := paths[ep.Path]; !ok {
 			paths[ep.Path] = map[string]any{}
 		}
@@ -626,6 +631,23 @@ func primitiveSchema(goType string) map[string]any {
 		return map[string]any{"type": "string", "format": "date-time"}
 	}
 	return map[string]any{"type": "object"}
+}
+
+// extractPathParams returns OpenAPI parameter objects for path template variables like {id}.
+func extractPathParams(path string) []any {
+	var params []any
+	for _, segment := range strings.Split(path, "/") {
+		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
+			name := segment[1 : len(segment)-1]
+			params = append(params, map[string]any{
+				"name":     name,
+				"in":       "path",
+				"required": true,
+				"schema":   map[string]any{"type": "string"},
+			})
+		}
+	}
+	return params
 }
 
 func operationIDFromParts(method, path string) string {

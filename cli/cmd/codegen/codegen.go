@@ -26,6 +26,7 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 	cmd.AddCommand(newSQLCCmd(ctx))
 	cmd.AddCommand(newEndpointsCmd(ctx))
 	cmd.AddCommand(newAPITSCmd(ctx))
+	cmd.AddCommand(newAPIGoCmd(ctx))
 	cmd.AddCommand(newComposeCmd(ctx))
 	cmd.AddCommand(newTestsCmd(ctx))
 	cmd.AddCommand(newAllCmd(ctx))
@@ -61,6 +62,9 @@ func newAllCmd(ctx *cli.Context) *cobra.Command {
 				return err
 			}
 			if err := runAPITS(); err != nil {
+				return err
+			}
+			if err := runAPIGo(); err != nil {
 				return err
 			}
 			return runTestsGen()

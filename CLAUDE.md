@@ -128,6 +128,7 @@ These are framework-wide conventions. Do not deviate.
 - `api/*.go` → endpoint struct implementations
 - `api/endpoints.gen.go` → generated `api.Provider`
 - `frontend/src/api/generated/api.gen.ts` → generated TypeScript client
+- `apiclient/client.gen.go` → generated Go API client (via oapi-codegen)
 - `compose.gen.yml` → generated base compose (postgres + backend)
 - `compose.dev.gen.yml` → generated dev overlay (exposed ports)
 - `compose/*.yml` → project-specific compose extensions

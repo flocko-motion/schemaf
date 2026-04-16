@@ -52,7 +52,7 @@ schemaf is **batteries-included**. These are built-in, not optional:
 - **API endpoints**: Structs implementing a typed interface — not plain functions
   - Request and response types are Go generics on the struct — the framework handles JSON decode, validate, encode
   - No boilerplate: your `Handle` method receives a typed request and returns a typed response
-  - Codegen scans endpoint structs → generates `api.Provider` + full OpenAPI spec → generates TypeScript client
+  - Codegen scans endpoint structs → generates `api.Provider` + full OpenAPI spec → generates TypeScript and Go clients
   - See [Endpoint Interface](EXTEND.md#endpoint-interface) for details
 - **Docker compose**: Built-in compose for backend and Postgres — merged with `compose/` in your project
 - **Code generation**: One command generates all glue code — see [Code Generation](EXTEND.md#code-generation)
@@ -95,9 +95,11 @@ myapp/
 │   │   │   └── users.sql
 │   │   ├── queries.gen.go         # Generated: sqlc query functions
 │   │   └── migrations.gen.go      # Generated: db.Provider
-│   └── api/                       # Your API handlers (normative!)
-│       ├── users.go              # Your handler implementations
-│       └── endpoints.gen.go      # Generated: api.Provider
+│   ├── api/                       # Your API handlers (normative!)
+│   │   ├── users.go              # Your handler implementations
+│   │   └── endpoints.gen.go      # Generated: api.Provider
+│   └── apiclient/
+│       └── client.gen.go         # Generated: Go API client (oapi-codegen)
 ├── frontend/                      # Your static site (any language/framework)
 │   ├── api/
 │   │   └── openapi.gen.ts        # Generated: TypeScript client
@@ -172,10 +174,11 @@ schemaf collapses all of this into a single compiled binary:
 | Code generation | `./schemaf.sh codegen` — `go run`s the framework CLI, reads your files |
 | Database migrations | embedded SQL, applied automatically on server startup |
 | Frontend | embedded via `//go:embed` in production; proxied from frontend dev server in dev (no rebuild needed) |
-| TypeScript API client | generated from compiled-in endpoint structs at codegen time |
+| TypeScript API client | generated from OpenAPI spec at codegen time |
+| Go API client | generated from OpenAPI spec via oapi-codegen at codegen time |
 | Admin / custom tools | `./myapp <subcommand>` — anything you add via `app.AddSubcommand()` |
 
-The binary has full knowledge of itself. Its endpoint structs are compiled in — so it can reflect over its own API to generate the OpenAPI spec and TypeScript client without a running server. Its migrations are embedded — so it can apply them on startup without external files. Its frontend is embedded — so production deployment is a single binary copy.
+The binary has full knowledge of itself. Its endpoint structs are compiled in — so it can reflect over its own API to generate the OpenAPI spec and typed clients (TypeScript + Go) without a running server. Its migrations are embedded — so it can apply them on startup without external files. Its frontend is embedded — so production deployment is a single binary copy.
 
 **Deployment is therefore trivial:**
 ```bash
