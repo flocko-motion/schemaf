@@ -104,6 +104,38 @@ In dev mode, the Go server reverse-proxies all non-API requests to the Vite dev 
 
 The generated `Dockerfile` includes a Node build stage that compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
 
+## Built-in Endpoints
+
+The framework provides these endpoints out of the box:
+
+- `/api/health` — health check (returns `{"status": "ok"}`)
+- `/api/status` — service status (uptime, backup status, custom providers)
+- `/api/user/me` — current user info (requires auth)
+- `/openapi.json` — OpenAPI 3.0 spec
+
+### Extending /api/status
+
+Register custom status providers to include project-specific information in the `/api/status` response:
+
+```go
+import schemafapi "github.com/flocko-motion/schemaf/api"
+
+schemafapi.RegisterStatus("s3", func() any {
+    return map[string]any{"bucket": cfg.Bucket, "connected": s3.IsConnected()}
+})
+```
+
+The response will include your provider alongside the built-in fields:
+
+```json
+{
+  "status": "ok",
+  "uptime": "2h30m",
+  "backup": { "last": "...", "ago": "..." },
+  "s3": { "bucket": "my-bucket", "connected": true }
+}
+```
+
 ## Endpoint Interface
 
 API endpoints are structs implementing a typed interface — not plain `http.HandlerFunc` functions. This gives the framework enough information to handle serialization, auth, and OpenAPI generation automatically.
