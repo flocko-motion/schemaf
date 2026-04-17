@@ -244,9 +244,18 @@ func stopProdIfRunning() error {
 // or stop the Docker container holding it. With autoYes, kills without prompting.
 func checkPort(port int, service string, autoYes bool) error {
 	portStr := strconv.Itoa(port)
-	ln, err := net.Listen("tcp", ":"+portStr)
-	if err == nil {
+	// Check both 0.0.0.0 and 127.0.0.1 — on macOS these are independent.
+	// A process bound to localhost won't block 0.0.0.0 and vice versa.
+	free := true
+	for _, addr := range []string{":" + portStr, "127.0.0.1:" + portStr} {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			free = false
+			break
+		}
 		ln.Close()
+	}
+	if free {
 		return nil
 	}
 
