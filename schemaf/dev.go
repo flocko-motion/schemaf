@@ -244,19 +244,19 @@ func stopProdIfRunning() error {
 // or stop the Docker container holding it. With autoYes, kills without prompting.
 func checkPort(port int, service string, autoYes bool) error {
 	portStr := strconv.Itoa(port)
-	// Check both 0.0.0.0 and 127.0.0.1 — on macOS these are independent.
-	// A process bound to localhost won't block 0.0.0.0 and vice versa.
-	free := true
-	for _, addr := range []string{":" + portStr, "127.0.0.1:" + portStr} {
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			free = false
-			break
+
+	// Check if any process holds the port. net.Listen is unreliable on macOS
+	// (SO_REUSEADDR allows rebinding occupied ports), so we check for actual
+	// processes first via Docker and OS tools, then fall back to net.Listen.
+	hasDockerConflict := findDockerContainer(port) != ""
+	hasProcessConflict := findPortPID(port) != 0
+	if !hasDockerConflict && !hasProcessConflict {
+		// No process found — double-check with net.Listen as a safety net.
+		ln, err := net.Listen("tcp", ":"+portStr)
+		if err == nil {
+			ln.Close()
+			return nil
 		}
-		ln.Close()
-	}
-	if free {
-		return nil
 	}
 
 	// Check if a Docker container holds the port.
