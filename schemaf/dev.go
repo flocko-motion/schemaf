@@ -126,7 +126,8 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		}
 	}
 	if svc.frontend {
-		if err := checkPort(constants.FrontendPort(), "frontend", autoYes); err != nil {
+		// Frontend port is exclusively owned by schemaf — always auto-kill stale Vite.
+		if err := checkPort(constants.FrontendPort(), "frontend", true); err != nil {
 			return err
 		}
 		if _, err := os.Stat("frontend"); os.IsNotExist(err) {
