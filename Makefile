@@ -72,24 +72,29 @@ release: ## Release current main, tagging <major|minor|patch> (aliases: breaking
 	git fetch -q origin main
 	branch=$$(git rev-parse --abbrev-ref HEAD)
 
-	# On protected main with local commits you can't push: move them to a branch.
-	if [[ "$$branch" == main && "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]]; then
-		ahead=$$(git rev-list --count origin/main..HEAD)
-		if [[ ! -t 0 ]]; then
-			echo "on main with $$ahead unmerged commit(s); re-run from a feature branch (no TTY to prompt)." >&2
+	# Never release while sitting on main (protected-branch workflow). Branch off
+	# FIRST — carrying any local commits — and reset main back to origin/main, so
+	# the release proceeds from a feature branch and never leaves you on main.
+	if [[ "$$branch" == main ]]; then
+		if [[ "$$(git rev-parse HEAD)" == "$$(git rev-parse origin/main)" && "$$(git rev-list --count "$$latest"..HEAD 2>/dev/null || echo 999)" == 0 ]]; then
+			echo "nothing to release: main is already at $$latest." >&2
 			exit 1
 		fi
-		echo "You're on main with $$ahead commit(s) ahead of origin/main; releases run from a feature branch."
-		read -r -p "  branch name to move them onto [release/$$new]: " fb
-		fb=$${fb:-release/$$new}
+		if [[ ! -t 0 ]]; then
+			echo "release aborted: on main — re-run from a feature branch (no TTY to prompt)." >&2
+			exit 1
+		fi
+		echo "You're on main; releases run from a feature branch."
+		read -r -p "  branch name to release from [work]: " fb
+		fb=$${fb:-work}
 		git switch -c "$$fb"
 		git branch -f main origin/main
 		branch="$$fb"
-		echo "  → moved onto '$$fb'; main reset to origin/main"
+		echo "  → on '$$fb'; main reset to origin/main"
 	fi
 
-	if [[ "$$branch" != main ]]; then
-		# Feature branch: gate it, then merge into main via PR (merge commit).
+	if [[ "$$(git rev-list --count origin/main..HEAD)" -gt 0 ]]; then
+		# New commits not yet on main → gate, then merge into main via PR (merge commit).
 		echo "▶ local sanity: go test ./..."
 		go test ./...
 		git push -u origin "$$branch"
@@ -100,7 +105,7 @@ release: ## Release current main, tagging <major|minor|patch> (aliases: breaking
 		git fetch -q origin main
 		release_ref=origin/main
 	else
-		# On synced main: release everything merged since the last release tag.
+		# Branch already matches main → release code merged to main earlier.
 		count=$$(git rev-list --count "$$latest"..HEAD 2>/dev/null || echo 999)
 		if [[ "$$count" == 0 ]]; then
 			echo "nothing to release: main is already at $$latest." >&2
@@ -115,8 +120,9 @@ release: ## Release current main, tagging <major|minor|patch> (aliases: breaking
 	echo "  $$latest → $$new"
 	git tag "$$new" "$$release_ref"
 	git push origin "$$new"
+	gh release create "$$new" --title "$$new" --generate-notes || echo "  (gh release create failed; tag $$new is pushed — create the GitHub release manually if needed)"
 	cleanup_pre
-	echo "  released $$new on main; still on $$branch"
+	echo "  released $$new on main; now on '$$branch'"
 
 # No-op targets that absorb the positional word in `make test <kind>` and
 # `make release <bump>`, so the extra goal doesn't fail with "No rule to make
