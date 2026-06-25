@@ -46,18 +46,33 @@ release: ## Release: gate, merge current branch into main via PR, tag <major|min
 		*) echo "Usage: make release <major|minor|patch>  (aliases: breaking=major, feature=minor, fix=patch)" >&2; exit 1 ;;
 	esac
 	new="v$${major}.$${minor}.$${patch}"
-	branch=$$(git rev-parse --abbrev-ref HEAD)
-	# main is protected (no direct push) — release runs from a feature branch and
-	# merges it into main via a PR.
-	if [[ "$$branch" == main ]]; then
-		echo "release aborted: run from a feature branch, not main." >&2
-		echo "  main is protected; release merges your branch into main via a PR." >&2
-		exit 1
-	fi
 	if [[ -n "$$(git status --porcelain)" ]]; then
 		echo "release aborted: working tree not clean — commit or stash first:" >&2
 		git status --short >&2
 		exit 1
+	fi
+	branch=$$(git rev-parse --abbrev-ref HEAD)
+	# main is protected (no direct push) — releases run from a feature branch. If
+	# you're on main, offer to move the unmerged commits onto a new branch and
+	# continue, rather than dead-ending.
+	if [[ "$$branch" == main ]]; then
+		git fetch -q origin main
+		ahead=$$(git rev-list --count origin/main..HEAD)
+		if [[ "$$ahead" == 0 ]]; then
+			echo "nothing to release: main has no commits beyond origin/main — make your changes first." >&2
+			exit 1
+		fi
+		if [[ ! -t 0 ]]; then
+			echo "on main with $$ahead unmerged commit(s); re-run from a feature branch (no TTY to prompt)." >&2
+			exit 1
+		fi
+		echo "You're on main with $$ahead commit(s) ahead of origin/main; releases run from a feature branch."
+		read -r -p "  branch name to move them onto [release/$$new]: " fb
+		fb=$${fb:-release/$$new}
+		git switch -c "$$fb"
+		git branch -f main origin/main
+		branch="$$fb"
+		echo "  → moved onto '$$fb'; main reset to origin/main"
 	fi
 	echo "▶ local sanity: go test ./..."
 	go test ./...
