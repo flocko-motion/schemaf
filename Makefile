@@ -32,8 +32,9 @@ test: ## Run tests: make test <unit|db|e2e|all>  (no arg lists the options)
 		*) echo "unknown test kind '$(firstword $(filter-out test,$(MAKECMDGOALS)))' — use unit|db|e2e|all" >&2; exit 1 ;;
 	esac
 
-release: ## Release: e2e-gate via a -pre tag, then tag+push <major|minor|patch> (aliases: breaking|feature|fix)
+release: ## Release: gate, merge current branch into main via PR, tag <major|minor|patch> (aliases: breaking|feature|fix)
 	@set -euo pipefail
+	git fetch -q --tags origin
 	# Latest RELEASE version — ignore -pre prereleases when picking what to bump.
 	latest=$$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1)
 	[[ -n "$$latest" ]] || latest="v0.0.0"
@@ -45,11 +46,12 @@ release: ## Release: e2e-gate via a -pre tag, then tag+push <major|minor|patch> 
 		*) echo "Usage: make release <major|minor|patch>  (aliases: breaking=major, feature=minor, fix=patch)" >&2; exit 1 ;;
 	esac
 	new="v$${major}.$${minor}.$${patch}"
-	# Release only from main, and only code that is actually merged & pushed there.
 	branch=$$(git rev-parse --abbrev-ref HEAD)
-	if [[ "$$branch" != main ]]; then
-		echo "release aborted: must be on 'main' (currently on '$$branch')." >&2
-		echo "  merge your work to main first, e.g.: gh pr create --fill --base main && gh pr merge --merge" >&2
+	# main is protected (no direct push) — release runs from a feature branch and
+	# merges it into main via a PR.
+	if [[ "$$branch" == main ]]; then
+		echo "release aborted: run from a feature branch, not main." >&2
+		echo "  main is protected; release merges your branch into main via a PR." >&2
 		exit 1
 	fi
 	if [[ -n "$$(git status --porcelain)" ]]; then
@@ -57,30 +59,31 @@ release: ## Release: e2e-gate via a -pre tag, then tag+push <major|minor|patch> 
 		git status --short >&2
 		exit 1
 	fi
-	git fetch -q origin main
-	if [[ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]]; then
-		echo "release aborted: HEAD is not in sync with origin/main." >&2
-		echo "  release tags an already-merged commit — push/merge so HEAD == origin/main." >&2
-		exit 1
-	fi
 	echo "▶ local sanity: go test ./..."
 	go test ./...
+	echo "▶ push branch '$$branch'"
+	git push -u origin "$$branch"
 	# Gate: publish the exact commit as a unique, immutable prerelease and run the
-	# full onboarding e2e against it. The -pre suffix keeps CI from building it;
-	# the timestamp guarantees a never-reused version, g<sha> aids traceability.
+	# full onboarding e2e against it BEFORE anything lands on main.
 	pre="$$new-pre.$$(date -u +%Y%m%d%H%M%S).g$$(git rev-parse --short HEAD)"
 	echo "▶ gate: onboarding e2e against $$pre"
 	git tag "$$pre"
 	git push origin "$$pre"
 	./e2e/build-example.sh "$$pre"
-	# Gate passed → cut the real release. CI should build on vX.Y.Z, never on -pre.
+	# Merge the branch into main via PR (merge commit). main is protected, so this
+	# is the only way the release reaches main.
+	echo "▶ merge $$branch → main"
+	gh pr create --base main --head "$$branch" --title "release $$new" --body "Automated release $$new" 2>/dev/null || true
+	gh pr merge "$$branch" --merge --delete-branch=false
+	# Tag the merged commit on main and push the tag (CI builds on vX.Y.Z, not -pre).
+	git fetch -q origin main
 	echo "  $$latest → $$new"
-	git tag "$$new"
+	git tag "$$new" origin/main
 	git push origin "$$new"
-	# The prerelease has served its purpose — remove it to keep the tag list clean.
+	# Clean up the prerelease tag; we never left '$$branch'.
 	git push origin ":refs/tags/$$pre" >/dev/null 2>&1 || true
 	git tag -d "$$pre" >/dev/null 2>&1 || true
-	echo "  released $$new (pushed; CI triggers on $$new, not on -pre)"
+	echo "  released $$new on main (merged from $$branch); still on $$branch"
 
 # No-op targets that absorb the positional word in `make test <kind>` and
 # `make release <bump>`, so the extra goal doesn't fail with "No rule to make
