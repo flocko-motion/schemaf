@@ -2,6 +2,23 @@
 
 Back to [README](README.md) | See also: [Installation](INSTALL.md)
 
+## Contents
+
+- [main.go Wiring](#maingo-wiring)
+- [Frontend](#frontend)
+- [Built-in Endpoints](#built-in-endpoints)
+- [Endpoint Interface](#endpoint-interface)
+- [Raw Endpoints](#raw-endpoints)
+- [Database](#database)
+  - [Migrations](#migrations)
+  - [Migration identifiers](#migration-identifiers-independent-migration-lines)
+  - [Applying migrations to another database](#applying-migrations-to-another-database)
+  - [Queries](#queries)
+- [CLI Subcommands](#cli-subcommands)
+- [Code Generation](#code-generation)
+- [Testing](#testing)
+- [Database Backups](#database-backups)
+
 ## main.go Wiring
 
 Your `go/main.go` wires up providers — generated and custom:

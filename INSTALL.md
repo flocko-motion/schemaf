@@ -2,6 +2,22 @@
 
 Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
 
+## Contents
+
+- [Prerequisites](#prerequisites)
+- [Quickstart](#quickstart) — create a project with one command
+- Manual setup (what `init` does, step by step):
+  - [1. Create the project](#1-create-the-project-what-init-does)
+  - [2. Wire up main.go](#2-wire-up-maingo)
+  - [3. Add a database migration](#3-add-a-database-migration)
+  - [4. Add database queries](#4-add-database-queries)
+  - [5. Add an API endpoint](#5-add-an-api-endpoint)
+  - [6. Generate and run](#6-generate-and-run)
+- [schemaf.sh](#schemafsh)
+- [schemaf.toml](#schemaftoml)
+- [Secrets](#secrets)
+- [Docker Compose](#docker-compose)
+
 ## Prerequisites
 
 - Go

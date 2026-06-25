@@ -5,8 +5,41 @@ schemaf is an opinionated framework that eliminates infrastructure churn by maki
 The name "Schema F" comes from the German expression meaning "the standard operating procedure" or "the tried-and-true method" - which is exactly what this framework provides: a reliable, proven approach to project infrastructure.
 
 **Documentation:**
-- [**INSTALL.md**](INSTALL.md) — Setting up a new project
-- [**EXTEND.md**](EXTEND.md) — Adding endpoints, CLI subcommands, database queries, testing
+- [**INSTALL.md**](INSTALL.md) — set up a new project
+- [**EXTEND.md**](EXTEND.md) — add endpoints, CLI commands, database, tests
+
+## Documentation map
+
+Common tasks and where they're documented (jump straight to the section):
+
+| Task | Where |
+|---|---|
+| Create a new project | [INSTALL › Quickstart](INSTALL.md#quickstart) |
+| Wire providers in `main.go` | [EXTEND › main.go Wiring](EXTEND.md#maingo-wiring) |
+| Add an API endpoint | [EXTEND › Endpoint Interface](EXTEND.md#endpoint-interface) |
+| Stream / upload (raw HTTP) | [EXTEND › Raw Endpoints](EXTEND.md#raw-endpoints) |
+| Add a database migration | [EXTEND › Migrations](EXTEND.md#migrations) |
+| Migrate a secondary / external DB | [EXTEND › Applying migrations to another database](EXTEND.md#applying-migrations-to-another-database) |
+| Write DB queries (sqlc) | [EXTEND › Queries](EXTEND.md#queries) |
+| Add a CLI subcommand | [EXTEND › CLI Subcommands](EXTEND.md#cli-subcommands) |
+| Run code generation | [EXTEND › Code Generation](EXTEND.md#code-generation) |
+| Write & run tests | [EXTEND › Testing](EXTEND.md#testing) |
+| Configure database backups | [EXTEND › Database Backups](EXTEND.md#database-backups) |
+| Secrets / env files | [INSTALL › Secrets](INSTALL.md#secrets) |
+| Docker compose & extra services | [INSTALL › Docker Compose](INSTALL.md#docker-compose) |
+| Ports, layout, config conventions | [Port Convention](#port-convention) · [Project Structure](#project-structure-normative) |
+
+## Contents
+
+- [Golden Rule](#golden-rule)
+- [What schemaf Provides](#what-schemaf-provides)
+- [What You Add](#what-you-add)
+- [Project Structure (Normative)](#project-structure-normative)
+- [Server Architecture](#server-architecture)
+- [Port Convention](#port-convention)
+- [The One Binary Principle](#the-one-binary-principle)
+- [Repository Map](#repository-map)
+- [Design Philosophy](#design-philosophy)
 
 ## Golden Rule
 
