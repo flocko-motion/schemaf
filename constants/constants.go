@@ -23,6 +23,10 @@ func ProjectName() string {
 	return projectName
 }
 
+// IsProjectNameSet reports whether a project name has been registered (either
+// compiled in via constants.gen.go, or loaded from schemaf.toml at runtime).
+func IsProjectNameSet() bool { return projectName != "" }
+
 // SetPort is called from the generated constants.gen.go to register
 // the base port at init time.
 func SetPort(p int) {

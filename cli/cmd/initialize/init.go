@@ -11,11 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"text/template"
 
-	"github.com/spf13/cobra"
 	cli "github.com/flocko-motion/schemaf/cli"
+	"github.com/spf13/cobra"
 )
 
 //go:embed templates/*
@@ -102,8 +103,12 @@ func runInit(name string) error {
 	if err := run(goDir, "go", "mod", "init", "schemaf.local/"+name); err != nil {
 		return fmt.Errorf("go mod init: %w", err)
 	}
-	if err := run(goDir, "go", "get", "github.com/flocko-motion/schemaf@latest"); err != nil {
-		return fmt.Errorf("go get schemaf: %w", err)
+	// Pin the project to the SAME schemaf version this CLI was built from, so
+	// `go run …/cmd/schemaf@<ver> init` produces a project that uses <ver>
+	// (not whatever @latest happens to be). Falls back to @latest for dev builds.
+	ver := schemafVersion()
+	if err := run(goDir, "go", "get", "github.com/flocko-motion/schemaf@"+ver); err != nil {
+		return fmt.Errorf("go get schemaf@%s: %w", ver, err)
 	}
 
 	// Run codegen to generate schemaf.sh, compose files, frontend scaffold, etc.
@@ -188,6 +193,28 @@ func renderFile(tmplPath, outPath string, data map[string]any) error {
 	}
 	return os.WriteFile(outPath, buf.Bytes(), 0644)
 }
+
+// schemafVersion returns the version of the schemaf module this CLI was built
+// from, so a scaffolded project pins the same version. Returns "latest" for
+// local/dev builds (where the version is empty or "(devel)").
+func schemafVersion() string {
+	const modPath = "github.com/flocko-motion/schemaf"
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "latest"
+	}
+	if bi.Main.Path == modPath && isPinnedVersion(bi.Main.Version) {
+		return bi.Main.Version
+	}
+	for _, dep := range bi.Deps {
+		if dep.Path == modPath && isPinnedVersion(dep.Version) {
+			return dep.Version
+		}
+	}
+	return "latest"
+}
+
+func isPinnedVersion(v string) bool { return v != "" && v != "(devel)" }
 
 func run(dir string, args ...string) error {
 	cmd := exec.Command(args[0], args[1:]...)

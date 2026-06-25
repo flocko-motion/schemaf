@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/flocko-motion/schemaf/constants"
 	"github.com/flocko-motion/schemaf/files"
 )
 
@@ -28,20 +29,25 @@ func New(opts ...Option) (*CLI, error) {
 		opt(cliOpts)
 	}
 
-	// ProjectHome panics if project name isn't set yet (first run, before codegen).
-	// Only codegen can run without it — all other commands need the project name.
+	// The project name is needed for every command except the bootstrap ones
+	// (codegen/prerun/init), which legitimately run before the project is
+	// configured. For everything else, ensure the name is available — preferring
+	// the compiled-in constant, then falling back to reading schemaf.toml — and
+	// return an actionable error (rather than panicking) if it isn't.
 	var homeDir string
 	var config *Config
 	var state *State
 	isBootstrap := len(os.Args) > 1 && (os.Args[1] == "codegen" || os.Args[1] == "prerun" || os.Args[1] == "init")
-	func() {
-		if isBootstrap {
-			defer func() { recover() }()
+	if !isBootstrap {
+		if err := files.EnsureProjectConfigured(); err != nil {
+			return nil, err
 		}
+	}
+	if constants.IsProjectNameSet() {
 		homeDir = files.ProjectHome()
 		config, _ = loadConfig(homeDir)
 		state, _ = loadState(homeDir)
-	}()
+	}
 
 	// Create HTTP client
 	httpClient := NewHTTPClient(cliOpts.verbose)
