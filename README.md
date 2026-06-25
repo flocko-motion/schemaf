@@ -27,7 +27,7 @@ You focus on:
 - Your API endpoints
 - Your frontend UI
 
-This repository is the framework itself. The example project lives in `example/` and demonstrates how a project consumes the framework.
+This repository is the framework itself — it contains no committed example project. Instead, `e2e/build-example.sh` builds a fresh project from scratch against a published tag (the real onboarding lifecycle), which doubles as the framework's end-to-end test.
 
 ## What schemaf Provides
 
@@ -193,7 +193,7 @@ No package manager. No deployment pipeline that installs twelve tools. No config
 
 ```
 compose/        - Reusable compose blocks (postgres, future: redis, etc.)
-example/        - Example project demonstrating schemaf usage
+e2e/            - From-scratch onboarding e2e + DB integration harness
 api/            - API registry + OpenAPI generation
 schemaf/        - App lifecycle (schemaf.New, app.Run)
 cli/            - schemaf CLI framework (subcommands, config/state)

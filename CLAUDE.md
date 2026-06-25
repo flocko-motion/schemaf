@@ -111,7 +111,7 @@ ai/              - AI provider integrations
 log/             - Logging
 cmd/schemaf/     - CLI entrypoint
 gateway/         - nginx gateway (Dockerfile + config)
-example/         - Example project consuming the framework
+e2e/             - From-scratch onboarding e2e + DB integration harness
 ```
 
 ## Normative Conventions
@@ -159,6 +159,8 @@ When in doubt about whether something belongs in the framework or the applicatio
 
 ## Running Tests
 
-The `/example` directory contains an example project built using SchemaF. Run `/example/codegen.sh` to generate code (including `test.gen.sh`) and then run `test.gen.sh` to execute the tests.
-Don't run tests directly unless you're debugging a specific issue. The `test.gen.sh` script handles dependencies and ensures consistent test execution - it executes both unit and integration tests, 
-including tests written in golang as well as in TypeScript (wrapped in golang). Only running `teste.gen.sh` guarantees that all tests are executed consistently.
+There is **no committed example project**. Tests come in three layers:
+
+- **Unit tests** — `go test ./...`. Real-Postgres tests auto-skip when `DATABASE_URL` is unset.
+- **DB integration tests** — `e2e/db-test.sh`. Spins an ephemeral Postgres, exports `DATABASE_URL`, and runs the gated tests in `db/` (migration runner, `RunSet`, reset helper). Tears down automatically.
+- **From-scratch onboarding e2e** — `e2e/build-example.sh [<ref>]`. Builds a complete project in `/tmp` from a single `go run …/cmd/schemaf@<ref> init` call against an online tag, then compiles and tests it. This is the real onboarding lifecycle and replaces the old in-repo example. The dev loop `e2e/tag-and-test.sh` tags HEAD as the non-semver `e2e` tag, pushes it, and runs the e2e against it.

@@ -1,5 +1,0 @@
-# schemaf.toml — Project identity. The "name" field determines the database name,
-# Docker container prefixes, and config directory. See INSTALL.md#schemaftoml.
-title=Schemaf Example Project
-name=schemaf-example
-

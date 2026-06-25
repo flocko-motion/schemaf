@@ -1,1 +1,0 @@
-../schemaf.sh
