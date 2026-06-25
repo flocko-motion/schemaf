@@ -48,6 +48,11 @@ release: ## Release: make release <major|minor|patch> (aliases: breaking|feature
 		git status --short >&2
 		exit 1
 	fi
+	# Safety gate: the local code being released must pass unit + db tests.
+	# (e2e is excluded — it's slow and tests an already-published online tag.)
+	echo "▶ pre-release tests (unit + db)"
+	go test ./...
+	./e2e/db-test.sh
 	new="v$${major}.$${minor}.$${patch}"
 	echo "  $$latest → $$new"
 	git tag "$$new"
