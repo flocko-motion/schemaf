@@ -43,6 +43,15 @@ if [ -z "$REF" ]; then
   [ -n "$REF" ] || { echo "could not resolve a release tag from $SCHEMAF_REPO" >&2; exit 1; }
 fi
 
+# Only a clean release tag (vX.Y.Z) is immutable and safe to fetch via the module
+# proxy. Moving tags (e2e) and freshly pushed prereleases (vX.Y.Z-pre.<sha>) must
+# bypass proxy+sumdb so we test the exact commit just pushed, not a cached or
+# sumdb-lagged one.
+if [[ ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  export GOPROXY=direct GOSUMDB=off
+  echo "  (ref '$REF' is not a release tag → GOPROXY=direct GOSUMDB=off)"
+fi
+
 # --- a fresh, legible name in a blank dir OUTSIDE this repo ---
 # shellcheck source=names.sh
 source "$SCRIPT_DIR/names.sh"

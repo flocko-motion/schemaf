@@ -22,4 +22,4 @@ echo "▶ tag HEAD ($(git rev-parse --short HEAD)) as '${TAG}' and push to ${REM
 git tag -f "$TAG"
 git push -f "$REMOTE" "$TAG"
 
-exec "$SCRIPT_DIR/build-example.sh" "$TAG"
+"$SCRIPT_DIR/build-example.sh" "$TAG"
