@@ -293,6 +293,50 @@ CREATE TABLE users (
 
 Migrations are auto-discovered by codegen and embedded into the binary. They run automatically on server startup. Name them with a numeric prefix for ordering.
 
+**Transaction safety:** each migration runs inside its own transaction together with its tracking-table record. If a migration fails, both the schema change and the record are rolled back — the database is never left half-applied or recorded-but-not-applied. (Because of this, statements Postgres forbids inside a transaction block — e.g. `CREATE INDEX CONCURRENTLY` — cannot be used in a migration file.)
+
+### Migration identifiers (independent migration lines)
+
+Every migration is recorded in a single `schemaf_migrations` table, keyed by an **identifier** plus a version (`UNIQUE(prefix, version)`). The identifier is the `Prefix` field of a `MigrationSet`. Each identifier is an independent migration line with its own `0001, 0002, …` sequence — two lines never collide, even on the same database.
+
+The framework itself is just one such line: it registers its migrations under the identifier `"schemaf"`. Your project's migrations are another line under your own identifier. They advance independently and are tracked separately in the same table.
+
+This is what lets **several apps share one database**. Each app applies its own line under its own identifier:
+
+```go
+db.RunSet(ctx, sharedDB, db.MigrationSet{Prefix: "appA", Files: appAMigrations})
+db.RunSet(ctx, sharedDB, db.MigrationSet{Prefix: "appB", Files: appBMigrations})
+```
+
+`appA` and `appB` evolve their schemas independently; the shared `schemaf_migrations` table keeps each line's history apart. If both apps are schemaf apps, the `"schemaf"` line is applied once and skipped by whoever runs second (already-applied versions are never re-run).
+
+### Applying migrations to another database
+
+The framework runs your project's migrations against the built-in Postgres automatically on startup. The same versioned, transaction-safe mechanism is also available for **secondary databases your project owns** — a separate analytics store, a per-tenant database, an external Postgres you provision yourself.
+
+Bring your own connection and your own migration set, and call `db.RunSet`:
+
+```go
+import (
+    "embed"
+
+    frameworkdb "github.com/flocko-motion/schemaf/db"
+)
+
+//go:embed analytics_migrations/*.sql
+var analyticsMigrations embed.FS
+
+// otherDB is a *sql.DB you opened yourself (any Postgres).
+err := frameworkdb.RunSet(ctx, otherDB, frameworkdb.MigrationSet{
+    Prefix: "analytics",          // namespaces versions in schemaf_migrations
+    Files:  analyticsMigrations,  // your NNNN_name.sql files
+})
+```
+
+`RunSet` ensures the `schemaf_migrations` tracking table exists on the target database, then applies **only the set you pass** — recording versions under `Prefix`. It does *not* run framework migrations or any other registered set, so the target database carries only your set's tables (plus the tracking table itself). Already-applied versions are skipped, so calling it repeatedly is safe.
+
+This is the same primitive the framework uses internally — one `MigrationSet` can serve both the built-in database (automatically, on startup) and any other database (explicitly, via `RunSet`), with uniform versioning and no duplicate migration code.
+
 ### Queries
 
 Write [sqlc](https://sqlc.dev) queries in `go/db/queries/`:

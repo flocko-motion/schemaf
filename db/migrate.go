@@ -39,6 +39,26 @@ func RunMigrationsOn(ctx context.Context, db *sql.DB) error {
 	return runMigrations(ctx, db)
 }
 
+// RunSet ensures the schemaf_migrations tracking table exists on db, then
+// applies only `set` (recording versions under set.Prefix). It does NOT run
+// framework or other registered sets, so it can target an external database
+// that should carry only this set's tables.
+//
+// The only framework object it creates is the schemaf_migrations tracking
+// table itself (the bootstrap step runs framework migration 0001, which only
+// creates that table); no other framework schema is applied. Each migration is
+// applied atomically (see runSet) and already-applied versions are skipped, so
+// RunSet is safe to call repeatedly against the same database.
+func RunSet(ctx context.Context, db *sql.DB, set MigrationSet) error {
+	if err := bootstrap(ctx, db); err != nil {
+		return fmt.Errorf("bootstrap: %w", err)
+	}
+	if err := runSet(ctx, db, set); err != nil {
+		return fmt.Errorf("running migrations for prefix %q: %w", set.Prefix, err)
+	}
+	return nil
+}
+
 func runMigrations(ctx context.Context, db *sql.DB) error {
 	if err := bootstrap(ctx, db); err != nil {
 		return fmt.Errorf("bootstrap: %w", err)
@@ -83,18 +103,42 @@ func bootstrap(ctx context.Context, db *sql.DB) error {
 		return nil
 	}
 
-	// Table doesn't exist: run 0001_init.sql directly, then record it.
+	// Table doesn't exist: run 0001_init.sql, then record it — atomically, so a
+	// failure leaves no half-created tracking table behind.
 	initSQL, err := frameworkMigrations.ReadFile("migrations/0001_init.sql")
 	if err != nil {
 		return fmt.Errorf("reading framework migration 0001: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, string(initSQL)); err != nil {
-		return fmt.Errorf("running framework migration 0001: %w", err)
+	return applyMigration(ctx, db, "schemaf", 1, "init", string(initSQL))
+}
+
+// applyMigration runs a single migration's SQL and records it in
+// schemaf_migrations within one transaction: the DDL and its tracking row
+// commit together or roll back together. A failure therefore leaves the
+// database exactly as it was before the migration — never half-applied and
+// never recorded-but-not-applied.
+//
+// Note: because each migration runs inside a transaction, statements that
+// Postgres forbids in a transaction block (e.g. CREATE INDEX CONCURRENTLY)
+// cannot be used in a migration file.
+func applyMigration(ctx context.Context, db *sql.DB, prefix string, version int, name, migrationSQL string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx for migration %s/%04d_%s: %w", prefix, version, name, err)
 	}
-	if _, err := db.ExecContext(ctx,
-		`INSERT INTO schemaf_migrations (prefix, version, name) VALUES ('schemaf', 1, 'init')`,
+	if _, err := tx.ExecContext(ctx, migrationSQL); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("running migration %s/%04d_%s: %w", prefix, version, name, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schemaf_migrations (prefix, version, name) VALUES ($1, $2, $3)`,
+		prefix, version, name,
 	); err != nil {
-		return fmt.Errorf("recording framework migration 0001: %w", err)
+		_ = tx.Rollback()
+		return fmt.Errorf("recording migration %s/%04d_%s: %w", prefix, version, name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing migration %s/%04d_%s: %w", prefix, version, name, err)
 	}
 	return nil
 }
@@ -164,14 +208,8 @@ func runSet(ctx context.Context, db *sql.DB, ms MigrationSet) error {
 		if applied[m.version] {
 			continue
 		}
-		if _, err := db.ExecContext(ctx, m.sql); err != nil {
-			return fmt.Errorf("running migration %s/%04d_%s: %w", ms.Prefix, m.version, m.name, err)
-		}
-		if _, err := db.ExecContext(ctx,
-			`INSERT INTO schemaf_migrations (prefix, version, name) VALUES ($1, $2, $3)`,
-			ms.Prefix, m.version, m.name,
-		); err != nil {
-			return fmt.Errorf("recording migration %s/%04d_%s: %w", ms.Prefix, m.version, m.name, err)
+		if err := applyMigration(ctx, db, ms.Prefix, m.version, m.name, m.sql); err != nil {
+			return err
 		}
 	}
 	return nil
