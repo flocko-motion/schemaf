@@ -104,9 +104,10 @@ func (a *App) Run() error {
 	// to use schemaf.sh instead.
 	c.AddSubcommands(shellStubProvider)
 
-	// Mount built-in db commands when a database is registered.
+	// Mount built-in db + auth commands when a database is registered.
 	if a.hasDB {
 		c.Root().AddCommand(db.Command())
+		c.AddSubcommands(a.authProvider)
 	}
 
 	// Mount user-registered subcommands.

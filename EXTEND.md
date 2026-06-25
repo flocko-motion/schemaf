@@ -8,6 +8,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 - [Frontend](#frontend)
 - [Built-in Endpoints](#built-in-endpoints)
 - [Endpoint Interface](#endpoint-interface)
+- [Authentication](#authentication)
 - [Raw Endpoints](#raw-endpoints)
 - [Database](#database)
   - [Migrations](#migrations)
@@ -251,6 +252,40 @@ type CreateUserEndpoint struct{}
 - Generates `frontend/src/api/generated/api.gen.ts` — type-safe TypeScript client
 
 You write the struct. Everything else is generated or framework-provided.
+
+## Authentication
+
+schemaf has built-in JWT auth, fully managed by the framework:
+
+- **Per-endpoint**: return `true` from `Auth()` to require a valid token (see [Endpoint Interface](#endpoint-interface)). `/api/health` and `/api/status` are always open.
+- **Bearer JWTs**: `Authorization: Bearer <token>`, HMAC-SHA256 signed.
+- **Signing key is auto-managed**: generated on first boot and stored in Postgres (`_schemaf_config`). Nothing to configure, no secret to manage.
+- In a handler, `api.Subject(ctx)` returns the authenticated subject; `/api/user/me` returns the current user.
+
+### Getting a token in development
+
+The framework has no built-in login/password flow — your app decides how users authenticate in production. For **local development**, mint a token for any subject with the built-in command:
+
+```bash
+# the database must be running, e.g. ./schemaf.sh dev db
+TOKEN=$(./schemaf.sh auth token alice)
+curl -H "Authorization: Bearer $TOKEN" localhost:8000/api/user/me
+```
+
+- `auth token <subject>` prints a signed JWT for that subject, so you can call authenticated endpoints as any user.
+- `--ttl <duration>` sets an expiry (e.g. `--ttl 24h`); without it, the token never expires.
+- **Dev-only**: the command refuses to run in production (`SCHEMAF_ENV=docker`).
+
+### Issuing tokens from your own code
+
+In production you issue tokens yourself, after authenticating the user however you choose:
+
+```go
+import schemafapi "github.com/flocko-motion/schemaf/api"
+
+token, err := schemafapi.IssueToken(userID, time.Now().Add(24*time.Hour))
+// time.Time{} (zero) as the second argument issues a token with no expiry.
+```
 
 ## Raw Endpoints
 

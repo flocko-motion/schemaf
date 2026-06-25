@@ -50,7 +50,8 @@ else
 fi
 
 SCHEMAF_VER=$(cd go && go list -m -f '{{.Version}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
-echo "schemaf ${SCHEMAF_VER} — ${PROJECT_NAME}"
+# Banner to stderr, so command stdout stays clean for capture (e.g. auth token).
+echo "schemaf ${SCHEMAF_VER} — ${PROJECT_NAME}" >&2
 
 CMD="${1:-}"
 shift 2>/dev/null || true

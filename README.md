@@ -17,6 +17,7 @@ Common tasks and where they're documented (jump straight to the section):
 | Create a new project | [INSTALL › Quickstart](INSTALL.md#quickstart) |
 | Wire providers in `main.go` | [EXTEND › main.go Wiring](EXTEND.md#maingo-wiring) |
 | Add an API endpoint | [EXTEND › Endpoint Interface](EXTEND.md#endpoint-interface) |
+| Authenticate / mint dev tokens | [EXTEND › Authentication](EXTEND.md#authentication) |
 | Stream / upload (raw HTTP) | [EXTEND › Raw Endpoints](EXTEND.md#raw-endpoints) |
 | Add a database migration | [EXTEND › Migrations](EXTEND.md#migrations) |
 | Migrate a secondary / external DB | [EXTEND › Applying migrations to another database](EXTEND.md#applying-migrations-to-another-database) |
