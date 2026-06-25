@@ -12,7 +12,21 @@ Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
   go install gotest.tools/gotestsum@latest
   ```
 
-## 1. Create the project
+## Quickstart
+
+One command scaffolds a complete, working project — it fetches schemaf and generates everything, like `create-react-app`:
+
+```bash
+go run github.com/flocko-motion/schemaf/cmd/schemaf@latest init myapp
+cd myapp
+./schemaf.sh dev all
+```
+
+`init` creates `myapp/` with the full structure (`schemaf.toml`, `go.work`, the Go module, a sample endpoint + migration + query, and the frontend scaffold) and runs codegen. You write nothing by hand. Pin a specific release with `@v1.2.3` in place of `@latest`.
+
+That's the whole onboarding. **The sections below explain what `init` does under the hood — you don't need them to get started.**
+
+## 1. Create the project (what `init` does)
 
 ```bash
 mkdir myapp && cd myapp
