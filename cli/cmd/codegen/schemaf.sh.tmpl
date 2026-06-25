@@ -107,6 +107,8 @@ case "$CMD" in
         exit 1
       fi
     fi
+    # Accept a bare version ("1.9.0") as well as "v1.9.0" — Go needs the v prefix.
+    case "$TARGET" in [0-9]*) TARGET="v$TARGET" ;; esac
     echo "Upgrading schemaf framework to ${TARGET}..."
     cd go
     OLD_VER=$(go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/flocko-motion/schemaf 2>/dev/null || echo "unknown")
