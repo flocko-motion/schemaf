@@ -226,7 +226,28 @@ Each endpoint struct has four methods:
 - Checks the JWT if `Auth()` returns `true`
 - Calls `Handle(ctx, req)`
 - Encodes the response as JSON
-- On error: maps the error to an appropriate HTTP status
+- On error: maps the error to an appropriate HTTP status (see below)
+
+**Error responses:** return one of the framework's sentinel errors (directly or wrapped with `%w`) to control the status code; any other error is `500`.
+
+| Return | Status |
+|---|---|
+| `api.ErrBadRequest` | 400 Bad Request |
+| `api.ErrForbidden` | 403 Forbidden |
+| `api.ErrNotFound` | 404 Not Found |
+| `api.ErrConflict` | 409 Conflict |
+| `api.ErrUnavailable` | 503 Service Unavailable |
+| any other `error` | 500 Internal Server Error |
+
+```go
+func (e GetOrderEndpoint) Handle(ctx context.Context, req GetOrderReq) (GetOrderResp, error) {
+    order, err := db.GetOrder(ctx, req.ID)
+    if errors.Is(err, sql.ErrNoRows) {
+        return GetOrderResp{}, fmt.Errorf("order %s: %w", req.ID, api.ErrNotFound) // → 404
+    }
+    return GetOrderResp{Order: order}, err
+}
+```
 
 **Request type struct tags:**
 ```go

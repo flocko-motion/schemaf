@@ -8,22 +8,30 @@ import (
 	"net/http"
 )
 
-// Sentinel errors that handlers can return to produce specific HTTP status codes.
+// Sentinel errors that handlers can return (directly or wrapped with %w) to
+// produce specific HTTP status codes.
 var (
-	ErrNotFound   = errors.New("not found")
-	ErrBadRequest = errors.New("bad request")
-	ErrForbidden  = errors.New("forbidden")
+	ErrBadRequest  = errors.New("bad request") // 400
+	ErrForbidden   = errors.New("forbidden")   // 403
+	ErrNotFound    = errors.New("not found")   // 404
+	ErrConflict    = errors.New("conflict")    // 409
+	ErrUnavailable = errors.New("unavailable") // 503
 )
 
-// statusFor maps a handler error to an HTTP status code.
+// statusFor maps a handler error to an HTTP status code. Unrecognized errors
+// map to 500.
 func statusFor(err error) int {
 	switch {
-	case errors.Is(err, ErrNotFound):
-		return http.StatusNotFound
 	case errors.Is(err, ErrBadRequest):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrForbidden):
 		return http.StatusForbidden
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrConflict):
+		return http.StatusConflict
+	case errors.Is(err, ErrUnavailable):
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}
