@@ -3,32 +3,41 @@
 SHELL := bash
 .ONESHELL:
 .DEFAULT_GOAL := help
-.PHONY: help build test db-test e2e release major minor patch breaking feature fix
-
-# release accepts BOTH `make release BUMP=fix` and the positional `make release fix`.
-BUMP ?= $(firstword $(filter-out release,$(MAKECMDGOALS)))
+.PHONY: help build test release unit db e2e all major minor patch breaking feature fix
 
 help: ## List available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-9s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-9s %s\n", $$1, $$2}'
 
 build: ## Compile the framework
 	go build ./...
 
-test: ## Unit tests (real-Postgres tests auto-skip without DATABASE_URL)
-	go test ./...
-
-db-test: ## DB integration tests against an ephemeral Postgres
-	./e2e/db-test.sh
-
-e2e: ## From-scratch onboarding e2e against the latest online tag
-	./e2e/build-example.sh
+test: ## Run tests: make test <unit|db|e2e|all>  (no arg lists the options)
+	@set -euo pipefail
+	case "$(firstword $(filter-out test,$(MAKECMDGOALS)))" in
+		unit) go test ./... ;;
+		db)   ./e2e/db-test.sh ;;
+		e2e)  ./e2e/build-example.sh $(REF) ;;
+		all)
+			go test ./...
+			./e2e/db-test.sh
+			./e2e/build-example.sh $(REF)
+			;;
+		"")
+			echo "Usage: make test <unit|db|e2e|all>"
+			echo "  unit  fast Go unit tests (real-Postgres tests auto-skip)"
+			echo "  db    DB integration tests on an ephemeral Postgres"
+			echo "  e2e   from-scratch onboarding e2e (online tag; REF=<tag>)"
+			echo "  all   unit + db + e2e"
+			;;
+		*) echo "unknown test kind '$(firstword $(filter-out test,$(MAKECMDGOALS)))' — use unit|db|e2e|all" >&2; exit 1 ;;
+	esac
 
 release: ## Release: make release <major|minor|patch> (aliases: breaking|feature|fix)
 	@set -euo pipefail
 	latest=$$(git tag -l 'v*' --sort=-v:refname | head -1)
 	[[ -n "$$latest" ]] || latest="v0.0.0"
 	IFS='.' read -r major minor patch <<< "$${latest#v}"
-	case "$(BUMP)" in
+	case "$(firstword $(filter-out release,$(MAKECMDGOALS)))" in
 		major | breaking) major=$$((major + 1)); minor=0; patch=0 ;;
 		minor | feature)  minor=$$((minor + 1)); patch=0 ;;
 		patch | fix)      patch=$$((patch + 1)) ;;
@@ -45,8 +54,8 @@ release: ## Release: make release <major|minor|patch> (aliases: breaking|feature
 	git push origin main "$$new"
 	echo "  released $$new (pushed to origin)"
 
-# The bump words double as no-op targets so `make release fix` (positional) does
-# not fail with "No rule to make target 'fix'". They carry no ## doc, so they
-# stay out of `make help`.
-major minor patch breaking feature fix:
+# No-op targets that absorb the positional word in `make test <kind>` and
+# `make release <bump>`, so the extra goal doesn't fail with "No rule to make
+# target". They carry no ## doc, so they stay out of `make help`.
+unit db e2e all major minor patch breaking feature fix:
 	@:
