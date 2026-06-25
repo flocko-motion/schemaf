@@ -34,11 +34,16 @@ release: ## Release: make release <major|minor|patch> (aliases: breaking|feature
 		patch | fix)      patch=$$((patch + 1)) ;;
 		*) echo "Usage: make release <major|minor|patch>  (aliases: breaking=major, feature=minor, fix=patch)" >&2; exit 1 ;;
 	esac
+	if [[ -n "$$(git status --porcelain)" ]]; then
+		echo "release aborted: working tree not clean — commit or stash first:" >&2
+		git status --short >&2
+		exit 1
+	fi
 	new="v$${major}.$${minor}.$${patch}"
 	echo "  $$latest → $$new"
 	git tag "$$new"
 	git push origin main "$$new"
-	echo "  released $$new"
+	echo "  released $$new (pushed to origin)"
 
 # The bump words double as no-op targets so `make release fix` (positional) does
 # not fail with "No rule to make target 'fix'". They carry no ## doc, so they
