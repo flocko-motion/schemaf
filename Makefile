@@ -32,7 +32,7 @@ test: ## Run tests: make test <unit|db|e2e|all>  (no arg lists the options)
 		*) echo "unknown test kind '$(firstword $(filter-out test,$(MAKECMDGOALS)))' — use unit|db|e2e|all" >&2; exit 1 ;;
 	esac
 
-release: ## Release: gate, merge current branch into main via PR, tag <major|minor|patch> (aliases: breaking|feature|fix)
+release: ## Release current main, tagging <major|minor|patch> (aliases: breaking|feature|fix); from a branch it merges first
 	@set -euo pipefail
 	git fetch -q --tags origin
 	# Latest RELEASE version — ignore -pre prereleases when picking what to bump.
@@ -46,22 +46,35 @@ release: ## Release: gate, merge current branch into main via PR, tag <major|min
 		*) echo "Usage: make release <major|minor|patch>  (aliases: breaking=major, feature=minor, fix=patch)" >&2; exit 1 ;;
 	esac
 	new="v$${major}.$${minor}.$${patch}"
+
 	if [[ -n "$$(git status --porcelain)" ]]; then
 		echo "release aborted: working tree not clean — commit or stash first:" >&2
 		git status --short >&2
 		exit 1
 	fi
+
+	# gate the current HEAD: publish a unique, immutable prerelease tag and run
+	# the full onboarding e2e against it. cleanup_pre removes it afterward.
+	PRE=""
+	gate() {
+		PRE="$$new-pre.$$(date -u +%Y%m%d%H%M%S).g$$(git rev-parse --short HEAD)"
+		echo "▶ gate: onboarding e2e against $$PRE"
+		git tag "$$PRE"
+		git push origin "$$PRE"
+		./e2e/build-example.sh "$$PRE"
+	}
+	cleanup_pre() {
+		[[ -n "$$PRE" ]] || return 0
+		git push origin ":refs/tags/$$PRE" >/dev/null 2>&1 || true
+		git tag -d "$$PRE" >/dev/null 2>&1 || true
+	}
+
+	git fetch -q origin main
 	branch=$$(git rev-parse --abbrev-ref HEAD)
-	# main is protected (no direct push) — releases run from a feature branch. If
-	# you're on main, offer to move the unmerged commits onto a new branch and
-	# continue, rather than dead-ending.
-	if [[ "$$branch" == main ]]; then
-		git fetch -q origin main
+
+	# On protected main with local commits you can't push: move them to a branch.
+	if [[ "$$branch" == main && "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]]; then
 		ahead=$$(git rev-list --count origin/main..HEAD)
-		if [[ "$$ahead" == 0 ]]; then
-			echo "nothing to release: main has no commits beyond origin/main — make your changes first." >&2
-			exit 1
-		fi
 		if [[ ! -t 0 ]]; then
 			echo "on main with $$ahead unmerged commit(s); re-run from a feature branch (no TTY to prompt)." >&2
 			exit 1
@@ -74,31 +87,36 @@ release: ## Release: gate, merge current branch into main via PR, tag <major|min
 		branch="$$fb"
 		echo "  → moved onto '$$fb'; main reset to origin/main"
 	fi
-	echo "▶ local sanity: go test ./..."
-	go test ./...
-	echo "▶ push branch '$$branch'"
-	git push -u origin "$$branch"
-	# Gate: publish the exact commit as a unique, immutable prerelease and run the
-	# full onboarding e2e against it BEFORE anything lands on main.
-	pre="$$new-pre.$$(date -u +%Y%m%d%H%M%S).g$$(git rev-parse --short HEAD)"
-	echo "▶ gate: onboarding e2e against $$pre"
-	git tag "$$pre"
-	git push origin "$$pre"
-	./e2e/build-example.sh "$$pre"
-	# Merge the branch into main via PR (merge commit). main is protected, so this
-	# is the only way the release reaches main.
-	echo "▶ merge $$branch → main"
-	gh pr create --base main --head "$$branch" --title "release $$new" --body "Automated release $$new" 2>/dev/null || true
-	gh pr merge "$$branch" --merge --delete-branch=false
-	# Tag the merged commit on main and push the tag (CI builds on vX.Y.Z, not -pre).
-	git fetch -q origin main
+
+	if [[ "$$branch" != main ]]; then
+		# Feature branch: gate it, then merge into main via PR (merge commit).
+		echo "▶ local sanity: go test ./..."
+		go test ./...
+		git push -u origin "$$branch"
+		gate
+		echo "▶ merge $$branch → main"
+		gh pr create --base main --head "$$branch" --title "release $$new" --body "Automated release $$new" 2>/dev/null || true
+		gh pr merge "$$branch" --merge --delete-branch=false
+		git fetch -q origin main
+		release_ref=origin/main
+	else
+		# On synced main: release everything merged since the last release tag.
+		count=$$(git rev-list --count "$$latest"..HEAD 2>/dev/null || echo 999)
+		if [[ "$$count" == 0 ]]; then
+			echo "nothing to release: main is already at $$latest." >&2
+			exit 1
+		fi
+		echo "▶ local sanity: go test ./..."
+		go test ./...
+		gate
+		release_ref=HEAD
+	fi
+
 	echo "  $$latest → $$new"
-	git tag "$$new" origin/main
+	git tag "$$new" "$$release_ref"
 	git push origin "$$new"
-	# Clean up the prerelease tag; we never left '$$branch'.
-	git push origin ":refs/tags/$$pre" >/dev/null 2>&1 || true
-	git tag -d "$$pre" >/dev/null 2>&1 || true
-	echo "  released $$new on main (merged from $$branch); still on $$branch"
+	cleanup_pre
+	echo "  released $$new on main; still on $$branch"
 
 # No-op targets that absorb the positional word in `make test <kind>` and
 # `make release <bump>`, so the extra goal doesn't fail with "No rule to make
