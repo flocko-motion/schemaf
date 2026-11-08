@@ -167,6 +167,7 @@ func shellStubProvider(_ *cli.Context) []*cobra.Command {
 	return []*cobra.Command{
 		stub("codegen", "Generate all code"),
 		stub("test", "Run all tests"),
+		stub("build", "Build the production image"),
 		stub("run", "Start production compose setup"),
 		stub("upgrade", "Upgrade schemaf to latest version"),
 	}

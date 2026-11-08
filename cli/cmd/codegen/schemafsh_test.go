@@ -8,8 +8,10 @@ import (
 	"testing"
 )
 
-// containerCall matches a word that runs or names a container runtime.
-var containerCall = regexp.MustCompile(`\b(docker|podman)\b|SCHEMAF_RUNTIME`)
+// containerCall matches a container runtime CLI in command position — at the
+// start of a command, after a separator, `then`/`do`/`exec`, or inside $( ) —
+// either by name or as "$rt". Messages that merely name a runtime don't match.
+var containerCall = regexp.MustCompile(`(^|[;&|({]|\bthen|\bdo|\bexec|\$\()\s*("?\$\{?rt\}?"?|docker|podman)(\s|$)`)
 
 // outsideRuntimeFunc returns the script's code lines that lie outside the
 // _schemaf_container function, with comments stripped, and whether the
@@ -45,6 +47,7 @@ func TestGeneratedScriptsUseRuntimeFunction(t *testing.T) {
 	}
 	data := map[string]any{
 		"Name": "myapp", "Port": 8000, "FrontendPort": 8002, "PostgresPort": 8003,
+		"SchemafVersion": "v1.0.0", "InputGlobs": "go/api/*.go", "InputExcludes": "go/api/*.gen.go",
 		"ExtServices": []ExtService{{Name: "clock", EnvVar: "CLOCK_URL", Ports: []string{"9000"}}},
 	}
 	if err := renderTemplate(schemafShTemplate, "schemaf.sh", data); err != nil {

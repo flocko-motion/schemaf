@@ -87,6 +87,9 @@ step "compile"
 step "run the test stack under ${RUNTIME} (ephemeral postgres + tests)"
 ./schemaf.sh test
 
+step "deploy as two users: build an artifact, load it as a second user, run, upgrade, roll back"
+"$SCRIPT_DIR/deploy.sh" "$DIR"
+
 say "✓ SUCCESS — onboarded '${NAME}' from ${SCHEMAF_CMD}@${REF} with a single command"
 if [ "${KEEP:-0}" = 1 ]; then
   echo "  kept: $DIR"

@@ -150,9 +150,7 @@ func TestFrontendGenWritesConfigTS(t *testing.T) {
 
 func TestComposeBackendLoadsEnvFile(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if err := os.WriteFile("schemaf.toml", []byte("title = \"My App\"\nname = \"myapp\"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeMinimalProject(t)
 	if err := runComposeGen(); err != nil {
 		t.Fatal(err)
 	}

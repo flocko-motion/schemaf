@@ -16,6 +16,9 @@ Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
 - [schemaf.sh](#schemafsh)
 - [schemaf.toml](#schemaftoml)
 - [Secrets](#secrets)
+- [Deployment](#deployment) — `build` an image, `run` it
+  - [Separate build and run users](#separate-build-and-run-users)
+  - [What the run host provides](#what-the-run-host-provides)
 - [Container runtime](#container-runtime) — podman by default, Docker on request
 - [Migrating from Docker to podman](#migrating-from-docker-to-podman)
 - [Compose](#compose)
@@ -205,15 +208,17 @@ Codegen produces:
 
 ```bash
 ./schemaf.sh codegen         # Generate all code (SQL, endpoints, TypeScript client)
-./schemaf.sh test            # Regenerate, then run all tests
+./schemaf.sh test            # Check generated files are fresh, then run all tests
 ./schemaf.sh test --verbose  # Verbose test output
 ./schemaf.sh test --no-cache # Bypass test cache
-./schemaf.sh run             # Start production compose stack
+./schemaf.sh build           # Build the production image (see Deployment)
+./schemaf.sh build --output myapp-3f9a2c1.run   # ...and write a deployment artifact
+./schemaf.sh run             # Build, then start the production compose stack
 ./schemaf.sh dev             # Start dev compose stack (exposes service ports)
 ./schemaf.sh dev postgres    # Start only specific services
 ```
 
-`run` and `dev` start the stack with `<runtime> compose` (`podman compose` by default, see [Container runtime](#container-runtime)) — the actual server runs inside the container.
+`run` and `dev` start the stack with `<runtime> compose` (`podman compose` by default, see [Container runtime](#container-runtime)) — the actual server runs inside the container. `build` and `run` need only the container runtime, git and the repository; they never call Go or Node on the host (both run inside the image build).
 
 To add custom commands, use `app.AddSubcommand()` in your Go code — see [CLI Subcommands](EXTEND.md#cli-subcommands).
 
@@ -260,9 +265,144 @@ echo "DB_PASS=$(openssl rand -hex 16)" > ~/.myapp/etc/env
 
 **Optional: Auth0.** Add `PUBLIC_AUTH0_DOMAIN` and `PUBLIC_AUTH0_CLIENT_ID` to the same file to switch on the built-in Auth0 login (both or neither). See [Activating Auth0](EXTEND.md#activating-auth0).
 
-**How secrets reach the server:** `schemaf.sh` loads the env file on every invocation (`run` → `~/.<name>/etc/env`, everything else → `~/.<name>/dev/etc/env`), setting any variables not already in your environment. In dev, the backend runs natively and sees them directly. In production, the generated `compose.gen.yml` passes the whole `~/.<name>/etc/env` to the backend container (`env_file`), and Compose fills `${DB_PASS}` in the Postgres service via environment variable substitution. Secrets flow from your home directory into containers without ever touching version control.
+**How secrets reach the server:** `schemaf.sh` loads the env file on every invocation (`run` and the [run-side commands](#the-run-side-schemafsh) → `~/.<name>/etc/env`, everything else → `~/.<name>/dev/etc/env`), setting any variables not already in your environment. The exception is `build`, which runs third-party code (`npm install`) and therefore never loads an env file: from it, it reads only `SCHEMAF_RUNTIME` (from `~/.<name>/dev/etc/env` for `build`, from `~/.<name>/etc/env` for the build step of `run`), and only when your environment doesn't set it already. In dev, the backend runs natively and sees them directly. In production, the generated `compose.gen.yml` passes the whole `~/.<name>/etc/env` to the backend container (`env_file`), and Compose fills `${DB_PASS}` in the Postgres service via environment variable substitution. Secrets flow from your home directory into containers without ever touching version control.
 
 > **Never commit secrets.** The `~/.<name>/` directory is outside your project tree by design. If you see `The "DB_PASS" variable is not set` warnings from Compose, create the env file above.
+
+## Deployment
+
+Deploying is two steps: **build** an image from a commit, then **run** it. On a single-user host, `./schemaf.sh run` does both. A host that keeps secrets in its database can split them across two users (see [Separate build and run users](#separate-build-and-run-users)).
+
+### Generated files must be fresh
+
+`build` runs no codegen: generated files are written by developers and committed. To catch a commit whose generated files don't match its inputs, codegen records a hash of its inputs in `gen/inputs.sha256`, and `build` and `test` recompute it. On a mismatch they stop:
+
+```
+generated files are stale — run ./schemaf.sh codegen and commit
+```
+
+The inputs are `go/api/*.go` (without `*.gen.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, and the schemaf version required in `go/go.mod`. See [Code Generation](EXTEND.md#code-generation).
+
+### `build`
+
+```bash
+./schemaf.sh build [--tag <tag>] [--output <file>] [--force]
+```
+
+Builds `Dockerfile.gen` into the image `<name>:<tag>`. It needs the container runtime, git and the repository, and nothing else: no Go, no Node, and **no secrets**.
+
+- **Tag**: the short commit hash by default; `--tag` sets your own (letters, digits, `_`, `.`, `-`).
+- **Exactly the commit**: with a clean working tree the image is built from `git archive HEAD`, so untracked and ignored files (e.g. `node_modules/`) never reach it. A commit that was built before is not built again, unless `--force`.
+- **Uncommitted changes**: a plain `build` is allowed for local testing; it builds the working tree, always rebuilds, and tags `<short-hash>-dirty` by default. `build --output` refuses: `commit first — a deployment artifact must name exactly one commit`. There is no override.
+- **`--output <file>`** writes a deployment artifact (below). An existing file is an error, never overwritten.
+
+### The artifact: `<name>-<tag>.run`
+
+`build --output` writes a self-extracting executable: a short shell header followed by the archive. It contains
+
+- the image (`<runtime> save`),
+- the commit's compose files (`compose.gen.yml` and the `compose/*.yml` it includes),
+- the run-side `schemaf.sh`,
+- a manifest: project name, tag, commit, `git describe`, schemaf version, image platform.
+
+It **never contains secrets**, so the same file can go to staging and to production. On the run host:
+
+```bash
+./myapp-3f9a2c1.run load
+```
+
+`load`, as the user who will run the stack:
+
+- loads the image into **that user's** container store,
+- unpacks the compose files into `~/.<name>/deploy/<tag>/`,
+- installs or updates `~/.<name>/bin/schemaf.sh`,
+- prints the tag.
+
+Tags are free-form, so a tag must never silently change meaning:
+
+| Already loaded | `load` |
+|---|---|
+| tag not loaded | loads it |
+| same tag, same commit | does nothing, and says so |
+| same tag, different commit | refuses: `v1.4 is already loaded from commit 3f9a2c1, this archive is commit 8b1d0e4 — remove it first (schemaf.sh image rm v1.4) or build with a different tag` |
+
+An image built for another platform (e.g. arm64 on an amd64 host) is refused too.
+
+### The run-side `schemaf.sh`
+
+`~/.<name>/bin/schemaf.sh` is the same generated script. Without a checkout next to it, it offers only:
+
+| Command | Does |
+|---|---|
+| `run --image <tag> [compose up flags]` | loads `~/.<name>/etc/env`, checks the [runtime and data volume](#container-runtime), starts the stack from `~/.<name>/deploy/<tag>/` with that image. Never builds; a tag that isn't loaded is an error. |
+| `stop` | stops the stack |
+| `status` | lists the stack's containers |
+| `logs [compose logs flags]` | shows the stack's logs, e.g. `logs -f backend` |
+| `image ls` | the loaded tags with commit, `git describe`, size, and which one is running |
+| `image rm <tag>` | removes the image and `~/.<name>/deploy/<tag>/`; refuses while that tag is running |
+| any app subcommand (`db backup`, `db restore`, `db query`, your own `AddSubcommand` commands) | runs in the running backend container (`<runtime> exec <name>-backend /app …`), i.e. exactly the deployed version; if the backend isn't running: `start it first: schemaf.sh run --image <tag>` |
+
+Developer commands (`codegen`, `test`, `dev`, `build`, `upgrade`) stop with `this host has no checkout; that command runs on a dev or build host`. Nothing on the run side needs Go.
+
+Old images are rollback targets, so nothing is ever pruned automatically; `image ls` and `image rm` are the tooling. The database lives in the named volume `<name>-postgres-data`, which outlives every version; migrations run when the server starts, as always.
+
+### Single-user hosts: `run`
+
+`./schemaf.sh run` (without `--image`) is `build` (no env file, freshness check, commit tag, rebuild for uncommitted changes) followed by starting that image with the checkout's own compose files. Flags after `run` go to `<runtime> compose up`, e.g. `./schemaf.sh run -d`. It is the same build path and the same start path as the two-user setup, just in one step. `stop`, `status` and `logs` belong to the run side only (on a checkout those names stay free for your own subcommands); on a checkout host use compose directly: `<runtime> compose -p <name> down`, `… ps`, `… logs`.
+
+Compose never builds: the backend service in `compose.gen.yml` names its image as `${SCHEMAF_IMAGE}`, which `schemaf.sh` sets. A manual `podman compose up` without it fails with `set by schemaf.sh — use ./schemaf.sh run`, and an image that isn't there is an error, never a build or a pull.
+
+### Separate build and run users
+
+`build` runs third-party code (`npm install` and its install scripts); the running stack owns the database. A deployment that holds secrets in its database keeps those two apart: one unprivileged user builds and can reach neither the containers nor the database volume, another runs the stack and never builds. With rootless podman each user has its own container store, so the image crosses over as a file.
+
+The example uses the project `myapp`, the build user `myapp-build` and the run user `myapp`:
+
+```
+myapp-build (repo + runtime, no secrets)       myapp (runtime + ~/.myapp/etc/env, no repo, no Go/Node)
+────────────────────────────────────────       ─────────────────────────────────────────────────────
+git pull
+./schemaf.sh build --output /srv/drop/myapp-3f9a2c1.run
+        │  (file handover, e.g. a drop directory — schemaf doesn't manage it)
+        └──────────────────────────────────►  /srv/drop/myapp-3f9a2c1.run load
+                                              ~/.myapp/bin/schemaf.sh run --image 3f9a2c1 -d
+                                              … later: run --image <older tag> -d   (rollback)
+```
+
+**1. The build user** has git, the container runtime and a clone of the repository, nothing else:
+
+```bash
+git clone <repo> && cd myapp
+./schemaf.sh build --output /srv/drop/myapp-$(git rev-parse --short HEAD).run
+```
+
+**2. The handover** is a plain file. Give the run user read access to it, e.g. a directory both users can reach (`/srv/drop`, group-readable). schemaf doesn't move, sign or delete artifacts.
+
+**3. The run user** has the container runtime and the env file (see [What the run host provides](#what-the-run-host-provides)), no repository, no Go, no Node:
+
+```bash
+/srv/drop/myapp-3f9a2c1.run load            # prints: 3f9a2c1
+~/.myapp/bin/schemaf.sh run --image 3f9a2c1 -d
+```
+
+The first start creates the database volume.
+
+**Upgrade**: build and hand over the new commit, `load` it, `run --image <new tag> -d`. Compose replaces the running containers; the database volume stays, and the new version's migrations run when it starts.
+
+**Rollback**: `~/.myapp/bin/schemaf.sh run --image <older tag> -d`. Migrations are forward-only, so an older version runs against the newer schema; keep schema changes backward-compatible if you rely on rollback.
+
+**Pruning**: `~/.myapp/bin/schemaf.sh image ls`, then `image rm <tag>` for versions you no longer want to roll back to. The running tag can't be removed.
+
+### What the run host provides
+
+The artifact is self-contained except for:
+
+| Provided by the run host | Examples |
+|---|---|
+| `~/.<name>/etc/env` | `DB_PASS`, `PUBLIC_*` (incl. `PUBLIC_AUTH0_*`), `BACKUP_*`, `SCHEMAF_RUNTIME` |
+| Files the env refers to | the backup SSH key (`BACKUP_SSH_KEY_PATH`), if backups are set up |
+| Container runtime | podman (the default) or Docker, see [Container runtime](#container-runtime) |
+| Database volume | `<name>-postgres-data`, created by the runtime on first start, kept across versions |
 
 ## Container runtime
 
@@ -276,7 +416,7 @@ schemaf runs its containers with **rootless podman** by default. Docker's daemon
 | `podman` | podman (the default, spelled out) |
 | `docker` | Docker |
 
-Any other value stops schemaf with an error listing the valid values. Upgrading from a schemaf release that used Docker: a machine that has only Docker must set `SCHEMAF_RUNTIME=docker`; a server moving to podman with existing data follows [the migration steps](#migrating-from-docker-to-podman). Set it in your shell profile, or in the project's env files (`~/.<name>/etc/env` for `run`, `~/.<name>/dev/etc/env` for everything else), which `schemaf.sh` loads on every invocation:
+Any other value stops schemaf with an error listing the valid values. Upgrading from a schemaf release that used Docker: a machine that has only Docker must set `SCHEMAF_RUNTIME=docker`; a server moving to podman with existing data follows [the migration steps](#migrating-from-docker-to-podman). Set it in your shell profile, or in the project's env files (`~/.<name>/etc/env` for `run` and the run side, `~/.<name>/dev/etc/env` for everything else), which `schemaf.sh` loads on every invocation (`build` reads only this one key from them, see [Secrets](#secrets)):
 
 ```bash
 echo "SCHEMAF_RUNTIME=docker" >> ~/.myapp/etc/env
@@ -284,7 +424,7 @@ echo "SCHEMAF_RUNTIME=docker" >> ~/.myapp/etc/env
 
 **Compose** is always `<runtime> compose`. Under podman, `podman compose` must hand off to **docker-compose** (the reference Compose v2), never `podman-compose`: schemaf relies on `up --wait`, `depends_on: condition: service_healthy`, long-form `env_file` with `required: false`, and file `secrets`. Both runtimes therefore use the same compose implementation on the same generated compose files; only the engine underneath differs.
 
-**Missing tools fail loudly.** Before `dev`, `run` and `test` touch a container, schemaf checks the runtime and stops with a message naming what's missing and how to fix it. It never falls back to the other runtime and never guesses:
+**Missing tools fail loudly.** Before `dev`, `build`, `run`, `load` and `test` touch a container, schemaf checks the runtime and stops with a message naming what's missing and how to fix it. It never falls back to the other runtime and never guesses:
 
 | Situation | What schemaf tells you |
 |---|---|
@@ -311,11 +451,12 @@ schemaf never migrates or deletes data itself.
 
 A machine whose project data sits in a Docker volume can't start under podman until that volume is gone (see [the data volume](#container-runtime)). Move the data with a logical dump: `pg_dump` out of the old Postgres, `psql` into the new one. Never copy the volume's files: rootless podman maps user IDs differently, and a copied Postgres data directory fails with wrong ownership.
 
-It is a move, not a copy: the last step deletes the Docker volume. The steps are the same on a production server and on a dev machine (dev and production share the one volume); they use the project `myapp` with the production env file, so for dev use `~/.myapp/dev/etc/env` instead.
+It is a move, not a copy: the last step deletes the Docker volume. The steps are the same on a production server and on a dev machine (dev and production share the one volume); they use the project `myapp` with the production env file, so for dev use `~/.myapp/dev/etc/env` instead. On a run host without a checkout, run them in `~/.myapp/deploy/<tag>/`, which holds the same `compose.gen.yml`, and start with `~/.myapp/bin/schemaf.sh run --image <tag>` in step 7.
 
 ```bash
 cd myapp                                   # the project root, next to compose.gen.yml
 set -a; . ~/.myapp/etc/env; set +a         # DB_PASS etc. for compose variable substitution
+export SCHEMAF_IMAGE=myapp:unused           # compose.gen.yml requires it; only postgres starts here
 
 # 1. Start only the old Postgres, under Docker
 docker compose -f compose.gen.yml down
@@ -373,7 +514,7 @@ Codegen merges the framework's built-in compose with your extensions and produce
 **Running the stack:**
 
 ```bash
-./schemaf.sh run              # Full stack, production mode
+./schemaf.sh run              # Build, then full stack, production mode (see Deployment)
 ./schemaf.sh dev              # Full stack, dev mode (exposes service ports)
 ./schemaf.sh dev postgres     # Only specific services (useful during development)
 ```
