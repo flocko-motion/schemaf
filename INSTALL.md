@@ -240,9 +240,11 @@ mkdir -p ~/.myapp/etc
 echo "DB_PASS=$(openssl rand -hex 16)" > ~/.myapp/etc/env
 ```
 
-**Optional: Auth0.** Add `AUTH0_DOMAIN` and `AUTH0_CLIENT_ID` to the same file to switch on the built-in Auth0 login (both or neither). See [Activating Auth0](EXTEND.md#activating-auth0).
+**Public frontend config: `PUBLIC_*`.** Values the frontend needs at runtime and that differ per instance (a Sentry DSN, the public URL, ...) go into the same files, as variables whose names start with `PUBLIC_`. The server sends every `PUBLIC_*` variable to every browser that opens the app, so **never put a secret in a `PUBLIC_` variable**. Variables without the prefix are never exposed. See [Runtime config](EXTEND.md#runtime-config-public_).
 
-**How secrets reach containers:** `schemaf.sh` automatically loads `~/.<name>/dev/etc/env` on every invocation, setting any variables not already in your environment. Docker Compose then picks up `${DB_PASS}` (and `${AUTH0_DOMAIN}`, `${AUTH0_CLIENT_ID}`) via environment variable substitution. Secrets flow from your home directory into containers without ever touching version control.
+**Optional: Auth0.** Add `PUBLIC_AUTH0_DOMAIN` and `PUBLIC_AUTH0_CLIENT_ID` to the same file to switch on the built-in Auth0 login (both or neither). See [Activating Auth0](EXTEND.md#activating-auth0).
+
+**How secrets reach the server:** `schemaf.sh` loads the env file on every invocation (`run` → `~/.<name>/etc/env`, everything else → `~/.<name>/dev/etc/env`), setting any variables not already in your environment. In dev, the backend runs natively and sees them directly. In production, the generated `compose.gen.yml` passes the whole `~/.<name>/etc/env` to the backend container (`env_file`), and Docker Compose fills `${DB_PASS}` in the Postgres service via environment variable substitution. Secrets flow from your home directory into containers without ever touching version control.
 
 > **Never commit secrets.** The `~/.<name>/` directory is outside your project tree by design. If you see `The "DB_PASS" variable is not set` warnings from Docker Compose, create the env file above.
 

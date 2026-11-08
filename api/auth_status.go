@@ -3,29 +3,13 @@
 
 package api
 
-// This file holds the public provider config exposed under "auth" in
-// /api/status. It is a deliberately narrow interim solution until generic
-// runtime frontend config (GitHub issue #35) replaces it.
-
-// PublicConfigProvider is optionally implemented by identity providers that
-// expose public client config (values safe for anyone to read, e.g. the
-// Auth0 domain and client ID) to the frontend via /api/status.
-type PublicConfigProvider interface {
-	PublicConfig() map[string]string
-}
-
-// authStatus returns {"providers": {name: publicConfig, ...}} for the active
-// identity providers. Providers without public config appear as {}.
+// authStatus returns {"providers": ["auth0", ...]}: the names of the active
+// identity providers. The client settings the frontend needs for a provider
+// come from runtime config (/api/config), not from here.
 func authStatus() map[string]any {
-	providers := map[string]map[string]string{}
+	providers := make([]string, 0, len(identityProviders))
 	for _, p := range identityProviders {
-		cfg := map[string]string{}
-		if pc, ok := p.(PublicConfigProvider); ok {
-			for k, v := range pc.PublicConfig() {
-				cfg[k] = v
-			}
-		}
-		providers[p.Name()] = cfg
+		providers = append(providers, p.Name())
 	}
 	return map[string]any{"providers": providers}
 }

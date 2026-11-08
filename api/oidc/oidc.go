@@ -35,7 +35,6 @@ type Provider struct {
 	name     string
 	issuer   string
 	clientID string
-	public   map[string]string
 
 	// client is used for discovery and JWKS fetches (nil: http.DefaultClient).
 	client *http.Client
@@ -47,18 +46,14 @@ type Provider struct {
 }
 
 // New returns a provider named name for the given issuer URL and client ID.
-// public is the config exposed to the frontend via /api/status.
 // Discovery happens lazily on first login, so an unreachable issuer does not
 // prevent the server from starting.
-func New(name, issuer, clientID string, public map[string]string) *Provider {
-	return &Provider{name: name, issuer: issuer, clientID: clientID, public: public}
+func New(name, issuer, clientID string) *Provider {
+	return &Provider{name: name, issuer: issuer, clientID: clientID}
 }
 
 // Name implements api.IdentityProvider.
 func (p *Provider) Name() string { return p.name }
-
-// PublicConfig implements api.PublicConfigProvider.
-func (p *Provider) PublicConfig() map[string]string { return p.public }
 
 func (p *Provider) clock() time.Time {
 	if p.now != nil {
@@ -130,12 +125,14 @@ func (p *Provider) Exchange(ctx context.Context, r *http.Request) (api.Identity,
 }
 
 // Builtin describes a built-in identity provider activated by two env vars.
-// Further built-ins (keycloak, google, ...) are just more entries.
+// Both are PUBLIC_* variables: the frontend needs the same values and reads
+// them via /api/config. Further built-ins (keycloak, google, ...) are just
+// more entries.
 type Builtin struct {
 	Name        string // reserved provider name, e.g. "auth0"
 	Title       string // for messages, e.g. "Auth0"
-	DomainEnv   string // e.g. "AUTH0_DOMAIN"
-	ClientIDEnv string // e.g. "AUTH0_CLIENT_ID"
+	DomainEnv   string // e.g. "PUBLIC_AUTH0_DOMAIN"
+	ClientIDEnv string // e.g. "PUBLIC_AUTH0_CLIENT_ID"
 	Issuer      func(domain string) string
 }
 
@@ -144,8 +141,8 @@ var Builtins = []Builtin{
 	{
 		Name:        "auth0",
 		Title:       "Auth0",
-		DomainEnv:   "AUTH0_DOMAIN",
-		ClientIDEnv: "AUTH0_CLIENT_ID",
+		DomainEnv:   "PUBLIC_AUTH0_DOMAIN",
+		ClientIDEnv: "PUBLIC_AUTH0_CLIENT_ID",
 		Issuer:      func(domain string) string { return "https://" + domain + "/" },
 	},
 }
@@ -178,10 +175,7 @@ func FromEnv(getenv func(string) string) ([]api.IdentityProvider, error) {
 			return nil, fmt.Errorf("%s: %s is set but %s is not; set both to enable %s, or neither to disable it",
 				b.Name, b.DomainEnv, b.ClientIDEnv, b.Title)
 		}
-		out = append(out, New(b.Name, b.Issuer(domain), clientID, map[string]string{
-			"domain":    domain,
-			"client_id": clientID,
-		}))
+		out = append(out, New(b.Name, b.Issuer(domain), clientID))
 	}
 	return out, nil
 }

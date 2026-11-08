@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	cli "github.com/flocko-motion/schemaf/cli"
 	"github.com/spf13/cobra"
@@ -15,11 +16,17 @@ import (
 //go:embed frontend.gen.go.tmpl
 var frontendGenTemplate string
 
+//go:embed config.gen.ts.tmpl
+var configGenTS string
+
+// configGenTSOut is the generated runtime config reader (see EXTEND.md, Runtime config).
+const configGenTSOut = "frontend/src/api/generated/config.gen.ts"
+
 func newFrontendCmd(_ *cli.Context) *cobra.Command {
 	return &cobra.Command{
 		Use:   "frontend",
-		Short: "Generate go/frontend.gen.go",
-		Long:  `Generates go/frontend.gen.go with embedded frontend assets for production serving.`,
+		Short: "Generate go/frontend.gen.go and config.gen.ts",
+		Long:  `Generates go/frontend.gen.go with embedded frontend assets for production serving, and frontend/src/api/generated/config.gen.ts (runtime config reader).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFrontendGen()
 		},
@@ -50,5 +57,22 @@ func runFrontendGen() error {
 	}
 
 	cli.Success("Generated %s", outPath)
+
+	if err := writeConfigGenTS(); err != nil {
+		return err
+	}
+	cli.Success("Generated %s", configGenTSOut)
+	return nil
+}
+
+// writeConfigGenTS writes the runtime config reader. Its content is the same
+// for every project.
+func writeConfigGenTS() error {
+	if err := os.MkdirAll(filepath.Dir(configGenTSOut), 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(configGenTSOut), err)
+	}
+	if err := os.WriteFile(configGenTSOut, []byte(configGenTS), 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", configGenTSOut, err)
+	}
 	return nil
 }

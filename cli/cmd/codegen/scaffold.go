@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strings"
 
 	cli "github.com/flocko-motion/schemaf/cli"
 	"github.com/spf13/cobra"
@@ -107,17 +109,75 @@ func scaffoldFrontend(data map[string]any) error {
 	return nil
 }
 
-// validateFrontend checks that required convention files exist.
+// validateFrontend checks that required convention files exist and that the
+// runtime config setup (build target, old-browser check, config import) is in
+// place. Projects scaffolded before runtime config get told what to add.
 func validateFrontend() error {
 	required := []string{
 		"frontend/package.json",
 		"frontend/vite.config.ts",
 		"frontend/index.html",
+		"frontend/src/main.tsx",
 	}
 	for _, path := range required {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return fmt.Errorf("missing %s — schemaf requires Vite+React+TypeScript frontend conventions. See EXTEND.md", path)
 		}
 	}
+
+	var missing []string
+	for _, c := range runtimeConfigChecks {
+		raw, err := os.ReadFile(c.path)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", c.path, err)
+		}
+		if !c.ok.Match(raw) {
+			missing = append(missing, fmt.Sprintf("  %s: %s\n%s", c.path, c.what, indent(c.snippet, "      ")))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("frontend is missing the runtime config setup (see EXTEND.md, Runtime config):\n%s",
+			strings.Join(missing, "\n"))
+	}
 	return nil
+}
+
+// runtimeConfigChecks are the pieces of the scaffold that runtime config
+// (config.gen.ts) relies on.
+var runtimeConfigChecks = []struct {
+	path    string
+	ok      *regexp.Regexp
+	what    string
+	snippet string
+}{
+	{
+		path: "frontend/vite.config.ts",
+		// es2022 or newer; config.gen.ts uses top-level await.
+		ok:   regexp.MustCompile(`target\s*:\s*["'](es202[2-9]|esnext)["']`),
+		what: "add the build target (config.gen.ts uses top-level await)",
+		snippet: `build: {
+  target: "es2022",
+},`,
+	},
+	{
+		path: "frontend/index.html",
+		ok:   regexp.MustCompile(`__schemaf_boot`),
+		what: "add the old-browser check to <head>",
+		snippet: `<script>
+  // schemaf: old-browser check (see EXTEND.md, Runtime config)
+  window.addEventListener("load", function () {
+    if (!window.__schemaf_boot) alert("This browser is too old to run this app. Please update it.");
+  });
+</script>`,
+	},
+	{
+		path:    "frontend/src/main.tsx",
+		ok:      regexp.MustCompile(`import\s+["']\./api/generated/config\.gen(\.ts)?["']`),
+		what:    "add as the first import (loads runtime config before the app renders)",
+		snippet: `import "./api/generated/config.gen";`,
+	},
+}
+
+func indent(s, prefix string) string {
+	return prefix + strings.ReplaceAll(s, "\n", "\n"+prefix)
 }

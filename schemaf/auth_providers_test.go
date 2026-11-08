@@ -29,7 +29,7 @@ func names(ps []api.IdentityProvider) string {
 }
 
 func TestIdentityProvidersFor(t *testing.T) {
-	full := map[string]string{"AUTH0_DOMAIN": "x.eu.auth0.com", "AUTH0_CLIENT_ID": "abc"}
+	full := map[string]string{"PUBLIC_AUTH0_DOMAIN": "x.eu.auth0.com", "PUBLIC_AUTH0_CLIENT_ID": "abc"}
 
 	t.Run("no env, no providers", func(t *testing.T) {
 		a := &App{}
@@ -41,8 +41,8 @@ func TestIdentityProvidersFor(t *testing.T) {
 
 	t.Run("auth0 half configured: startup error", func(t *testing.T) {
 		a := &App{hasDB: true}
-		_, err := a.identityProvidersFor(envOf(map[string]string{"AUTH0_DOMAIN": "x.eu.auth0.com"}))
-		want := "auth0: AUTH0_DOMAIN is set but AUTH0_CLIENT_ID is not; set both to enable Auth0, or neither to disable it"
+		_, err := a.identityProvidersFor(envOf(map[string]string{"PUBLIC_AUTH0_DOMAIN": "x.eu.auth0.com"}))
+		want := "auth0: PUBLIC_AUTH0_DOMAIN is set but PUBLIC_AUTH0_CLIENT_ID is not; set both to enable Auth0, or neither to disable it"
 		if err == nil || err.Error() != want {
 			t.Fatalf("err = %v, want %q", err, want)
 		}

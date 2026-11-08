@@ -82,12 +82,6 @@ func (p fakeProvider) Exchange(_ context.Context, r *http.Request) (Identity, er
 	return Identity{Subject: body.User, Claims: map[string]any{"email": body.User + "@example.com"}}, nil
 }
 
-type publicFakeProvider struct{ fakeProvider }
-
-func (publicFakeProvider) PublicConfig() map[string]string {
-	return map[string]string{"domain": "d.example", "client_id": "cid"}
-}
-
 // authEnv sets up a server with a memStore, a fake provider and a
 // controllable clock. It restores globals on cleanup.
 type authEnv struct {
@@ -495,27 +489,28 @@ func TestStartSession(t *testing.T) {
 
 func TestStatusProviders(t *testing.T) {
 	newAuthEnv(t)
-	get := func() map[string]any {
+	get := func() string {
 		t.Helper()
 		rec := httptest.NewRecorder()
 		StatusHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/status", nil))
-		var body map[string]any
-		json.NewDecoder(rec.Body).Decode(&body)
-		return body["auth"].(map[string]any)["providers"].(map[string]any)
+		var body struct {
+			Auth struct {
+				Providers json.RawMessage `json:"providers"`
+			} `json:"auth"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return string(body.Auth.Providers)
 	}
 
 	SetIdentityProviders(nil)
-	if p := get(); len(p) != 0 {
-		t.Errorf("no providers: %v", p)
+	if p := get(); p != "[]" {
+		t.Errorf("no providers: got %s, want []", p)
 	}
 
-	SetIdentityProviders([]IdentityProvider{publicFakeProvider{fakeProvider{"auth0"}}, fakeProvider{"passkey"}})
-	p := get()
-	a0, _ := p["auth0"].(map[string]any)
-	if len(a0) != 2 || a0["domain"] != "d.example" || a0["client_id"] != "cid" {
-		t.Errorf("auth0 config = %v", p["auth0"])
-	}
-	if pk, ok := p["passkey"].(map[string]any); !ok || len(pk) != 0 {
-		t.Errorf("custom provider without public config = %v, want {}", p["passkey"])
+	SetIdentityProviders([]IdentityProvider{fakeProvider{"auth0"}, fakeProvider{"passkey"}})
+	if p := get(); p != `["auth0","passkey"]` {
+		t.Errorf("providers: got %s, want [\"auth0\",\"passkey\"]", p)
 	}
 }

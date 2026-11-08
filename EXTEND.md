@@ -6,6 +6,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 
 - [main.go Wiring](#maingo-wiring)
 - [Frontend](#frontend)
+  - [Runtime config: `PUBLIC_*`](#runtime-config-public_)
 - [Built-in Endpoints](#built-in-endpoints)
 - [Endpoint Interface](#endpoint-interface)
 - [Authentication](#authentication)
@@ -103,7 +104,9 @@ app.SetFrontend(FrontendFS())
 `./schemaf.sh codegen` does two things for the frontend:
 
 1. **Scaffold** — if `frontend/` doesn't exist, creates the full React+Vite+TS setup and runs `npm install`
-2. **Generate** — creates `go/frontend.gen.go` (embeds `frontend/dist/` into the Go binary) and `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec)
+2. **Generate** — creates `go/frontend.gen.go` (embeds `frontend/dist/` into the Go binary), `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec) and `frontend/src/api/generated/config.gen.ts` ([runtime config](#runtime-config-public_))
+
+If `frontend/` exists, codegen validates it: the required files must be present, and `vite.config.ts`, `index.html` and `src/main.tsx` must contain the [runtime config](#runtime-config-public_) setup. If something is missing, codegen stops and prints what to add.
 
 ### Development workflow
 
@@ -126,12 +129,80 @@ In dev mode, the Go server reverse-proxies all non-API requests to the Vite dev 
 
 The generated `Dockerfile` includes a Node build stage that compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
 
+### Runtime config: `PUBLIC_*`
+
+The frontend is built once and the same build is deployed to many instances, so settings that differ per instance (an identity provider's client settings, a Sentry DSN, the public URL, ...) can't be baked in at build time. The server hands them to the browser at runtime instead.
+
+**Declaring a value:** every environment variable whose name starts with `PUBLIC_` is public frontend config. There is nothing to register. Put the variables into the instance's env file (see [Secrets](INSTALL.md#secrets)), next to `DB_PASS`:
+
+```bash
+# ~/.myapp/dev/etc/env
+DB_PASS=changeme
+PUBLIC_SENTRY_DSN=https://abc123@o0.ingest.sentry.io/0
+```
+
+- Every `PUBLIC_*` value is sent to every browser that opens the app. **Never put a secret in a `PUBLIC_` variable.**
+- Variables without the prefix are never exposed.
+- Dev: `schemaf.sh` loads `~/.<name>/dev/etc/env` and the backend runs natively, so it sees the variables directly. Prod: the generated `compose.gen.yml` passes the whole `~/.<name>/etc/env` to the backend container (`env_file`).
+- The server reads the variables once at startup. After changing a value, restart the server.
+
+**Serving:** `GET /api/config` returns all `PUBLIC_*` variables as a flat JSON object, keyed by their full name:
+
+```json
+{ "PUBLIC_SENTRY_DSN": "https://abc123@o0.ingest.sentry.io/0", "PUBLIC_AUTH0_DOMAIN": "myapp.eu.auth0.com" }
+```
+
+- Open (no auth), sent with `Cache-Control: no-cache`.
+- A variable that is set but empty is included as `""`. A variable that isn't set is absent.
+- `/api/config` is not in `openapi.json` and not in the generated API clients. Read it through `config()`.
+
+**Reading a value in the frontend:** import `config` from the generated `config.gen.ts`:
+
+```ts
+import { config } from "./api/generated/config.gen";
+
+const dsn = config("PUBLIC_SENTRY_DSN"); // string | undefined
+```
+
+- `config.gen.ts` loads `/api/config` with a top-level `await` the first time it is imported. Every module that imports it waits for the load, so `config()` always returns the loaded value. There is nothing to call before using it.
+- Keys are plain strings: which variables exist depends on the deployment, not on the code. An unset variable returns `undefined`.
+- The scaffolded `src/main.tsx` imports `config.gen.ts` first, so the config is loaded before the app renders.
+- If the load fails (backend down, non-2xx response, invalid JSON), the browser shows the alert `Could not load app configuration` and the app does not start.
+
+**Browser support:** the top-level `await` needs `build.target: "es2022"` in `vite.config.ts` (Vite's default target is older). Supported browsers: Chrome/Edge 89+, Firefox 89+, Safari 15+ (all released in 2021). An older browser can't run the app at all. For that case the scaffolded `index.html` contains a small inline script: if the app hasn't started once the page has loaded, it shows the alert `This browser is too old to run this app. Please update it.` It stays quiet when the config load failed, which already showed its own alert.
+
+**Existing projects:** frontends scaffolded before runtime config need three additions. Codegen checks all three and stops with a message listing what is missing.
+
+1. `frontend/vite.config.ts`: add the build target.
+   ```ts
+   export default defineConfig({
+     // ...
+     build: {
+       target: "es2022",
+     },
+   });
+   ```
+2. `frontend/index.html`: add this script to `<head>`, unchanged:
+   ```html
+   <script>
+     // schemaf: old-browser check (see EXTEND.md, Runtime config)
+     window.addEventListener("load", function () {
+       if (!window.__schemaf_boot) alert("This browser is too old to run this app. Please update it.");
+     });
+   </script>
+   ```
+3. `frontend/src/main.tsx`: add this as the first import, so the config loads before the app renders and the old-browser check sees the app start:
+   ```ts
+   import "./api/generated/config.gen";
+   ```
+
 ## Built-in Endpoints
 
 The framework provides these endpoints out of the box:
 
 - `/api/health` — health check (returns `{"status": "ok", "db": "ok", ...}`)
-- `/api/status` — service status (uptime, backup status, active [identity providers](#public-provider-config-apistatus), custom providers)
+- `/api/status` — service status (uptime, backup status, active [identity providers](#active-providers-apistatus), custom providers)
+- `/api/config` — the instance's public frontend config (see [Runtime config](#runtime-config-public_))
 - `/api/user/me` — current user info (requires auth)
 - `/api/auth/{provider}/login`, `/api/auth/logout`, `/api/auth/refresh` — login and sessions (see [Authentication](#authentication))
 - `/openapi.json` — OpenAPI 3.0 spec
@@ -177,7 +248,7 @@ The response will include your provider alongside the built-in fields:
   "status": "ok",
   "uptime": "2h30m",
   "backup": { "last": "...", "ago": "..." },
-  "auth": { "providers": {} },
+  "auth": { "providers": [] },
   "s3": { "bucket": "my-bucket", "connected": true }
 }
 ```
@@ -284,7 +355,7 @@ You write the struct. Everything else is generated or framework-provided.
 
 schemaf has built-in auth, fully managed by the framework:
 
-- **Per-endpoint**: return `true` from `Auth()` to require a valid token (see [Endpoint Interface](#endpoint-interface)). `/api/health` and `/api/status` are always open.
+- **Per-endpoint**: return `true` from `Auth()` to require a valid token (see [Endpoint Interface](#endpoint-interface)). `/api/health`, `/api/status` and `/api/config` are always open.
 - **One token, two transports**: schemaf's token (an HMAC-SHA256 JWT) is accepted from the session cookie or from `Authorization: Bearer <token>`. Browsers use the cookie; scripts and other servers use Bearer. If both are present, Bearer wins.
 - **Signing key is auto-managed**: generated on first boot and stored in Postgres (`_schemaf_config`). Nothing to configure, no secret to manage.
 - In a handler, `api.Subject(ctx)` returns the authenticated subject; `/api/user/me` returns the current user.
@@ -349,32 +420,25 @@ app.OnLogin(func(ctx context.Context, id api.Identity) (string, error) {
 - Identity providers need a database (sessions live in Postgres). Any active provider without `app.AddDb(...)` is a startup error.
 - Registering a provider named `auth0` (reserved for the built-in) or two providers with the same `Name()` is a startup error.
 - The provider is consulted **only at login**. A session outlives changes at the provider, for example the account being deleted there. Revoke sessions from your app if that matters (see [Sessions](#sessions)).
-- Active providers are logged when the server starts and listed in `/api/status` (see [Public provider config](#public-provider-config-apistatus)).
+- Active providers are logged when the server starts and listed in `/api/status` (see [Active providers](#active-providers-apistatus)).
 
-#### Public provider config: `/api/status`
+#### Active providers: `/api/status`
 
-`/api/status` lists every active provider under `auth.providers`, keyed by name, together with the public client config the frontend needs to start that provider's sign-in:
+`/api/status` lists the names of the active providers under `auth.providers`:
 
 ```json
 {
   "status": "ok",
-  "auth": {
-    "providers": {
-      "auth0": { "domain": "myapp.eu.auth0.com", "client_id": "Xb4tq0LgYxZ1Ux8Gm3aP7cVh2nKw9sRd" },
-      "passkey": {}
-    }
-  }
+  "auth": { "providers": ["auth0", "passkey"] }
 }
 ```
 
-- A key is present only for an active provider: present means "show this login button". No providers gives `"providers": {}`.
-- These values are per instance, so the frontend reads them at runtime instead of baking them into the build.
-- Only public values appear here. For `auth0` that is `domain` and `client_id`, which ship in every Auth0 SPA bundle anyway; nothing else from the environment is exposed.
-- Your own providers appear with `{}`. To expose public config, add an optional method to the provider: `PublicConfig() map[string]string`. Put only values that are safe for anyone to read in it.
+- A name is present only for an active provider: present means "show this login button". No providers gives `"providers": []`.
+- The client settings the frontend needs to start a provider's sign-in (for `auth0`: domain and client ID) are per instance. They come from [runtime config](#runtime-config-public_), not from `/api/status`. If your own provider needs such settings in the frontend, give them `PUBLIC_` variables.
 
 ### Activating Auth0
 
-The built-in `auth0` provider needs no code. Set two environment variables and it is active.
+The built-in `auth0` provider needs no code. Set two environment variables and it is active. Both are `PUBLIC_` variables: the frontend needs the same two values, and reads them through [runtime config](#runtime-config-public_).
 
 #### 1. Create the Auth0 application
 
@@ -394,45 +458,49 @@ Put the two values into the project's secrets file (see [Secrets](INSTALL.md#sec
 ```bash
 # ~/.myapp/dev/etc/env
 DB_PASS=changeme
-AUTH0_DOMAIN=myapp-dev.eu.auth0.com
-AUTH0_CLIENT_ID=Xb4tq0LgYxZ1Ux8Gm3aP7cVh2nKw9sRd
+PUBLIC_AUTH0_DOMAIN=myapp-dev.eu.auth0.com
+PUBLIC_AUTH0_CLIENT_ID=Xb4tq0LgYxZ1Ux8Gm3aP7cVh2nKw9sRd
 ```
 
-- `AUTH0_DOMAIN` is the bare domain (a leading `https://` or trailing `/` is stripped). If you use an Auth0 custom domain, use that.
+- `PUBLIC_AUTH0_DOMAIN` is the bare domain (the server strips a leading `https://` or trailing `/`; the frontend gets the value as written). If you use an Auth0 custom domain, use that.
 - The values are **per instance**: each deployment reads its own env file, so two deployments can use two Auth0 applications (or tenants), or one can leave Auth0 off.
-- `schemaf.sh` loads the env file (`dev` → `dev/etc/env`, `run` → `etc/env`), and the generated `compose.gen.yml` passes `AUTH0_DOMAIN` and `AUTH0_CLIENT_ID` through to the backend container.
+- Both values are public: they ship in every Auth0 SPA anyway. `/api/config` sends them to the browser.
+- `schemaf.sh` loads the env file (`dev` → `dev/etc/env`, `run` → `etc/env`), and the generated `compose.gen.yml` passes the production env file to the backend container.
 
 #### 3. What activation does
 
 The variables are checked when the server starts (`server`, `dev`), never for other CLI commands:
 
-| `AUTH0_DOMAIN` | `AUTH0_CLIENT_ID` | Result |
+| `PUBLIC_AUTH0_DOMAIN` | `PUBLIC_AUTH0_CLIENT_ID` | Result |
 |---|---|---|
-| set | set | `auth0` is active. The startup log shows `"msg":"identity providers active","providers":["auth0"]` and `/api/status` lists it under `auth.providers.auth0` with its `domain` and `client_id`. |
+| set | set | `auth0` is active. The startup log shows `"msg":"identity providers active","providers":["auth0"]` and `/api/status` lists `"auth0"` under `auth.providers`. |
 | unset | unset | Auth0 is off. `POST /api/auth/auth0/login` returns `404 provider not configured`. |
-| one set | the other unset | The server refuses to start: `auth0: AUTH0_DOMAIN is set but AUTH0_CLIENT_ID is not; set both to enable Auth0, or neither to disable it` |
+| one set | the other unset | The server refuses to start: `auth0: PUBLIC_AUTH0_DOMAIN is set but PUBLIC_AUTH0_CLIENT_ID is not; set both to enable Auth0, or neither to disable it` |
+
+An empty value counts as unset.
 
 Auth0 needs a database like every provider (`app.AddDb(...)`).
 
 #### 4. Frontend: sign in and post the ID token
 
-The frontend asks `/api/status` whether Auth0 is active and, if so, which `domain` and `client_id` to use. Never hardcode them in the frontend: they differ per instance. It then signs in with the Auth0 SPA SDK (`npm install @auth0/auth0-spa-js`, or `@auth0/auth0-react` for its React wrapper), takes the **ID token** it received, and posts it to schemaf's login route. From then on, the session cookie authenticates every API call automatically.
+The frontend reads the domain and client ID with `config()` (see [Runtime config](#runtime-config-public_)). Never hardcode them in the frontend: they differ per instance. If they are set, it signs in with the Auth0 SPA SDK (`npm install @auth0/auth0-spa-js`, or `@auth0/auth0-react` for its React wrapper), takes the **ID token** it received, and posts it to schemaf's login route. From then on, the session cookie authenticates every API call automatically.
 
 ```ts
 import { createAuth0Client } from "@auth0/auth0-spa-js";
 import { Api } from "./api/generated/api.gen";
+import { config } from "./api/generated/config.gen";
 
 const api = new Api();
 
 // 1. Is Auth0 active on this instance, and with which application?
-const status = await fetch("/api/status").then((r) => r.json());
-const cfg = status.auth?.providers?.auth0; // undefined → don't show the login button
+const domain = config("PUBLIC_AUTH0_DOMAIN");
+const clientId = config("PUBLIC_AUTH0_CLIENT_ID"); // unset → don't show the login button
 
-if (cfg) {
+if (domain && clientId) {
   // 2. Initialise the SDK with this instance's values.
   const auth0 = await createAuth0Client({
-    domain: cfg.domain,
-    clientId: cfg.client_id,
+    domain,
+    clientId,
     authorizationParams: { redirect_uri: window.location.origin },
   });
 
@@ -479,12 +547,12 @@ await auth0.logout({ logoutParams: { returnTo: window.location.origin } });
 
 | Symptom | Cause |
 |---|---|
-| `404 provider not configured`, or no `auth0` in `/api/status` | Auth0 isn't active on this server: `AUTH0_DOMAIN` / `AUTH0_CLIENT_ID` are missing from the env file the server was started with. |
+| `404 provider not configured`, or no `auth0` in `/api/status` | Auth0 isn't active on this server: `PUBLIC_AUTH0_DOMAIN` / `PUBLIC_AUTH0_CLIENT_ID` are missing from the env file the server was started with. Projects set up before runtime config used `AUTH0_DOMAIN` / `AUTH0_CLIENT_ID`: rename them. |
 | `403 auth0: token issued too long ago (iat … ago, max 5m0s) …` | The ID token's `iat` is more than 5 minutes old. Post the token right after sign-in, not a cached one from an earlier session. If it happens right after sign-in, check the server's clock. |
-| `403 auth0: oidc: id token issued by a different provider, expected "https://…/" got "https://…/"` | `AUTH0_DOMAIN` differs from the domain that issued the token, e.g. the tenant domain on the server but a custom domain in the frontend. Use the same domain in both. |
-| `403 auth0: oidc: expected audience "…" got ["…"]` | The frontend signed in with a different application than `AUTH0_CLIENT_ID`. Use the same Client ID in both. |
-| `503 auth0: OIDC discovery for https://…/ failed` | The server can't reach `https://<AUTH0_DOMAIN>/.well-known/openid-configuration`: a typo in the domain, or no outbound network. Discovery runs on the first login and is retried on the next one, so a temporary outage does not stop the server from starting. |
-| Server won't start: `auth0: AUTH0_DOMAIN is set but AUTH0_CLIENT_ID is not` | Only one of the two variables is set. Set both, or neither. |
+| `403 auth0: oidc: id token issued by a different provider, expected "https://…/" got "https://…/"` | `PUBLIC_AUTH0_DOMAIN` differs from the domain that issued the token, e.g. the tenant domain on the server but a custom domain in the frontend. Use the same domain in both. |
+| `403 auth0: oidc: expected audience "…" got ["…"]` | The frontend signed in with a different application than `PUBLIC_AUTH0_CLIENT_ID`. Use the same Client ID in both. |
+| `503 auth0: OIDC discovery for https://…/ failed` | The server can't reach `https://<PUBLIC_AUTH0_DOMAIN>/.well-known/openid-configuration`: a typo in the domain, or no outbound network. Discovery runs on the first login and is retried on the next one, so a temporary outage does not stop the server from starting. |
+| Server won't start: `auth0: PUBLIC_AUTH0_DOMAIN is set but PUBLIC_AUTH0_CLIENT_ID is not` | Only one of the two variables is set. Set both, or neither. |
 
 ### Writing your own provider
 
@@ -834,8 +902,11 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
    - Generates `frontend/src/api/generated/api.gen.ts` — type-safe client for your frontend
    - No running server needed
 
+   Codegen also writes `frontend/src/api/generated/config.gen.ts`, the reader for [runtime config](#runtime-config-public_).
+
 5. **Compose → compose.gen.yml**
    - Merges schemaf's built-in compose (backend, Postgres) with your `compose/*.yml`
+   - The backend service loads the production env file `~/.<name>/etc/env` (`env_file`), so every variable in it, including `PUBLIC_*` [runtime config](#runtime-config-public_), reaches the container
    - Files matching `*.dev.yml` are dev/test only — not included in `compose.gen.yml` (prod)
    - Used by `./schemaf.sh run` (prod) and `./schemaf.sh dev` (dev)
 

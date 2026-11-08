@@ -110,7 +110,7 @@ func loginReq(token string) *http.Request {
 
 func TestExchange(t *testing.T) {
 	f := newFakeIssuer(t)
-	p := New("test", f.issuer(), "client-123", nil)
+	p := New("test", f.issuer(), "client-123")
 	p.client = f.srv.Client()
 
 	otherKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -190,8 +190,8 @@ func TestFromEnv(t *testing.T) {
 	})
 
 	for _, half := range []map[string]string{
-		{"AUTH0_DOMAIN": "x.auth0.com"},
-		{"AUTH0_CLIENT_ID": "abc"},
+		{"PUBLIC_AUTH0_DOMAIN": "x.auth0.com"},
+		{"PUBLIC_AUTH0_CLIENT_ID": "abc"},
 	} {
 		t.Run("half set: error", func(t *testing.T) {
 			_, err := FromEnv(env(half))
@@ -202,17 +202,13 @@ func TestFromEnv(t *testing.T) {
 	}
 
 	t.Run("both set: active", func(t *testing.T) {
-		ps, err := FromEnv(env(map[string]string{"AUTH0_DOMAIN": "https://x.eu.auth0.com/", "AUTH0_CLIENT_ID": "abc"}))
+		ps, err := FromEnv(env(map[string]string{"PUBLIC_AUTH0_DOMAIN": "https://x.eu.auth0.com/", "PUBLIC_AUTH0_CLIENT_ID": "abc"}))
 		if err != nil || len(ps) != 1 {
 			t.Fatalf("got %v, %v", ps, err)
 		}
 		p := ps[0].(*Provider)
 		if p.Name() != "auth0" || p.issuer != "https://x.eu.auth0.com/" || p.clientID != "abc" {
 			t.Errorf("provider = %+v", p)
-		}
-		cfg := p.PublicConfig()
-		if len(cfg) != 2 || cfg["domain"] != "x.eu.auth0.com" || cfg["client_id"] != "abc" {
-			t.Errorf("public config = %v", cfg)
 		}
 	})
 }
