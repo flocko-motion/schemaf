@@ -93,9 +93,9 @@ func runCompose(ctx *cli.Context, composeFile, devMode, nativeMode string, skipB
 
 	// Tear down any existing stack first (clean slate, like run.sh did)
 	cli.Info("Cleaning up existing stack...")
-	downArgs := buildDockerComposeArgs(files)
+	downArgs := buildComposeArgs(files)
 	downArgs = append(downArgs, "down")
-	_ = runDockerCompose(downArgs) // ignore errors (may not be running)
+	_ = runContainerCompose(downArgs) // ignore errors (may not be running)
 	fmt.Println()
 
 	// Kill native instances of services that will run in compose
@@ -115,8 +115,8 @@ func runCompose(ctx *cli.Context, composeFile, devMode, nativeMode string, skipB
 		}
 	}
 
-	// Build docker compose args
-	composeArgs := buildDockerComposeArgs(files)
+	// Build compose args
+	composeArgs := buildComposeArgs(files)
 	composeArgs = append(composeArgs, "up", "-d")
 
 	if wait {
@@ -138,12 +138,12 @@ func runCompose(ctx *cli.Context, composeFile, devMode, nativeMode string, skipB
 	}
 
 	if devMode != "" {
-		cli.Info("Dev mode: running only [%s] in Docker", strings.Join(includeSvcs, ", "))
+		cli.Info("Dev mode: running only [%s] in containers", strings.Join(includeSvcs, ", "))
 		fmt.Println()
 	}
 
-	if err := runDockerCompose(composeArgs); err != nil {
-		return fmt.Errorf("docker compose up failed: %w", err)
+	if err := runContainerCompose(composeArgs); err != nil {
+		return fmt.Errorf("compose up failed: %w", err)
 	}
 
 	cli.Success("Started: %s", strings.Join(includeSvcs, ", "))

@@ -6,41 +6,63 @@ package run
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	cli "github.com/flocko-motion/schemaf/cli"
 )
 
 func newPrerunCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    "prerun",
-		Short:  "Stop conflicting dev services before production start",
-		Long:   `Checks if dev compose services are running and stops them. Called by schemaf.sh before starting production compose.`,
-		Hidden: true,
+		Use:   "prerun <run|test> <project-name>",
+		Short: "Check the container runtime before schemaf.sh starts containers",
+		Long: `Called by schemaf.sh before it starts containers for "run" or "test".
+
+Both: checks the selected container runtime (SCHEMAF_RUNTIME) and its compose,
+and refuses to start if the other runtime holds the project's Postgres volume.
+"run" additionally stops dev compose services, which can't coexist with production.`,
+		Hidden:       true,
+		SilenceUsage: true, // errors here are runtime problems, not usage mistakes
+		Args:         cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return stopDevIfRunning()
+			mode, project := args[0], args[1]
+			if mode != "run" && mode != "test" {
+				return fmt.Errorf("prerun: unknown mode %q (want run or test)", mode)
+			}
+			if err := cli.CheckRuntime(project); err != nil {
+				return err
+			}
+			if mode == "run" {
+				return stopDevIfRunning()
+			}
+			return nil
 		},
 	}
 }
 
 // stopDevIfRunning checks if dev compose services are running and stops them.
 func stopDevIfRunning() error {
-	compose := []string{"docker", "compose", "-f", "compose.gen.yml", "-f", "compose.dev.gen.yml"}
+	compose := []string{"compose", "-f", "compose.gen.yml", "-f", "compose.dev.gen.yml"}
 
 	// Check if any dev services are running.
-	psArgs := append(compose, "ps", "-q")
-	out, err := exec.Command(psArgs[0], psArgs[1:]...).Output()
+	ps, err := cli.Container(append(compose, "ps", "-q")...)
+	if err != nil {
+		return err
+	}
+	out, err := ps.Output()
 	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
 		return nil
 	}
 
 	fmt.Fprintln(os.Stderr, "Stopping dev services before production start...")
-	downArgs := append(compose, "down")
-	cmd := exec.Command(downArgs[0], downArgs[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	down, err := cli.Container(append(compose, "down")...)
+	if err != nil {
+		return err
+	}
+	down.Stdout = os.Stdout
+	down.Stderr = os.Stderr
+	if err := down.Run(); err != nil {
 		return fmt.Errorf("stopping dev services: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "Dev services stopped.")

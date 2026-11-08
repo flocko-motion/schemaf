@@ -24,10 +24,10 @@ Example:
 				return err
 			}
 
-			composeArgs := buildDockerComposeArgs(files)
+			composeArgs := buildComposeArgs(files)
 			composeArgs = append(composeArgs, "down")
 
-			if err := runDockerCompose(composeArgs); err != nil {
+			if err := runContainerCompose(composeArgs); err != nil {
 				return err
 			}
 

@@ -29,7 +29,9 @@ Common tasks and where they're documented (jump straight to the section):
 | Write & run tests | [EXTEND › Testing](EXTEND.md#testing) |
 | Configure database backups | [EXTEND › Database Backups](EXTEND.md#database-backups) |
 | Secrets / env files | [INSTALL › Secrets](INSTALL.md#secrets) |
-| Docker compose & extra services | [INSTALL › Docker Compose](INSTALL.md#docker-compose) |
+| Container runtime (podman / Docker) | [INSTALL › Container runtime](INSTALL.md#container-runtime) |
+| Move data from Docker to podman | [INSTALL › Migrating from Docker to podman](INSTALL.md#migrating-from-docker-to-podman) |
+| Compose & extra services | [INSTALL › Compose](INSTALL.md#compose) |
 | Ports, layout, config conventions | [Port Convention](#port-convention) · [Project Structure](#project-structure-normative) |
 
 ## Contents
@@ -51,7 +53,7 @@ Common tasks and where they're documented (jump straight to the section):
 schemaf deliberately reduces degrees of freedom. We cement:
 - Run scripts and CLI tooling
 - Code generation workflows (one command → everything)
-- Docker compose layout and dependency resolution
+- Container runtime (rootless podman), compose layout and dependency resolution
 - Port assignments
 - Database choice and migration patterns
 - Server architecture (the Go server is the gateway)
@@ -86,13 +88,18 @@ schemaf is **batteries-included**. These are built-in, not optional:
   - It is the one and only SQL database in a schemaf project
   - You add tables, migrations, and queries; the infrastructure is handled for you
   - See [Database](EXTEND.md#database) for details
-  - Need a graph DB, NoSQL store, or other data layer? Add it as a Docker container in your project's `compose/`
+  - Need a graph DB, NoSQL store, or other data layer? Add it as a container in your project's `compose/`
 - **API endpoints**: Structs implementing a typed interface — not plain functions
   - Request and response types are Go generics on the struct — the framework handles JSON decode, validate, encode
   - No boilerplate: your `Handle` method receives a typed request and returns a typed response
   - Codegen scans endpoint structs → generates `api.Provider` + full OpenAPI spec → generates TypeScript and Go clients
   - See [Endpoint Interface](EXTEND.md#endpoint-interface) for details
-- **Docker compose**: Built-in compose for backend and Postgres — merged with `compose/` in your project
+- **Container runtime**: rootless [podman](https://podman.io) with [docker-compose](https://docs.docker.com/compose/) by default; Docker on request (`SCHEMAF_RUNTIME=docker`)
+  - Docker's daemon is root-equivalent; rootless podman is the safer default for running other people's images and the database holding your users' data
+  - Same compose files and the same compose implementation for both runtimes — only the engine differs
+  - A missing or unusable tool stops schemaf with a message naming what's missing and how to fix it
+  - See [Container runtime](INSTALL.md#container-runtime)
+- **Compose**: Built-in compose for backend and Postgres — merged with `compose/` in your project
 - **Code generation**: One command generates all glue code — see [Code Generation](EXTEND.md#code-generation)
 - **Ports**: Fixed allocation (see below)
 - **Project entrypoint**: `schemaf.sh codegen`, `schemaf.sh test`, `schemaf.sh run`, `schemaf.sh dev`
@@ -105,7 +112,7 @@ Projects built with schemaf **add only creative logic**:
 - **Database queries**: Write SQL queries in `go/db/queries/`
 - **API handlers**: Write Go handlers in `go/api/`
 - **Frontend**: Any static site framework in `frontend/` (React, Vue, Svelte, etc.)
-- **Optional services**: Additional Docker containers if needed (Redis, workers, etc.)
+- **Optional services**: Additional containers if needed (Redis, workers, etc.)
 - **Optional CLI commands**: Custom subcommands via `app.AddSubcommand()`
 - **Tests**: Go tests and TypeScript integration tests
 
@@ -196,7 +203,7 @@ port = 6000    # optional, default 8000
 **Why a single port with offsets?**
 - One number to change, all services follow
 - No environment variables needed for service discovery
-- Docker compose networking "just works"
+- Compose networking "just works"
 - Clear convention: base+X for core, base+10+ for project services
 
 ## The One Binary Principle
@@ -208,7 +215,7 @@ schemaf collapses all of this into a single compiled binary:
 | What | How |
 |---|---|
 | HTTP server | `./myapp server` — runs inside the container |
-| Compose orchestration | `./schemaf.sh run/dev` — execs docker compose, then exits |
+| Compose orchestration | `./schemaf.sh run/dev` — runs `<runtime> compose` (podman by default), then exits |
 | Code generation | `./schemaf.sh codegen` — `go run`s the framework CLI, reads your files |
 | Database migrations | embedded SQL, applied automatically on server startup |
 | Frontend | embedded via `//go:embed` in production; proxied from frontend dev server in dev (no rebuild needed) |
