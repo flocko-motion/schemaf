@@ -19,6 +19,7 @@ import (
 	"text/template"
 
 	"github.com/spf13/cobra"
+	"github.com/flocko-motion/schemaf/api"
 	cli "github.com/flocko-motion/schemaf/cli"
 )
 
@@ -451,7 +452,8 @@ func writeEndpointsGen(endpoints []endpointInfo) error {
 // writeOpenAPIJSON generates openapi.json from the extracted endpoint info.
 // NOTE: This is an AST-based static generator. It does not require a running server.
 func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) error {
-	paths := map[string]any{}
+	// Framework auth routes (login, logout, refresh) are always part of the spec.
+	paths, authSchemas := api.AuthOpenAPI()
 
 	for _, ep := range endpoints {
 		method := strings.ToLower(ep.Method)
@@ -516,6 +518,9 @@ func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) e
 
 	// Build schemas for all structs referenced
 	schemas := buildSchemas(endpoints, structs)
+	for name, schema := range authSchemas {
+		schemas[name] = schema
+	}
 
 	spec := map[string]any{
 		"openapi": "3.0.0",

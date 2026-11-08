@@ -29,13 +29,15 @@ func RegisterStatus(name string, fn StatusProvider) {
 }
 
 // StatusHandler returns an http.Handler for GET /api/status.
-// Reports service uptime, last backup status, and any registered status providers.
+// Reports service uptime, last backup status, the names of the active identity
+// providers, and any registered status providers.
 // Always open (no auth required).
 func StatusHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]any{
 			"status": "ok",
 			"uptime": time.Since(startTime).Truncate(time.Second).String(),
+			"auth":   authStatus(),
 		}
 
 		if t, errStr := db.LastBackupStatus(); !t.IsZero() {

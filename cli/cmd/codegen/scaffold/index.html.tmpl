@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{.Name}}</title>
+    <script>
+      // schemaf: old-browser check (see EXTEND.md, Runtime config)
+      window.addEventListener("load", function () {
+        if (!window.__schemaf_boot) alert("This browser is too old to run this app. Please update it.");
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

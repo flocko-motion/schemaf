@@ -23,7 +23,10 @@ func newAPIGoCmd(_ *cli.Context) *cobra.Command {
 	}
 }
 
-const oapiCodegenPkg = "github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen"
+const (
+	oapiCodegenPkg = "github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen"
+	oapiRuntimePkg = "github.com/oapi-codegen/runtime"
+)
 
 func runAPIGo() error {
 	if _, err := os.Stat("gen/openapi.json"); os.IsNotExist(err) {
@@ -55,6 +58,17 @@ func runAPIGo() error {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("oapi-codegen: %w", err)
+	}
+
+	// The generated client imports the oapi-codegen runtime library for path
+	// parameters (e.g. /api/auth/{provider}/login, always in the spec).
+	// Make it a module dependency so the project compiles.
+	rt := exec.Command("go", "get", oapiRuntimePkg)
+	rt.Dir = "go"
+	rt.Stdout = os.Stdout
+	rt.Stderr = os.Stderr
+	if err := rt.Run(); err != nil {
+		return fmt.Errorf("go get oapi-codegen runtime: %w", err)
 	}
 	cli.Success("Generated go/apiclient/client.gen.go")
 	return nil
