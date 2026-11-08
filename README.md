@@ -80,7 +80,7 @@ schemaf is **batteries-included**. These are built-in, not optional:
   - Short-lived, auto-renewed tokens backed by revocable sessions in Postgres
   - Signing key is auto-generated on first boot and stored in Postgres (`_schemaf_config` table)
   - No configuration, no secrets to manage — the framework owns the key entirely
-  - Auth is declared per-endpoint (see [Endpoint Interface](EXTEND.md#endpoint-interface)) — `/health` and `/status` are always open
+  - Auth is declared per-endpoint at one of three levels — required, optional (signed-in users and guests on the same endpoint) or none (see [Auth levels](EXTEND.md#auth-levels)) — `/health` and `/status` are always open
 - **Database**: Postgres is the built-in, always-present SQL database
   - schemaf provisions and manages Postgres — no setup, no configuration
   - It is the one and only SQL database in a schemaf project

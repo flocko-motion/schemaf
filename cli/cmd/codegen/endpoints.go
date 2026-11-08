@@ -7,20 +7,22 @@ package codegen
 
 import (
 	"bytes"
-	"encoding/json"
 	_ "embed"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
-	"github.com/spf13/cobra"
 	"github.com/flocko-motion/schemaf/api"
 	cli "github.com/flocko-motion/schemaf/cli"
+	"github.com/spf13/cobra"
 )
 
 //go:embed endpoints.gen.go.tmpl
@@ -39,8 +41,10 @@ func newEndpointsCmd(ctx *cli.Context) *cobra.Command {
 		Long: `Scans go/api/*.go (excluding *.gen.go) for endpoint structs.
 
 An endpoint struct is any struct that implements:
-  Method() string, Path() string, Auth() bool,
-  Handle(ctx, req Req) (Resp, error)
+  Method() string, Path() string, Auth() api.AuthLevel,
+  Handle(ctx, req Req) (Resp, error)  or  HandleRaw(w, r) error
+
+A struct with that shape that can't be parsed is an error, never skipped.
 
 Generates:
   go/api/endpoints.gen.go  — Provider() that registers all endpoints
@@ -56,7 +60,7 @@ type endpointInfo struct {
 	StructName  string
 	Method      string
 	Path        string
-	Auth        bool
+	Auth        api.AuthLevel
 	ReqType     string // empty for raw endpoints
 	RespType    string // empty for raw endpoints
 	Summary     string
@@ -83,6 +87,11 @@ func runEndpointsGen(_ *cli.Context) error {
 		return fmt.Errorf("creating %s: %w", apiDir, err)
 	}
 
+	projectName, err := readProjectName()
+	if err != nil {
+		return fmt.Errorf("reading project name: %w", err)
+	}
+
 	endpoints, structs, err := scanAPIDir(apiDir)
 	if err != nil {
 		return fmt.Errorf("scanning %s: %w", apiDir, err)
@@ -102,7 +111,7 @@ func runEndpointsGen(_ *cli.Context) error {
 	}
 
 	// Generate openapi.json
-	if err := writeOpenAPIJSON(endpoints, structs); err != nil {
+	if err := writeOpenAPIJSON(projectName, endpoints, structs); err != nil {
 		return err
 	}
 
@@ -123,8 +132,7 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 	}
 
 	// Collect all method declarations and struct types across files
-	type methodKey struct{ recv, name string }
-	methods := map[methodKey]*ast.FuncDecl{}
+	methods := map[methodKey]methodDecl{}
 	allStructs := map[string]*ast.StructType{}
 	docComments := map[string]string{} // struct name → doc comment
 
@@ -140,7 +148,7 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 					if recv == "" {
 						continue
 					}
-					methods[methodKey{recv, d.Name.Name}] = d
+					methods[methodKey{recv, d.Name.Name}] = methodDecl{fn: d, file: file}
 				case *ast.GenDecl:
 					for _, spec := range d.Specs {
 						ts, ok := spec.(*ast.TypeSpec)
@@ -166,60 +174,31 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 		}
 	}
 
-	// Identify endpoint structs: must have Method, Path, Auth, and exactly one of Handle or HandleRaw
-	var endpoints []endpointInfo
+	names := make([]string, 0, len(allStructs))
 	for name := range allStructs {
-		methodFn, hasMethod := methods[methodKey{name, "Method"}]
-		pathFn, hasPath := methods[methodKey{name, "Path"}]
-		authFn, hasAuth := methods[methodKey{name, "Auth"}]
-		handleFn, hasHandle := methods[methodKey{name, "Handle"}]
-		_, hasHandleRaw := methods[methodKey{name, "HandleRaw"}]
+		names = append(names, name)
+	}
+	sort.Strings(names)
 
-		if !hasMethod || !hasPath || !hasAuth {
+	// Identify endpoint structs. A struct with Handle or HandleRaw and any of
+	// Method, Path, Auth has the endpoint shape: it is either a valid
+	// endpoint or a codegen error, never silently skipped.
+	var endpoints []endpointInfo
+	var errs []error
+	for _, name := range names {
+		ep, isEndpoint, err := parseEndpoint(name, methods)
+		if err != nil {
+			errs = append(errs, err)
 			continue
 		}
-		if hasHandle && hasHandleRaw {
-			return nil, nil, fmt.Errorf("endpoint %s has both Handle and HandleRaw — exactly one is allowed", name)
-		}
-		if !hasHandle && !hasHandleRaw {
+		if !isEndpoint {
 			continue
 		}
-
-		httpMethod, ok := extractStringReturn(methodFn.Body)
-		if !ok {
-			continue
-		}
-		routePath, ok := extractStringReturn(pathFn.Body)
-		if !ok {
-			continue
-		}
-		authRequired, ok := extractBoolReturn(authFn.Body)
-		if !ok {
-			continue
-		}
-
-		isRaw := hasHandleRaw
-		var reqType, respType string
-		if !isRaw {
-			reqType, respType, ok = extractHandleTypes(handleFn.Type)
-			if !ok {
-				continue
-			}
-		}
-
-		summary, description := splitDocComment(docComments[name], name)
-
-		endpoints = append(endpoints, endpointInfo{
-			StructName:  name,
-			Method:      httpMethod,
-			Path:        routePath,
-			Auth:        authRequired,
-			ReqType:     reqType,
-			RespType:    respType,
-			Summary:     summary,
-			Description: description,
-			IsRaw:       isRaw,
-		})
+		ep.Summary, ep.Description = splitDocComment(docComments[name], name)
+		endpoints = append(endpoints, ep)
+	}
+	if len(errs) > 0 {
+		return nil, nil, errors.Join(errs...)
 	}
 
 	// Build structInfo map for all structs in the package
@@ -231,6 +210,220 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 	return endpoints, structs, nil
 }
 
+type methodKey struct{ recv, name string }
+
+// methodDecl is a method declaration and the file it is declared in (for
+// resolving import aliases).
+type methodDecl struct {
+	fn   *ast.FuncDecl
+	file *ast.File
+}
+
+const schemafAPIImport = "github.com/flocko-motion/schemaf/api"
+
+// parseEndpoint checks whether struct name has the endpoint shape and, if
+// so, extracts it. isEndpoint is false only for structs that are clearly not
+// endpoints (no Handle/HandleRaw, or none of Method/Path/Auth).
+func parseEndpoint(name string, methods map[methodKey]methodDecl) (ep endpointInfo, isEndpoint bool, err error) {
+	methodFn, hasMethod := methods[methodKey{name, "Method"}]
+	pathFn, hasPath := methods[methodKey{name, "Path"}]
+	authFn, hasAuth := methods[methodKey{name, "Auth"}]
+	handleFn, hasHandle := methods[methodKey{name, "Handle"}]
+	rawFn, hasHandleRaw := methods[methodKey{name, "HandleRaw"}]
+
+	if !hasHandle && !hasHandleRaw {
+		if hasMethod && hasPath && hasAuth {
+			// Everything but the handler: almost certainly a misnamed Handle
+			// (e.g. Handler, HandleRAW). Don't let the endpoint vanish.
+			return ep, false, fmt.Errorf("endpoint %s has Method(), Path() and Auth() but no Handle or HandleRaw method: add `Handle(ctx context.Context, req Req) (Resp, error)` or `HandleRaw(w http.ResponseWriter, r *http.Request) error`", name)
+		}
+		return ep, false, nil
+	}
+	if !hasMethod && !hasPath && !hasAuth {
+		return ep, false, nil
+	}
+	var missing []string
+	for _, m := range []struct {
+		name string
+		ok   bool
+	}{{"Method()", hasMethod}, {"Path()", hasPath}, {"Auth()", hasAuth}} {
+		if !m.ok {
+			missing = append(missing, m.name)
+		}
+	}
+	if len(missing) > 0 {
+		return ep, false, fmt.Errorf("endpoint %s is missing %s: an endpoint needs Method(), Path(), Auth() and Handle or HandleRaw", name, strings.Join(missing, ", "))
+	}
+	if hasHandle && hasHandleRaw {
+		return ep, false, fmt.Errorf("endpoint %s has both Handle and HandleRaw — exactly one is allowed", name)
+	}
+
+	ep.StructName = name
+	if ep.Method, err = parseStringMethod(name, methodFn); err != nil {
+		return ep, false, err
+	}
+	if ep.Path, err = parseStringMethod(name, pathFn); err != nil {
+		return ep, false, err
+	}
+	if ep.Auth, err = parseAuthMethod(name, authFn); err != nil {
+		return ep, false, err
+	}
+	if hasHandleRaw {
+		ep.IsRaw = true
+		if err := checkHandleRaw(name, rawFn); err != nil {
+			return ep, false, err
+		}
+	} else if ep.ReqType, ep.RespType, err = parseHandle(name, handleFn); err != nil {
+		return ep, false, err
+	}
+	return ep, true, nil
+}
+
+// singleReturn returns the expression of a body consisting of exactly one
+// single-value return statement.
+func singleReturn(fn *ast.FuncDecl) (ast.Expr, bool) {
+	if fn.Body == nil || len(fn.Body.List) != 1 {
+		return nil, false
+	}
+	ret, ok := fn.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return nil, false
+	}
+	return ret.Results[0], true
+}
+
+// parseStringMethod reads Method() or Path(): it must be a single return of
+// a string literal.
+func parseStringMethod(structName string, m methodDecl) (string, error) {
+	fname := m.fn.Name.Name
+	expr, ok := singleReturn(m.fn)
+	lit, isLit := expr.(*ast.BasicLit)
+	if !ok || !isLit || lit.Kind != token.STRING {
+		return "", fmt.Errorf("endpoint %s: %s() must return a string literal, e.g. `func (e %s) %s() string { return %s }`", structName, fname, structName, fname, map[string]string{"Method": `"GET"`, "Path": `"/api/things"`}[fname])
+	}
+	v, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", fmt.Errorf("endpoint %s: %s(): %w", structName, fname, err)
+	}
+	if v == "" {
+		return "", fmt.Errorf("endpoint %s: %s() returns an empty string", structName, fname)
+	}
+	return v, nil
+}
+
+// importName returns the name under which file imports path ("." for a dot
+// import), or "" if it doesn't.
+func importName(file *ast.File, path, defaultName string) string {
+	for _, imp := range file.Imports {
+		p, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || p != path {
+			continue
+		}
+		if imp.Name != nil {
+			return imp.Name.Name
+		}
+		return defaultName
+	}
+	return ""
+}
+
+// isQualified reports whether expr names pkg.sel, where pkg is the file's
+// name for import path (a bare sel for a dot import).
+func isQualified(expr ast.Expr, file *ast.File, path, defaultName, sel string) bool {
+	pkg := importName(file, path, defaultName)
+	switch e := expr.(type) {
+	case *ast.SelectorExpr:
+		x, ok := e.X.(*ast.Ident)
+		return ok && pkg != "" && pkg != "." && x.Name == pkg && e.Sel.Name == sel
+	case *ast.Ident:
+		return pkg == "." && e.Name == sel
+	}
+	return false
+}
+
+var authLevels = map[string]api.AuthLevel{
+	"AuthNone":     api.AuthNone,
+	"AuthOptional": api.AuthOptional,
+	"AuthRequired": api.AuthRequired,
+}
+
+// parseAuthMethod reads Auth(): it must return api.AuthLevel and be a single
+// return of api.AuthNone, api.AuthOptional or api.AuthRequired (under the
+// file's import name for the schemaf api package).
+func parseAuthMethod(structName string, m methodDecl) (api.AuthLevel, error) {
+	res := m.fn.Type.Results
+	if res != nil && len(res.List) == 1 && len(res.List[0].Names) <= 1 {
+		if id, ok := res.List[0].Type.(*ast.Ident); ok && id.Name == "bool" {
+			return 0, fmt.Errorf("%s.Auth() returns bool; since schemaf v1.11.0 it returns api.AuthLevel: true → api.AuthRequired, false → api.AuthNone", structName)
+		}
+	}
+	if res == nil || len(res.List) != 1 || len(res.List[0].Names) > 1 ||
+		!isQualified(res.List[0].Type, m.file, schemafAPIImport, "api", "AuthLevel") {
+		return 0, fmt.Errorf("endpoint %s: Auth() must return api.AuthLevel (%s)", structName, schemafAPIImport)
+	}
+	expr, ok := singleReturn(m.fn)
+	if ok {
+		for constName, level := range authLevels {
+			if isQualified(expr, m.file, schemafAPIImport, "api", constName) {
+				return level, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("endpoint %s: Auth() must return one of api.AuthNone, api.AuthOptional, api.AuthRequired", structName)
+}
+
+// flatTypes expands a field list into one type expression per value
+// (`a, b int` → int, int).
+func flatTypes(fl *ast.FieldList) []ast.Expr {
+	if fl == nil {
+		return nil
+	}
+	var out []ast.Expr
+	for _, f := range fl.List {
+		n := len(f.Names)
+		if n == 0 {
+			n = 1
+		}
+		for i := 0; i < n; i++ {
+			out = append(out, f.Type)
+		}
+	}
+	return out
+}
+
+func isIdent(expr ast.Expr, name string) bool {
+	id, ok := expr.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+// parseHandle checks Handle(ctx context.Context, req Req) (Resp, error) and
+// returns the Req and Resp type names.
+func parseHandle(structName string, m methodDecl) (reqType, respType string, err error) {
+	params, results := flatTypes(m.fn.Type.Params), flatTypes(m.fn.Type.Results)
+	if len(params) == 2 && len(results) == 2 &&
+		isQualified(params[0], m.file, "context", "context", "Context") &&
+		isIdent(results[1], "error") {
+		reqType, respType = exprTypeName(params[1]), exprTypeName(results[0])
+		if reqType != "" && respType != "" {
+			return reqType, respType, nil
+		}
+	}
+	return "", "", fmt.Errorf("endpoint %s: Handle must have the signature `Handle(ctx context.Context, req Req) (Resp, error)` with named Req and Resp types", structName)
+}
+
+// checkHandleRaw checks HandleRaw(w http.ResponseWriter, r *http.Request) error.
+func checkHandleRaw(structName string, m methodDecl) error {
+	params, results := flatTypes(m.fn.Type.Params), flatTypes(m.fn.Type.Results)
+	if len(params) == 2 && len(results) == 1 &&
+		isQualified(params[0], m.file, "net/http", "http", "ResponseWriter") &&
+		isIdent(results[0], "error") {
+		if star, ok := params[1].(*ast.StarExpr); ok && isQualified(star.X, m.file, "net/http", "http", "Request") {
+			return nil
+		}
+	}
+	return fmt.Errorf("endpoint %s: HandleRaw must have the signature `HandleRaw(w http.ResponseWriter, r *http.Request) error`", structName)
+}
+
 // recvTypeName extracts the type name from a receiver expression.
 func recvTypeName(expr ast.Expr) string {
 	switch t := expr.(type) {
@@ -240,67 +433,6 @@ func recvTypeName(expr ast.Expr) string {
 		return recvTypeName(t.X)
 	}
 	return ""
-}
-
-// extractStringReturn finds the string literal in a single-return function body.
-func extractStringReturn(body *ast.BlockStmt) (string, bool) {
-	if body == nil || len(body.List) == 0 {
-		return "", false
-	}
-	ret, ok := body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) == 0 {
-		return "", false
-	}
-	lit, ok := ret.Results[0].(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		return "", false
-	}
-	// Strip surrounding quotes
-	s := lit.Value
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		return s[1 : len(s)-1], true
-	}
-	return s, true
-}
-
-// extractBoolReturn finds the bool literal in a single-return function body.
-func extractBoolReturn(body *ast.BlockStmt) (bool, bool) {
-	if body == nil || len(body.List) == 0 {
-		return false, false
-	}
-	ret, ok := body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) == 0 {
-		return false, false
-	}
-	ident, ok := ret.Results[0].(*ast.Ident)
-	if !ok {
-		return false, false
-	}
-	switch ident.Name {
-	case "true":
-		return true, true
-	case "false":
-		return false, true
-	}
-	return false, false
-}
-
-// extractHandleTypes gets the Req and Resp type names from Handle(ctx, req Req) (Resp, error).
-func extractHandleTypes(ft *ast.FuncType) (reqType, respType string, ok bool) {
-	if ft.Params == nil || len(ft.Params.List) < 2 {
-		return "", "", false
-	}
-	if ft.Results == nil || len(ft.Results.List) < 2 {
-		return "", "", false
-	}
-	// Second param is Req
-	reqType = exprTypeName(ft.Params.List[1].Type)
-	// First result is Resp
-	respType = exprTypeName(ft.Results.List[0].Type)
-	if reqType == "" || respType == "" {
-		return "", "", false
-	}
-	return reqType, respType, true
 }
 
 // exprTypeName returns a string representation of a type expression.
@@ -451,7 +583,7 @@ func writeEndpointsGen(endpoints []endpointInfo) error {
 
 // writeOpenAPIJSON generates openapi.json from the extracted endpoint info.
 // NOTE: This is an AST-based static generator. It does not require a running server.
-func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) error {
+func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, structs map[string]structInfo) error {
 	// Framework auth routes (login, logout, refresh) are always part of the spec.
 	paths, authSchemas := api.AuthOpenAPI()
 
@@ -472,8 +604,8 @@ func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) e
 		if ep.Description != "" {
 			op["description"] = ep.Description
 		}
-		if ep.Auth {
-			op["security"] = []any{map[string]any{"bearerAuth": []any{}}}
+		if ep.Auth != api.AuthNone {
+			op["security"] = api.OpenAPISecurity(ep.Auth)
 			op["responses"].(map[string]any)["401"] = map[string]any{"description": "Unauthorized"}
 		}
 
@@ -527,14 +659,8 @@ func writeOpenAPIJSON(endpoints []endpointInfo, structs map[string]structInfo) e
 		"info":    map[string]any{"title": "API", "version": "1.0.0"},
 		"paths":   paths,
 		"components": map[string]any{
-			"securitySchemes": map[string]any{
-				"bearerAuth": map[string]any{
-					"type":         "http",
-					"scheme":       "bearer",
-					"bearerFormat": "JWT",
-				},
-			},
-			"schemas": schemas,
+			"securitySchemes": api.OpenAPISecuritySchemes(api.SessionCookieName(projectName)),
+			"schemas":         schemas,
 		},
 	}
 

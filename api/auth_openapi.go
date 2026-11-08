@@ -3,6 +3,46 @@
 
 package api
 
+// SessionCookieName is the session cookie name for a project:
+// "<project name>_session".
+func SessionCookieName(projectName string) string {
+	return projectName + "_session"
+}
+
+// OpenAPISecuritySchemes returns the OpenAPI security schemes schemaf's auth
+// accepts: bearerAuth (Authorization: Bearer <JWT>) and cookieAuth (the
+// session cookie named cookieName). Both generators (runtime BuildOpenAPI and
+// the static codegen spec) use it.
+func OpenAPISecuritySchemes(cookieName string) map[string]any {
+	return map[string]any{
+		"bearerAuth": map[string]any{
+			"type":         "http",
+			"scheme":       "bearer",
+			"bearerFormat": "JWT",
+		},
+		"cookieAuth": map[string]any{
+			"type": "apiKey",
+			"in":   "cookie",
+			"name": cookieName,
+		},
+	}
+}
+
+// OpenAPISecurity returns the OpenAPI security requirement for an auth level:
+// either scheme for AuthRequired, anonymous or either scheme for
+// AuthOptional, and nil (no security) for AuthNone.
+func OpenAPISecurity(level AuthLevel) []any {
+	bearer := map[string]any{"bearerAuth": []any{}}
+	cookie := map[string]any{"cookieAuth": []any{}}
+	switch level {
+	case AuthRequired:
+		return []any{bearer, cookie}
+	case AuthOptional:
+		return []any{map[string]any{}, bearer, cookie}
+	}
+	return nil
+}
+
 // AuthOpenAPI returns the OpenAPI path items and component schemas of the
 // framework's auth routes, as plain JSON-shaped maps. Both the codegen
 // (static gen/openapi.json) and BuildOpenAPI merge them in, so the generated
@@ -72,7 +112,7 @@ func AuthOpenAPI() (paths map[string]any, schemas map[string]any) {
 			"post": map[string]any{
 				"operationId": "postApiAuthRefresh",
 				"summary":     "Get a fresh token for the current session",
-				"security":    []any{map[string]any{"bearerAuth": []any{}}},
+				"security":    OpenAPISecurity(AuthRequired),
 				"responses": map[string]any{
 					"200": jsonResp("OK", ref("SchemafRefreshResponse")),
 					"400": map[string]any{"description": "Token is not tied to a session"},
