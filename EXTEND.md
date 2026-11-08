@@ -975,6 +975,8 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
 
 `./schemaf.sh test` always runs codegen first, then `go test ./go/...` and `npx tsc --noEmit`. This guarantees tests always run against freshly generated code.
 
+The tests run against an ephemeral stack (`compose.test.gen.yml`: Postgres without a volume, plus your project services) started with the selected [container runtime](INSTALL.md#container-runtime): podman by default, Docker with `SCHEMAF_RUNTIME=docker`. It runs the same runtime checks as `dev` and `run`, and stops with a clear message if a tool is missing.
+
 ### Go tests
 
 Standard Go test files in `go/api/*_test.go` using `httptest`.
@@ -996,11 +998,19 @@ Codegen generates Go wrappers (`go/tests/ts.gen_test.go`) that start an `httptes
 To skip a TS test, add a comment on the preceding line:
 
 ```typescript
-// skip: requires clock docker service
+// skip: requires clock compose service
 export async function testClockTime(baseUrl: string) { ... }
 ```
 
 The generated Go wrapper will call `t.Skip(...)` with that message.
+
+### Testing the framework under both runtimes
+
+For work on schemaf itself (`make test <unit|db|e2e|all>`): `e2e/db-test.sh` and `e2e/build-example.sh` follow `SCHEMAF_RUNTIME` like everything else (default podman), and the release gate (`make release`) runs under podman only. The Docker path is verified by hand: whenever runtime-related code changes, run
+
+```bash
+SCHEMAF_RUNTIME=docker make test e2e
+```
 
 ### Test output
 
@@ -1023,7 +1033,7 @@ Set these environment variables in `~/.<name>/etc/env`:
 | `BACKUP_SSH_HOST` | yes | — | SFTP server hostname |
 | `BACKUP_SSH_PORT` | no | `22` | SFTP server port |
 | `BACKUP_SSH_USER` | yes | — | SFTP username |
-| `BACKUP_SSH_KEY_PATH` | yes | — | Host path to SSH private key (mounted as Docker secret) |
+| `BACKUP_SSH_KEY_PATH` | yes | — | Host path to SSH private key (mounted as a compose secret) |
 | `BACKUP_PATH` | no | `/backups` | Remote directory |
 | `BACKUP_RETAIN` | no | `30` | Number of backups to keep |
 | `BACKUP_HOUR` | no | `3` | UTC hour for daily auto-backup (0-23) |

@@ -12,20 +12,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONTAINER="schemaf-db-test"
 
-trap 'rc=$?; docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; exit $rc' EXIT
+# Every container call goes through rt, which follows SCHEMAF_RUNTIME
+# (podman by default, or docker) like the rest of schemaf.
+# shellcheck source=runtime.sh
+source "$SCRIPT_DIR/runtime.sh"
 
-echo "▶ starting ephemeral postgres"
-docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-docker run -d --name "$CONTAINER" \
+trap 'rc=$?; rt rm -f "$CONTAINER" >/dev/null 2>&1 || true; exit $rc' EXIT
+
+echo "▶ starting ephemeral postgres (${RUNTIME})"
+rt rm -f "$CONTAINER" >/dev/null 2>&1 || true
+rt run -d --name "$CONTAINER" \
   -e POSTGRES_USER=schemaf -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=schemaf_test \
   -p 127.0.0.1::5432 postgres:17-alpine >/dev/null
 
 echo "▶ waiting for postgres"
-until docker exec "$CONTAINER" pg_isready -U schemaf -d schemaf_test >/dev/null 2>&1; do
+until rt exec "$CONTAINER" pg_isready -U schemaf -d schemaf_test >/dev/null 2>&1; do
   sleep 0.5
 done
 
-PORT="$(docker inspect --format '{{ (index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort }}' "$CONTAINER")"
+PORT="$(rt inspect --format '{{ (index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort }}' "$CONTAINER")"
 export DATABASE_URL="postgres://schemaf:dev@127.0.0.1:${PORT}/schemaf_test?sslmode=disable"
 echo "▶ DATABASE_URL=${DATABASE_URL}"
 

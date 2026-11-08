@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -37,13 +36,13 @@ Example:
 				return runStatusForService(httpClient, files, args[1])
 			}
 
-			// Get running containers via docker compose ps
-			composeArgs := buildDockerComposeArgs(files)
+			// Get running containers via compose ps
+			composeArgs := buildComposeArgs(files)
 			composeArgs = append(composeArgs, "ps", "--format", "table {{.Name}}\t{{.Status}}\t{{.Ports}}")
 
 			fmt.Println("Containers:")
 			fmt.Println(strings.Repeat("─", 60))
-			_ = runDockerCompose(composeArgs)
+			_ = runContainerCompose(composeArgs)
 			fmt.Println()
 
 			// Health checks
@@ -81,15 +80,19 @@ Example:
 }
 
 // guessHTTPURL attempts to build a health URL for a service.
-// It reads the first exposed host port from docker inspect, falling back to a
+// It reads the first exposed host port from the container's inspect output, falling back to a
 // well-known port pattern.
 func guessHTTPURL(files []*ComposeFile, svcName string, path string) string {
 	containerName := ContainerName(files, svcName)
-	// docker inspect to get host port
-	out, err := exec.Command("docker", "inspect",
+	// inspect the container to get its host port
+	var out []byte
+	cmd, err := cli.Container("inspect",
 		"--format", `{{range $p, $conf := .NetworkSettings.Ports}}{{if $conf}}{{(index $conf 0).HostPort}}{{end}}{{end}}`,
 		containerName,
-	).Output()
+	)
+	if err == nil {
+		out, err = cmd.Output()
+	}
 	if err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		port := strings.TrimSpace(string(out))
 		return fmt.Sprintf("http://localhost:%s%s", port, path)

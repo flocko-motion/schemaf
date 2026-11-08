@@ -15,8 +15,8 @@ func newDevCmd(ctx *cli.Context) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "dev <compose-file> <services>",
-		Short: "Run only selected services in Docker",
-		Long: `Resolve the dependency graph and run only a subset of services in Docker.
+		Short: "Run only selected services in containers",
+		Long: `Resolve the dependency graph and run only a subset of services in containers.
 
 Services should be provided as a comma-separated list of short names.
 

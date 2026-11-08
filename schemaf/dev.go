@@ -106,6 +106,11 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		}
 	}
 
+	// Check the container runtime before touching any container.
+	if err := cli.CheckRuntime(constants.ProjectName()); err != nil {
+		return err
+	}
+
 	// Stop production compose if running — dev and prod can't coexist.
 	if err := stopProdIfRunning(); err != nil {
 		return err
@@ -142,17 +147,17 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		}
 	}
 
-	compose := []string{"docker", "compose", "-f", "compose.gen.yml", "-f", "compose.dev.gen.yml"}
+	compose := []string{"compose", "-f", "compose.gen.yml", "-f", "compose.dev.gen.yml"}
 
-	// Start Docker services (skip building backend — it runs natively in dev).
+	// Start containers (skip building backend — it runs natively in dev).
 	if svc.infra {
 		args := append(compose, "up", "--scale", "backend=0", "--no-build", "-d", "--wait")
-		if err := runCmd(args...); err != nil {
+		if err := runContainer(args...); err != nil {
 			return fmt.Errorf("starting infrastructure: %w", err)
 		}
 	} else if svc.db {
 		args := append(compose, "up", "postgres", "-d", "--wait")
-		if err := runCmd(args...); err != nil {
+		if err := runContainer(args...); err != nil {
 			return fmt.Errorf("starting postgres: %w", err)
 		}
 	}
@@ -172,8 +177,7 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 
 	// Warn if backend requested but postgres might not be running.
 	if svc.backend && !svc.db && !svc.infra {
-		args := append(compose, "ps", "postgres", "--status", "running", "-q")
-		out, _ := exec.Command(args[0], args[1:]...).Output()
+		out, _ := containerOutput(append(compose, "ps", "postgres", "--status", "running", "-q")...)
 		if len(strings.TrimSpace(string(out))) == 0 {
 			fmt.Fprintln(os.Stderr, "WARNING: postgres is not running — backend may fail to connect.")
 			fmt.Fprintln(os.Stderr, "         Start it with: ./schemaf.sh dev db")
@@ -235,12 +239,12 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 
 // stopProdIfRunning checks if production compose services are running and stops them.
 func stopProdIfRunning() error {
-	out, err := exec.Command("docker", "compose", "-f", "compose.gen.yml", "ps", "-q").Output()
+	out, err := containerOutput("compose", "-f", "compose.gen.yml", "ps", "-q")
 	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
 		return nil
 	}
 	fmt.Fprintln(os.Stderr, "Stopping production services before dev start...")
-	if err := runCmd("docker", "compose", "-f", "compose.gen.yml", "down"); err != nil {
+	if err := runContainer("compose", "-f", "compose.gen.yml", "down"); err != nil {
 		return fmt.Errorf("stopping production services: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "Production services stopped.")
@@ -248,16 +252,16 @@ func stopProdIfRunning() error {
 }
 
 // checkPort verifies a port is free. If busy, asks the user to kill the blocking process
-// or stop the Docker container holding it. With autoYes, kills without prompting.
+// or stop the container holding it. With autoYes, kills without prompting.
 func checkPort(port int, service string, autoYes bool) error {
 	portStr := strconv.Itoa(port)
 
 	// Check if any process holds the port. net.Listen is unreliable on macOS
 	// (SO_REUSEADDR allows rebinding occupied ports), so we check for actual
-	// processes first via Docker and OS tools, then fall back to net.Listen.
-	hasDockerConflict := findDockerContainer(port) != ""
+	// processes first via the container runtime and OS tools, then fall back to net.Listen.
+	hasContainerConflict := findContainer(port) != ""
 	hasProcessConflict := findPortPID(port) != 0
-	if !hasDockerConflict && !hasProcessConflict {
+	if !hasContainerConflict && !hasProcessConflict {
 		// No process found — double-check with net.Listen as a safety net.
 		ln, err := net.Listen("tcp", ":"+portStr)
 		if err == nil {
@@ -266,9 +270,9 @@ func checkPort(port int, service string, autoYes bool) error {
 		}
 	}
 
-	// Check if a Docker container holds the port.
-	if container := findDockerContainer(port); container != "" {
-		fmt.Fprintf(os.Stderr, "Port %d is in use by Docker container %q — needed for %s.\n", port, container, service)
+	// Check if a container holds the port.
+	if container := findContainer(port); container != "" {
+		fmt.Fprintf(os.Stderr, "Port %d is in use by container %q — needed for %s.\n", port, container, service)
 		answer := "y"
 		if !autoYes {
 			fmt.Fprint(os.Stderr, "Stop it? [y/N/c(ontinue)] ")
@@ -278,7 +282,7 @@ func checkPort(port int, service string, autoYes bool) error {
 		case "c":
 			return nil
 		case "y":
-			if err := exec.Command("docker", "stop", container).Run(); err != nil {
+			if _, err := containerOutput("stop", container); err != nil {
 				return fmt.Errorf("stopping container %s: %w", container, err)
 			}
 			fmt.Fprintln(os.Stderr, "Stopped.")
@@ -327,10 +331,10 @@ func checkPort(port int, service string, autoYes bool) error {
 	}
 }
 
-// findDockerContainer returns the name of a Docker container using the given host port.
-func findDockerContainer(port int) string {
+// findContainer returns the name of a container using the given host port.
+func findContainer(port int) string {
 	portStr := strconv.Itoa(port)
-	out, err := exec.Command("docker", "ps", "--format", "{{.Names}} {{.Ports}}").Output()
+	out, err := containerOutput("ps", "--format", "{{.Names}} {{.Ports}}")
 	if err != nil {
 		return ""
 	}
@@ -380,6 +384,27 @@ func findPortPID(port int) int {
 	}
 
 	return 0
+}
+
+// runContainer runs a container command (cli.Container) with stdout/stderr
+// connected to the terminal.
+func runContainer(args ...string) error {
+	cmd, err := cli.Container(args...)
+	if err != nil {
+		return err
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// containerOutput runs a container command (cli.Container) and returns its stdout.
+func containerOutput(args ...string) ([]byte, error) {
+	cmd, err := cli.Container(args...)
+	if err != nil {
+		return nil, err
+	}
+	return cmd.Output()
 }
 
 // runCmd executes a command with stdout/stderr connected to the terminal.

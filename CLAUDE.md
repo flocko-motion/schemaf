@@ -94,3 +94,5 @@ There is **no committed example project**. Tests come in three layers:
 - **Unit tests** — `go test ./...`. Real-Postgres tests auto-skip when `DATABASE_URL` is unset.
 - **DB integration tests** — `e2e/db-test.sh`. Spins an ephemeral Postgres, exports `DATABASE_URL`, and runs the gated tests in `db/` (migration runner, `RunSet`, reset helper). Tears down automatically.
 - **From-scratch onboarding e2e** — `e2e/build-example.sh [<ref>]`. Builds a complete project in `/tmp` from a single `go run …/cmd/schemaf@<ref> init` call against an online tag, then compiles and tests it. This is the real onboarding lifecycle and replaces the old in-repo example. The dev loop `e2e/tag-and-test.sh` tags HEAD as the non-semver `e2e` tag, pushes it, and runs the e2e against it.
+
+Container runtime: everything follows `SCHEMAF_RUNTIME` (podman by default, `docker` on request); the release gate runs under podman only. Whenever runtime-related code changes, also run `SCHEMAF_RUNTIME=docker make test e2e` by hand. Every container call goes through `cli.Container` (Go) or `_schemaf_container` (generated `schemaf.sh`) — never call `docker`/`podman` directly.

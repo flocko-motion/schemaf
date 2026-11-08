@@ -20,10 +20,10 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ctl",
 		Short: "Control project services",
-		Long: `Resolve, merge and run multi-service Docker Compose stacks.
+		Long: `Resolve, merge and run multi-service compose stacks.
 
 Each service has its own compose file declaring dependencies via x-schemaf.
-The ctl tool resolves the dependency graph and delegates to Docker Compose.`,
+The ctl tool resolves the dependency graph and delegates to compose on the selected container runtime.`,
 	}
 
 	cmd.AddCommand(newStartCmd(ctx))
@@ -39,8 +39,8 @@ func ComposeSubcommandProvider(ctx *cli.Context) []*cobra.Command {
 	return SubcommandProvider(ctx)
 }
 
-// buildDockerComposeArgs builds the -f flags for docker compose from resolved files
-func buildDockerComposeArgs(files []*ComposeFile) []string {
+// buildComposeArgs builds the -f flags for compose from resolved files
+func buildComposeArgs(files []*ComposeFile) []string {
 	var args []string
 	for _, cf := range files {
 		args = append(args, "-f", cf.Path)
@@ -72,63 +72,16 @@ func resolveAndPrint(path string) ([]*ComposeFile, error) {
 	return files, nil
 }
 
-// dockerEnv returns the environment to use for docker commands.
-// On WSL2 with Docker Desktop, the default credsStore "desktop.exe" fails
-// when called from inside WSL2. We detect this and transparently redirect
-// DOCKER_CONFIG to ~/.schemaf/docker with a clean config (no credsStore).
-func dockerEnv() []string {
-	env := os.Environ()
-
-	// Detect WSL2 via /proc/version
-	procVersion, err := os.ReadFile("/proc/version")
-	if err != nil || !strings.Contains(strings.ToLower(string(procVersion)), "microsoft") {
-		return env
-	}
-
-	// Check if default docker config has the problematic credsStore
-	defaultConfig := filepath.Join(os.Getenv("HOME"), ".docker", "config.json")
-	data, err := os.ReadFile(defaultConfig)
-	if err != nil || !strings.Contains(string(data), "desktop.exe") {
-		return env
-	}
-
-	// Use a clean config under ~/.schemaf/docker
-	schemafDockerDir, err := files.EnsureDir(files.DockerDir())
+// runContainerCompose runs `<runtime> compose` with the given arguments, inheriting stdio.
+func runContainerCompose(args []string) error {
+	cmd, err := cli.Container(append([]string{"compose"}, args...)...)
 	if err != nil {
-		return env
+		return err
 	}
-	cleanConfig := filepath.Join(schemafDockerDir, "config.json")
-	if _, err := os.Stat(cleanConfig); os.IsNotExist(err) {
-		_ = os.WriteFile(cleanConfig, []byte("{}"), 0644)
-	}
-
-	// Replace or append DOCKER_CONFIG in the environment
-	result := make([]string, 0, len(env))
-	for _, e := range env {
-		if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
-			result = append(result, e)
-		}
-	}
-	return append(result, "DOCKER_CONFIG="+schemafDockerDir)
-}
-
-// runDockerCompose runs docker compose with the given arguments, inheriting stdio.
-func runDockerCompose(args []string) error {
-	cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-	cmd.Env = dockerEnv()
 	return cmd.Run()
-}
-
-// runDockerComposeCapture runs docker compose and returns stdout as a string.
-func runDockerComposeCapture(args []string) (string, error) {
-	cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
-	cmd.Stderr = os.Stderr
-	cmd.Env = dockerEnv()
-	out, err := cmd.Output()
-	return string(out), err
 }
 
 // loadProjectEnv loads secrets from ~/.<name>/etc/env into the process environment.
@@ -151,10 +104,14 @@ func runNativeStop(svcName string, schemaf *SchemafExtension) {
 	_ = cmd.Run()
 }
 
-// stopContainer stops a docker container by name (for --native handoff).
+// stopContainer stops a container by name (for --native handoff).
 func stopContainer(containerName string) {
 	cli.Info("Stopping container: %s", containerName)
-	cmd := exec.Command("docker", "stop", containerName)
+	cmd, err := cli.Container("stop", containerName)
+	if err != nil {
+		cli.Error("%v", err)
+		return
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	_ = cmd.Run()
@@ -192,7 +149,7 @@ func runShell(script, dir string) error {
 }
 
 // injectProjectEnv reads x-schemaf metadata from the entry (last) compose file
-// and injects environment variables before docker compose runs:
+// and injects environment variables before compose runs:
 //   - PROJECT_NAME  from x-schemaf.project
 //   - DB_PASS       from x-schemaf.dev-db-pass (only when DB_PASS is not already set)
 func injectProjectEnv(files []*ComposeFile) {

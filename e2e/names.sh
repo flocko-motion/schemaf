@@ -1,6 +1,6 @@
 # names.sh — emit a random but legible project name by gluing two fantasy words,
 # e.g. "amberotter", "mossyfalcon". Lowercase letters only, so the name is safe
-# everywhere it's used (Postgres db name, docker compose project, Go module path).
+# everywhere it's used (Postgres db name, compose project, Go module path).
 # Sourced by build-example.sh.
 
 _ADJ=(amber azure brisk cedar coral dusky ember fern frost golden hazel ivory

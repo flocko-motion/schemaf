@@ -30,8 +30,15 @@ say()  { echo; echo "$*"; }
 step "check prerequisites"
 command -v go  >/dev/null || { echo "go is required"  >&2; exit 1; }
 command -v npm >/dev/null || { echo "npm is required (init scaffolds a frontend)" >&2; exit 1; }
-HAVE_DOCKER=0; docker info >/dev/null 2>&1 && HAVE_DOCKER=1
-echo "  go=$(go version | awk '{print $3}') npm=$(npm --version) docker=$([ $HAVE_DOCKER = 1 ] && echo up || echo no)"
+# The stack runs under SCHEMAF_RUNTIME (podman by default, or docker) — it must be up.
+# shellcheck source=runtime.sh
+source "$SCRIPT_DIR/runtime.sh"
+if ! rt info >/dev/null 2>&1; then
+  echo "${RUNTIME} is installed but not usable (\`${RUNTIME} info\` failed)" >&2
+  [ "$RUNTIME" = podman ] && [ "$(uname)" = Darwin ] && echo "  start it: podman machine start" >&2
+  exit 1
+fi
+echo "  go=$(go version | awk '{print $3}') npm=$(npm --version) runtime=${RUNTIME}"
 
 # --- which schemaf to fetch: default = latest online v* tag (via ls-remote, NOT
 #     `@latest`, which the Go proxy caches for ~30 min — same reason as upgrade) ---
@@ -77,13 +84,8 @@ done
 step "compile"
 ( cd go && go build ./... )
 
-if [ "$HAVE_DOCKER" = 1 ]; then
-  step "run the test stack (ephemeral postgres + tests)"
-  ./schemaf.sh test
-else
-  echo
-  echo "  (docker not available — skipping stack run; fetch→scaffold→compile proven)"
-fi
+step "run the test stack under ${RUNTIME} (ephemeral postgres + tests)"
+./schemaf.sh test
 
 say "✓ SUCCESS — onboarded '${NAME}' from ${SCHEMAF_CMD}@${REF} with a single command"
 if [ "${KEEP:-0}" = 1 ]; then
