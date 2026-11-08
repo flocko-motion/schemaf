@@ -15,6 +15,9 @@ func NewMux() *http.ServeMux {
 	mux.Handle("GET /api/health", HealthHandler())
 	mux.Handle("GET /api/status", StatusHandler())
 	mux.Handle("GET /api/user/me", UserMeHandler())
+	mux.Handle("POST /api/auth/{provider}/login", loginHandler())
+	mux.Handle("POST /api/auth/logout", logoutHandler())
+	mux.Handle("POST /api/auth/refresh", requireAuth(refreshHandler()))
 	for _, r := range Routes() {
 		mux.Handle(r.Method+" "+r.Path, r.Handler)
 	}

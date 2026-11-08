@@ -48,6 +48,8 @@ services:
       BACKUP_PATH: ${BACKUP_PATH:-/backups}
       BACKUP_RETAIN: ${BACKUP_RETAIN:-30}
       BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
     ports:
       - "{{.Port}}:{{.Port}}"
     secrets:

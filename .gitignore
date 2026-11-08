@@ -30,3 +30,6 @@ Thumbs.db
 .sidecar-base
 .td-root
 build
+
+# Agent task handoffs
+/.tasks/

@@ -9,6 +9,9 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 - [Built-in Endpoints](#built-in-endpoints)
 - [Endpoint Interface](#endpoint-interface)
 - [Authentication](#authentication)
+  - [Identity providers](#identity-providers)
+  - [Activating Auth0](#activating-auth0)
+  - [Sessions](#sessions)
 - [Raw Endpoints](#raw-endpoints)
 - [Database](#database)
   - [Migrations](#migrations)
@@ -46,6 +49,7 @@ func main() {
     app.AddApi(api.Provider)                       // generated: endpoint registration
     app.SetFrontend(FrontendFS())                  // generated: embedded frontend assets
     app.AddSubcommand(importer.SubcommandProvider) // custom: CLI commands
+    // optional: app.OnLogin(...), app.AddIdentityProvider(...) — see Authentication
 
     if err := app.Run(); err != nil {
         log.Fatal(err)
@@ -127,8 +131,9 @@ The generated `Dockerfile` includes a Node build stage that compiles the fronten
 The framework provides these endpoints out of the box:
 
 - `/api/health` — health check (returns `{"status": "ok", "db": "ok", ...}`)
-- `/api/status` — service status (uptime, backup status, custom providers)
+- `/api/status` — service status (uptime, backup status, active [identity providers](#public-provider-config-apistatus), custom providers)
 - `/api/user/me` — current user info (requires auth)
+- `/api/auth/{provider}/login`, `/api/auth/logout`, `/api/auth/refresh` — login and sessions (see [Authentication](#authentication))
 - `/openapi.json` — OpenAPI 3.0 spec
 
 ### Extending /api/health
@@ -172,6 +177,7 @@ The response will include your provider alongside the built-in fields:
   "status": "ok",
   "uptime": "2h30m",
   "backup": { "last": "...", "ago": "..." },
+  "auth": { "providers": {} },
   "s3": { "bucket": "my-bucket", "connected": true }
 }
 ```
@@ -276,16 +282,291 @@ You write the struct. Everything else is generated or framework-provided.
 
 ## Authentication
 
-schemaf has built-in JWT auth, fully managed by the framework:
+schemaf has built-in auth, fully managed by the framework:
 
 - **Per-endpoint**: return `true` from `Auth()` to require a valid token (see [Endpoint Interface](#endpoint-interface)). `/api/health` and `/api/status` are always open.
-- **Bearer JWTs**: `Authorization: Bearer <token>`, HMAC-SHA256 signed.
+- **One token, two transports**: schemaf's token (an HMAC-SHA256 JWT) is accepted from the session cookie or from `Authorization: Bearer <token>`. Browsers use the cookie; scripts and other servers use Bearer. If both are present, Bearer wins.
 - **Signing key is auto-managed**: generated on first boot and stored in Postgres (`_schemaf_config`). Nothing to configure, no secret to manage.
 - In a handler, `api.Subject(ctx)` returns the authenticated subject; `/api/user/me` returns the current user.
 
+Every authenticated request is verified against schemaf's own token and session only. How a user *proves* who they are (Auth0, passkeys, a login code) happens once, at login, through an [identity provider](#identity-providers) or [your own login endpoint](#starting-sessions-from-your-own-code). After that, endpoints and middleware never see the provider. Rights and roles are your app's concern: schemaf only tells you *who* is calling.
+
+### Identity providers
+
+An identity provider is a login plugin. It verifies a credential in the login request and returns the identity it proves. schemaf maps that identity to a subject and starts its own session for that subject.
+
+```go
+// package api
+type IdentityProvider interface {
+    Name() string // URL-safe, unique per app: "auth0", "passkey", ...
+    // Exchange verifies the provider's credential in the login request and
+    // returns the identity it proves. Return api.ErrForbidden (or wrap it)
+    // to refuse with 403; api.ErrBadRequest gives 400; any other error is a 500.
+    Exchange(ctx context.Context, r *http.Request) (api.Identity, error)
+}
+
+type Identity struct {
+    Provider string         // the provider that proved it (set by schemaf)
+    Subject  string         // the provider's subject, e.g. Auth0's sub
+    Claims   map[string]any // all further claims (email, name, ...)
+}
+```
+
+schemaf ships one built-in provider, [`auth0`](#activating-auth0), which is switched on by environment variables alone. Your own providers are registered in `main.go` (see [Writing your own provider](#writing-your-own-provider)).
+
+#### Login routes
+
+| Route | What it does |
+|---|---|
+| `POST /api/auth/{provider}/login` | Calls the provider's `Exchange`, then `OnLogin` (if set), then starts a session. Sets the cookie and responds `{"subject": "...", "token": "..."}`. The token is always returned, for Bearer clients. An unknown or unconfigured provider gives `404 provider not configured`. |
+
+All auth routes are in `openapi.json`, so the generated TypeScript and Go clients have them. `POST /api/auth/auth0/login` is always in the spec, with the body `{"id_token": string}`, whether Auth0 is configured or not: the build output does not depend on deployment config. Your own providers are reached through the generic `POST /api/auth/{provider}/login`, whose body is a free-form JSON object.
+
+#### Mapping identities to subjects: `OnLogin`
+
+By default the subject is the provider's subject, unchanged: `api.Subject(ctx)` returns e.g. the Auth0 `sub` (`google-oauth2|1234...`). Auth0 subjects already carry the upstream connection, so they don't collide.
+
+To map identities to your own users, register an optional `OnLogin` hook in `main.go`:
+
+```go
+app.OnLogin(func(ctx context.Context, id api.Identity) (string, error) {
+    // Look up, create or link your user, or refuse with api.ErrForbidden (403).
+    // The returned string becomes api.Subject(ctx) for the whole session.
+    email, _ := id.Claims["email"].(string)
+    if verified, _ := id.Claims["email_verified"].(bool); !verified {
+        return "", fmt.Errorf("email not verified: %w", api.ErrForbidden)
+    }
+    return users.Upsert(ctx, id.Provider, id.Subject, email)
+})
+```
+
+- **Claims are only available at login.** The session stores just the subject. If your app needs `email`, `name` or similar, capture them in `OnLogin`.
+- **Claim policy is yours.** Checks like `email_verified`, allowed domains or invite-only signup belong in `OnLogin`. Providers only prove identity.
+- `OnLogin` runs for every provider. `id.Provider` tells you which one proved the identity.
+
+#### Rules
+
+- Identity providers need a database (sessions live in Postgres). Any active provider without `app.AddDb(...)` is a startup error.
+- Registering a provider named `auth0` (reserved for the built-in) or two providers with the same `Name()` is a startup error.
+- The provider is consulted **only at login**. A session outlives changes at the provider, for example the account being deleted there. Revoke sessions from your app if that matters (see [Sessions](#sessions)).
+- Active providers are logged when the server starts and listed in `/api/status` (see [Public provider config](#public-provider-config-apistatus)).
+
+#### Public provider config: `/api/status`
+
+`/api/status` lists every active provider under `auth.providers`, keyed by name, together with the public client config the frontend needs to start that provider's sign-in:
+
+```json
+{
+  "status": "ok",
+  "auth": {
+    "providers": {
+      "auth0": { "domain": "myapp.eu.auth0.com", "client_id": "Xb4tq0LgYxZ1Ux8Gm3aP7cVh2nKw9sRd" },
+      "passkey": {}
+    }
+  }
+}
+```
+
+- A key is present only for an active provider: present means "show this login button". No providers gives `"providers": {}`.
+- These values are per instance, so the frontend reads them at runtime instead of baking them into the build.
+- Only public values appear here. For `auth0` that is `domain` and `client_id`, which ship in every Auth0 SPA bundle anyway; nothing else from the environment is exposed.
+- Your own providers appear with `{}`. To expose public config, add an optional method to the provider: `PublicConfig() map[string]string`. Put only values that are safe for anyone to read in it.
+
+### Activating Auth0
+
+The built-in `auth0` provider needs no code. Set two environment variables and it is active.
+
+#### 1. Create the Auth0 application
+
+1. In the [Auth0 dashboard](https://manage.auth0.com/), go to **Applications → Applications → Create Application**, pick **Single Page Web Applications**, and create it.
+2. On the application's **Settings** tab, note the **Domain** (e.g. `myapp.eu.auth0.com`) and the **Client ID**. You don't need the client secret: schemaf only verifies ID tokens.
+3. Still on **Settings**, under **Application URIs**, add your app's origins. For dev with the default port:
+   - **Allowed Callback URLs**: `http://localhost:8000`
+   - **Allowed Logout URLs**: `http://localhost:8000`
+   - **Allowed Web Origins**: `http://localhost:8000`
+
+   Add your production URL (e.g. `https://myapp.example.com`) to each list as well, comma-separated. Use your configured `port` if it isn't 8000. Save.
+
+#### 2. Configure schemaf
+
+Put the two values into the project's secrets file (see [Secrets](INSTALL.md#secrets)): `~/.<name>/dev/etc/env` for dev and `~/.<name>/etc/env` for production. For a project named `myapp`:
+
+```bash
+# ~/.myapp/dev/etc/env
+DB_PASS=changeme
+AUTH0_DOMAIN=myapp-dev.eu.auth0.com
+AUTH0_CLIENT_ID=Xb4tq0LgYxZ1Ux8Gm3aP7cVh2nKw9sRd
+```
+
+- `AUTH0_DOMAIN` is the bare domain (a leading `https://` or trailing `/` is stripped). If you use an Auth0 custom domain, use that.
+- The values are **per instance**: each deployment reads its own env file, so two deployments can use two Auth0 applications (or tenants), or one can leave Auth0 off.
+- `schemaf.sh` loads the env file (`dev` → `dev/etc/env`, `run` → `etc/env`), and the generated `compose.gen.yml` passes `AUTH0_DOMAIN` and `AUTH0_CLIENT_ID` through to the backend container.
+
+#### 3. What activation does
+
+The variables are checked when the server starts (`server`, `dev`), never for other CLI commands:
+
+| `AUTH0_DOMAIN` | `AUTH0_CLIENT_ID` | Result |
+|---|---|---|
+| set | set | `auth0` is active. The startup log shows `"msg":"identity providers active","providers":["auth0"]` and `/api/status` lists it under `auth.providers.auth0` with its `domain` and `client_id`. |
+| unset | unset | Auth0 is off. `POST /api/auth/auth0/login` returns `404 provider not configured`. |
+| one set | the other unset | The server refuses to start: `auth0: AUTH0_DOMAIN is set but AUTH0_CLIENT_ID is not; set both to enable Auth0, or neither to disable it` |
+
+Auth0 needs a database like every provider (`app.AddDb(...)`).
+
+#### 4. Frontend: sign in and post the ID token
+
+The frontend asks `/api/status` whether Auth0 is active and, if so, which `domain` and `client_id` to use. Never hardcode them in the frontend: they differ per instance. It then signs in with the Auth0 SPA SDK (`npm install @auth0/auth0-spa-js`, or `@auth0/auth0-react` for its React wrapper), takes the **ID token** it received, and posts it to schemaf's login route. From then on, the session cookie authenticates every API call automatically.
+
+```ts
+import { createAuth0Client } from "@auth0/auth0-spa-js";
+import { Api } from "./api/generated/api.gen";
+
+const api = new Api();
+
+// 1. Is Auth0 active on this instance, and with which application?
+const status = await fetch("/api/status").then((r) => r.json());
+const cfg = status.auth?.providers?.auth0; // undefined → don't show the login button
+
+if (cfg) {
+  // 2. Initialise the SDK with this instance's values.
+  const auth0 = await createAuth0Client({
+    domain: cfg.domain,
+    clientId: cfg.client_id,
+    authorizationParams: { redirect_uri: window.location.origin },
+  });
+
+  if (location.search.includes("code=")) {
+    // 3. Back from Auth0: finish sign-in and take the ID token.
+    await auth0.handleRedirectCallback();
+    history.replaceState({}, "", "/");
+    const claims = await auth0.getIdTokenClaims();
+
+    // 4. Exchange it for a schemaf session. The cookie is set;
+    //    authenticated endpoints now just work.
+    await api.api.postApiAuthAuth0Login({ id_token: claims!.__raw });
+  }
+
+  // Login button: onClick={() => auth0.loginWithRedirect()}
+}
+```
+
+Post the ID token **right after sign-in**: schemaf rejects ID tokens issued more than 5 minutes ago (see [Troubleshooting](#troubleshooting)).
+
+#### 5. Backend: who is calling
+
+In any endpoint with `Auth() true`, `api.Subject(ctx)` returns the Auth0 `sub` by default:
+
+```go
+func (e ProfileEndpoint) Handle(ctx context.Context, req ProfileReq) (ProfileResp, error) {
+    sub, _ := api.Subject(ctx) // e.g. "google-oauth2|1234..."
+    return profiles.Get(ctx, sub)
+}
+```
+
+To map Auth0 users to your own user IDs, or to keep their email (only available at login), register [`OnLogin`](#mapping-identities-to-subjects-onlogin).
+
+#### 6. Logout
+
+`POST /api/auth/logout` ends the schemaf session and clears the cookie. It does not touch Auth0: while the user is still signed in at Auth0, the SDK can sign them back in silently. For a full sign-out, call Auth0's logout as well:
+
+```ts
+await api.api.postApiAuthLogout();
+await auth0.logout({ logoutParams: { returnTo: window.location.origin } });
+```
+
+#### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `404 provider not configured`, or no `auth0` in `/api/status` | Auth0 isn't active on this server: `AUTH0_DOMAIN` / `AUTH0_CLIENT_ID` are missing from the env file the server was started with. |
+| `403 auth0: token issued too long ago (iat … ago, max 5m0s) …` | The ID token's `iat` is more than 5 minutes old. Post the token right after sign-in, not a cached one from an earlier session. If it happens right after sign-in, check the server's clock. |
+| `403 auth0: oidc: id token issued by a different provider, expected "https://…/" got "https://…/"` | `AUTH0_DOMAIN` differs from the domain that issued the token, e.g. the tenant domain on the server but a custom domain in the frontend. Use the same domain in both. |
+| `403 auth0: oidc: expected audience "…" got ["…"]` | The frontend signed in with a different application than `AUTH0_CLIENT_ID`. Use the same Client ID in both. |
+| `503 auth0: OIDC discovery for https://…/ failed` | The server can't reach `https://<AUTH0_DOMAIN>/.well-known/openid-configuration`: a typo in the domain, or no outbound network. Discovery runs on the first login and is retried on the next one, so a temporary outage does not stop the server from starting. |
+| Server won't start: `auth0: AUTH0_DOMAIN is set but AUTH0_CLIENT_ID is not` | Only one of the two variables is set. Set both, or neither. |
+
+### Writing your own provider
+
+Implement `api.IdentityProvider` in your project (e.g. `go/auth/passkey.go`) and register it in `main.go`:
+
+```go
+app.AddIdentityProvider(auth.PasskeyProvider{})
+```
+
+`Exchange` gets the raw login request, so it reads whatever body it defines:
+
+```go
+type PasskeyProvider struct{ /* ... */ }
+
+func (p PasskeyProvider) Name() string { return "passkey" }
+
+func (p PasskeyProvider) Exchange(ctx context.Context, r *http.Request) (api.Identity, error) {
+    cred, err := verifyAssertion(ctx, r.Body)
+    if err != nil {
+        return api.Identity{}, fmt.Errorf("passkey: %w", api.ErrForbidden)
+    }
+    return api.Identity{Subject: cred.UserHandle}, nil
+}
+```
+
+The frontend calls it through the generated client's generic login route, `postApiAuthProviderLogin("passkey", body)`. Multi-step ceremonies (a passkey challenge before the assertion) are ordinary endpoints in your project; only the final step that proves the identity is the provider.
+
+### Sessions
+
+A session is what a successful login creates. schemaf stores it in Postgres (`_schemaf_sessions`) and represents it to the client as a short-lived token carrying the session ID.
+
+- **Token lifetime**: 15 minutes. **Session lifetime**: 30 days from login. Both are framework constants.
+- **Every authenticated request checks the session**: not revoked, not expired, and not ended by a subject-wide revocation. Revocation is immediate.
+- **Renewal**: when a cookie-authenticated request carries a token past half its lifetime, schemaf sets a fresh cookie for the same session. An expired token in the cookie is renewed the same way, as long as its session is still live, so a browser stays signed in for the whole session even after idling. Bearer tokens are not renewed automatically: Bearer clients call `POST /api/auth/refresh` before their token expires; an expired Bearer token gives 401.
+- **The cookie**: named `<name>_session` after your project (`myapp_session`), so apps on different localhost ports don't overwrite each other's cookie. Host-only (no `Domain`), `HttpOnly`, `SameSite=Lax`, `Path=/`, lasting until the session expires, and `Secure` in production (`SCHEMAF_ENV=docker`). `Lax` rather than `Strict` so the cookie is sent when another site redirects the browser to you, as in an OIDC `/authorize` redirect.
+- **CSRF protection**: a cookie-authenticated request with any method other than `GET` or `HEAD` must carry an `Origin` header matching the request's host (`Host`, or `X-Forwarded-Host` behind a proxy). A mismatched **or missing** `Origin` is rejected with 403. Browsers send `Origin` on every such request; non-browser clients should use Bearer, which is exempt.
+
+Built-in routes:
+
+| Route | What it does |
+|---|---|
+| `POST /api/auth/logout` | Ends the current session and clears the cookie. Responds 204, also when there is no session. |
+| `POST /api/auth/refresh` | Requires auth with a session token (a stateless token gives 400). Returns `{"token": "..."}`, a fresh token for the current session (and renews the cookie if the request used it). |
+
+#### Starting sessions from your own code
+
+For logins your app handles itself (login codes, guest accounts), start the session directly from a [raw endpoint](#raw-endpoints), which has the `http.ResponseWriter`:
+
+```go
+import schemafapi "github.com/flocko-motion/schemaf/api"
+
+func (e RedeemCodeEndpoint) HandleRaw(w http.ResponseWriter, r *http.Request) error {
+    userID, err := codes.Redeem(r.Context(), r.FormValue("code"))
+    if err != nil {
+        return schemafapi.ErrForbidden
+    }
+    // Sets the cookie on w and returns the token for Bearer clients.
+    token, err := schemafapi.StartSession(r.Context(), w, userID)
+    if err != nil {
+        return err
+    }
+    return json.NewEncoder(w).Encode(map[string]string{"token": token})
+}
+```
+
+Sessions started this way have an empty `provider` column in `_schemaf_sessions`.
+
+#### Ending sessions early
+
+```go
+// The current request's session (false for stateless tokens):
+sid, ok := schemafapi.SessionID(ctx)
+
+err = schemafapi.RevokeSession(ctx, sid)     // one session
+err = schemafapi.RevokeSubject(ctx, subject) // every session and every stateless token of that subject
+```
+
+`RevokeSubject` ends everything issued for the subject up to now; logging in again afterwards starts a fresh session as usual.
+
 ### Getting a token in development
 
-The framework has no built-in login/password flow — your app decides how users authenticate in production. For **local development**, mint a token for any subject with the built-in command:
+For **local development**, mint a token for any subject with the built-in command:
 
 ```bash
 # the database must be running, e.g. ./schemaf.sh dev db
@@ -293,18 +574,18 @@ TOKEN=$(./schemaf.sh auth token alice)
 curl -H "Authorization: Bearer $TOKEN" localhost:8000/api/user/me
 ```
 
-- `auth token <subject>` prints a signed JWT for that subject, so you can call authenticated endpoints as any user.
+- `auth token <subject>` prints a signed [stateless token](#issuing-stateless-tokens) for that subject, so you can call authenticated endpoints as any user.
 - `--ttl <duration>` sets an expiry (e.g. `--ttl 24h`); without it, the token never expires.
 - **Dev-only**: the command refuses to run in production (`SCHEMAF_ENV=docker`).
 
-### Issuing tokens from your own code
+### Issuing stateless tokens
 
-In production you issue tokens yourself, after authenticating the user however you choose:
+`IssueToken` mints a token that is not tied to a session: it is not checked against `_schemaf_sessions` and is never renewed. Only `RevokeSubject` ends it before its expiry. Use `StartSession` for users; use this for service-to-service tokens:
 
 ```go
 import schemafapi "github.com/flocko-motion/schemaf/api"
 
-token, err := schemafapi.IssueToken(userID, time.Now().Add(24*time.Hour))
+token, err := schemafapi.IssueToken("svc:importer", time.Now().Add(24*time.Hour))
 // time.Time{} (zero) as the second argument issues a token with no expiry.
 ```
 
@@ -347,7 +628,7 @@ Same struct pattern, same `Method()`, `Path()`, `Auth()`. The only difference is
 - Define exactly one of `Handle` or `HandleRaw` — codegen will error if both are present
 - If `HandleRaw` returns a non-nil error and you haven't written a response yet, the framework writes a JSON error response with the standard status code mapping (`ErrNotFound` → 404, etc.)
 - If you've already started writing a response (set headers, streamed bytes), return `nil` and handle errors yourself
-- Auth works identically — if `Auth()` returns `true`, the JWT is validated before `HandleRaw` is called, and `api.Subject(r.Context())` returns the authenticated user ID
+- Auth works identically — if `Auth()` returns `true`, the token and session are validated before `HandleRaw` is called, and `api.Subject(r.Context())` returns the authenticated user ID
 
 ## Database
 

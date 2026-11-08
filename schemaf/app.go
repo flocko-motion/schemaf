@@ -11,11 +11,14 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/flocko-motion/schemaf/api"
+	"github.com/flocko-motion/schemaf/api/oidc"
 	"github.com/flocko-motion/schemaf/cli"
 	"github.com/flocko-motion/schemaf/constants"
 	"github.com/flocko-motion/schemaf/db"
@@ -29,6 +32,9 @@ type App struct {
 	hasDB       bool
 	subcommands []cli.SubcommandProvider
 	services    []func(context.Context)
+
+	identityProviders []api.IdentityProvider
+	onLogin           api.OnLoginFunc
 }
 
 // New creates a new App using the project name registered via constants.SetProjectName.
@@ -64,6 +70,22 @@ func (a *App) AddSubcommand(provider cli.SubcommandProvider) {
 // Wire up in go/main.go: app.AddService(myworker.Run)
 func (a *App) AddService(fn func(context.Context)) {
 	a.services = append(a.services, fn)
+}
+
+// AddIdentityProvider registers a custom identity provider. Its login route is
+// POST /api/auth/{Name()}/login. A reserved name (a built-in such as "auth0")
+// or a duplicate name makes the server fail at startup.
+// Wire up in go/main.go: app.AddIdentityProvider(auth.PasskeyProvider{})
+func (a *App) AddIdentityProvider(p api.IdentityProvider) {
+	a.identityProviders = append(a.identityProviders, p)
+}
+
+// OnLogin sets the optional hook that maps a proven identity to the app's
+// subject at login. Without it, the provider's subject is used unchanged.
+// Returning api.ErrForbidden refuses the login (403). Claims such as email
+// are only available here.
+func (a *App) OnLogin(fn func(ctx context.Context, id api.Identity) (subject string, err error)) {
+	a.onLogin = fn
 }
 
 // SetFrontend registers an embedded frontend filesystem for production serving.
@@ -164,6 +186,11 @@ func (a *App) serverProvider(_ *cli.Context) []*cobra.Command {
 
 // serve eagerly initializes the database and starts the HTTP server.
 func (a *App) serve() error {
+	providers, err := a.identityProvidersFor(os.Getenv)
+	if err != nil {
+		return err
+	}
+
 	if a.hasDB {
 		if err := a.initDB(); err != nil {
 			return err
@@ -171,6 +198,16 @@ func (a *App) serve() error {
 		if err := a.initAuth(); err != nil {
 			return fmt.Errorf("auth init: %w", err)
 		}
+		api.InitSessions(db.NewSessionStore(db.DB()))
+	}
+	api.SetIdentityProviders(providers)
+	api.SetOnLogin(a.onLogin)
+	if len(providers) > 0 {
+		names := make([]string, len(providers))
+		for i, p := range providers {
+			names[i] = p.Name()
+		}
+		slog.Info("identity providers active", "providers", names)
 	}
 
 	// Auto-start backup scheduler if SFTP is configured.
@@ -190,6 +227,46 @@ func (a *App) serve() error {
 
 	slog.Info("starting server", "addr", ":"+port)
 	return api.Serve(":" + port)
+}
+
+// providerNameRe matches URL-safe provider names.
+var providerNameRe = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+
+// identityProvidersFor returns the active identity providers: the built-ins
+// activated by the environment, then the custom ones registered via
+// AddIdentityProvider. It fails on half-configured built-ins, invalid,
+// reserved or duplicate names, and on any active provider without a database.
+func (a *App) identityProvidersFor(getenv func(string) string) ([]api.IdentityProvider, error) {
+	providers, err := oidc.FromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, p := range providers {
+		seen[p.Name()] = true
+	}
+	for _, p := range a.identityProviders {
+		name := p.Name()
+		switch {
+		case !providerNameRe.MatchString(name):
+			return nil, fmt.Errorf("identity provider name %q is not URL-safe (allowed: letters, digits, . _ ~ -)", name)
+		case oidc.IsReserved(name):
+			return nil, fmt.Errorf("identity provider name %q is reserved for the built-in provider", name)
+		case seen[name]:
+			return nil, fmt.Errorf("identity provider %q registered twice", name)
+		}
+		seen[name] = true
+		providers = append(providers, p)
+	}
+	if len(providers) > 0 && !a.hasDB {
+		names := make([]string, len(providers))
+		for i, p := range providers {
+			names[i] = p.Name()
+		}
+		return nil, fmt.Errorf("identity providers (%s) need a database for sessions: call app.AddDb(db.Provider) in main.go",
+			strings.Join(names, ", "))
+	}
+	return providers, nil
 }
 
 // initAuth loads (or generates) the JWT signing key from _schemaf_config.

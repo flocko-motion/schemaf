@@ -91,6 +91,13 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		return err
 	}
 
+	// Fail fast on auth misconfiguration, before starting any containers.
+	if svc.backend {
+		if _, err := a.identityProvidersFor(os.Getenv); err != nil {
+			return err
+		}
+	}
+
 	// Ensure codegen has been run.
 	if _, err := os.Stat("compose.gen.yml"); os.IsNotExist(err) {
 		fmt.Fprintln(os.Stderr, "compose.gen.yml not found — running codegen first...")

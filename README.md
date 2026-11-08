@@ -18,6 +18,7 @@ Common tasks and where they're documented (jump straight to the section):
 | Wire providers in `main.go` | [EXTEND › main.go Wiring](EXTEND.md#maingo-wiring) |
 | Add an API endpoint | [EXTEND › Endpoint Interface](EXTEND.md#endpoint-interface) |
 | Authenticate / mint dev tokens | [EXTEND › Authentication](EXTEND.md#authentication) |
+| Sign users in with Auth0 | [EXTEND › Activating Auth0](EXTEND.md#activating-auth0) |
 | Stream / upload (raw HTTP) | [EXTEND › Raw Endpoints](EXTEND.md#raw-endpoints) |
 | Add a database migration | [EXTEND › Migrations](EXTEND.md#migrations) |
 | Migrate a secondary / external DB | [EXTEND › Applying migrations to another database](EXTEND.md#applying-migrations-to-another-database) |
@@ -73,7 +74,9 @@ schemaf is **batteries-included**. These are built-in, not optional:
   - Binds `/` for frontend (proxy in dev, embed in production)
   - Single exposed port (default 8000, configurable via schemaf.toml)
 - **Authentication**: JWT-based auth, fully managed by the framework
-  - Bearer token in `Authorization` header
+  - Accepted from an HttpOnly session cookie or a Bearer token in the `Authorization` header
+  - Pluggable identity providers exchanged for schemaf's own session at login: built-in Auth0, switched on by two env vars with no code (see [Activating Auth0](EXTEND.md#activating-auth0)), plus your own (passkeys, login codes, ...)
+  - Short-lived, auto-renewed tokens backed by revocable sessions in Postgres
   - Signing key is auto-generated on first boot and stored in Postgres (`_schemaf_config` table)
   - No configuration, no secrets to manage — the framework owns the key entirely
   - Auth is declared per-endpoint (see [Endpoint Interface](EXTEND.md#endpoint-interface)) — `/health` and `/status` are always open

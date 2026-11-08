@@ -14,7 +14,7 @@ import (
 type openAPISchema struct {
 	OpenAPI    string                        `json:"openapi"`
 	Info       openAPIInfo                   `json:"info"`
-	Paths      map[string]openAPIPathItem    `json:"paths"`
+	Paths      map[string]any                `json:"paths"`
 	Components openAPIComponents             `json:"components,omitempty"`
 }
 
@@ -25,6 +25,7 @@ type openAPIInfo struct {
 
 type openAPIComponents struct {
 	SecuritySchemes map[string]openAPISecurityScheme `json:"securitySchemes,omitempty"`
+	Schemas         map[string]any                   `json:"schemas,omitempty"`
 }
 
 type openAPISecurityScheme struct {
@@ -71,7 +72,7 @@ func OpenAPIHandler() http.Handler {
 // BuildOpenAPI constructs the OpenAPI spec from all registered routes.
 // Exported so the codegen command can call it directly to write openapi.json.
 func BuildOpenAPI(title, version string) openAPISchema {
-	paths := map[string]openAPIPathItem{}
+	paths, schemas := AuthOpenAPI()
 
 	for _, route := range Routes() {
 		method := strings.ToLower(route.Method)
@@ -113,10 +114,12 @@ func BuildOpenAPI(title, version string) openAPISchema {
 			}
 		}
 
-		if _, ok := paths[path]; !ok {
-			paths[path] = openAPIPathItem{}
+		item, ok := paths[path].(openAPIPathItem)
+		if !ok {
+			item = openAPIPathItem{}
+			paths[path] = item
 		}
-		paths[path][method] = op
+		item[method] = op
 	}
 
 	return openAPISchema{
@@ -131,6 +134,7 @@ func BuildOpenAPI(title, version string) openAPISchema {
 					BearerFormat: "JWT",
 				},
 			},
+			Schemas: schemas,
 		},
 	}
 }

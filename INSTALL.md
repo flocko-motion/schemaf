@@ -240,7 +240,9 @@ mkdir -p ~/.myapp/etc
 echo "DB_PASS=$(openssl rand -hex 16)" > ~/.myapp/etc/env
 ```
 
-**How secrets reach containers:** `schemaf.sh` automatically loads `~/.<name>/dev/etc/env` on every invocation, setting any variables not already in your environment. Docker Compose then picks up `${DB_PASS}` via environment variable substitution. Secrets flow from your home directory into containers without ever touching version control.
+**Optional: Auth0.** Add `AUTH0_DOMAIN` and `AUTH0_CLIENT_ID` to the same file to switch on the built-in Auth0 login (both or neither). See [Activating Auth0](EXTEND.md#activating-auth0).
+
+**How secrets reach containers:** `schemaf.sh` automatically loads `~/.<name>/dev/etc/env` on every invocation, setting any variables not already in your environment. Docker Compose then picks up `${DB_PASS}` (and `${AUTH0_DOMAIN}`, `${AUTH0_CLIENT_ID}`) via environment variable substitution. Secrets flow from your home directory into containers without ever touching version control.
 
 > **Never commit secrets.** The `~/.<name>/` directory is outside your project tree by design. If you see `The "DB_PASS" variable is not set` warnings from Docker Compose, create the env file above.
 
