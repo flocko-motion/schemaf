@@ -7,18 +7,37 @@ import (
 	"net/http"
 )
 
+// frameworkRoute is a built-in route with its explicit auth level.
+type frameworkRoute struct {
+	pattern string
+	auth    AuthLevel
+	handler http.Handler
+}
+
+// frameworkRoutes lists the built-in routes. POST /api/auth/logout is
+// AuthNone because it authenticates itself: it ends the session if there is
+// one, always clears the cookie, and applies the Origin check to cookie
+// requests.
+func frameworkRoutes() []frameworkRoute {
+	return []frameworkRoute{
+		{"GET /openapi.json", AuthNone, OpenAPIHandler()},
+		{"GET /api/health", AuthNone, HealthHandler()},
+		{"GET /api/status", AuthNone, StatusHandler()},
+		{"GET /api/config", AuthNone, ConfigHandler()},
+		{"GET /api/user/me", AuthRequired, userMeHandler()},
+		{"POST /api/auth/{provider}/login", AuthNone, loginHandler()},
+		{"POST /api/auth/logout", AuthNone, logoutHandler()},
+		{"POST /api/auth/refresh", AuthRequired, refreshHandler()},
+	}
+}
+
 // NewMux builds and returns the http.ServeMux with all framework defaults and
 // registered routes. Useful for testing with httptest.NewServer.
 func NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("GET /openapi.json", OpenAPIHandler())
-	mux.Handle("GET /api/health", HealthHandler())
-	mux.Handle("GET /api/status", StatusHandler())
-	mux.Handle("GET /api/config", ConfigHandler())
-	mux.Handle("GET /api/user/me", UserMeHandler())
-	mux.Handle("POST /api/auth/{provider}/login", loginHandler())
-	mux.Handle("POST /api/auth/logout", logoutHandler())
-	mux.Handle("POST /api/auth/refresh", requireAuth(refreshHandler()))
+	for _, fr := range frameworkRoutes() {
+		mux.Handle(fr.pattern, withAuth(fr.auth, fr.handler))
+	}
 	for _, r := range Routes() {
 		mux.Handle(r.Method+" "+r.Path, r.Handler)
 	}

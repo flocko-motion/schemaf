@@ -12,10 +12,10 @@ import (
 
 // openAPISchema is a minimal OpenAPI 3.0 document.
 type openAPISchema struct {
-	OpenAPI    string                        `json:"openapi"`
-	Info       openAPIInfo                   `json:"info"`
-	Paths      map[string]any                `json:"paths"`
-	Components openAPIComponents             `json:"components,omitempty"`
+	OpenAPI    string            `json:"openapi"`
+	Info       openAPIInfo       `json:"info"`
+	Paths      map[string]any    `json:"paths"`
+	Components openAPIComponents `json:"components,omitempty"`
 }
 
 type openAPIInfo struct {
@@ -24,14 +24,8 @@ type openAPIInfo struct {
 }
 
 type openAPIComponents struct {
-	SecuritySchemes map[string]openAPISecurityScheme `json:"securitySchemes,omitempty"`
-	Schemas         map[string]any                   `json:"schemas,omitempty"`
-}
-
-type openAPISecurityScheme struct {
-	Type         string `json:"type"`
-	Scheme       string `json:"scheme"`
-	BearerFormat string `json:"bearerFormat,omitempty"`
+	SecuritySchemes map[string]any `json:"securitySchemes,omitempty"`
+	Schemas         map[string]any `json:"schemas,omitempty"`
 }
 
 type openAPIPathItem map[string]openAPIOperation // method → operation
@@ -40,7 +34,7 @@ type openAPIOperation struct {
 	Summary     string                     `json:"summary,omitempty"`
 	Description string                     `json:"description,omitempty"`
 	OperationID string                     `json:"operationId,omitempty"`
-	Security    []map[string][]string      `json:"security,omitempty"`
+	Security    []any                      `json:"security,omitempty"`
 	RequestBody *openAPIRequestBody        `json:"requestBody,omitempty"`
 	Responses   map[string]openAPIResponse `json:"responses"`
 }
@@ -89,8 +83,8 @@ func BuildOpenAPI(title, version string) openAPISchema {
 			},
 		}
 
-		if route.Auth {
-			op.Security = []map[string][]string{{"bearerAuth": {}}}
+		if route.Auth != AuthNone {
+			op.Security = OpenAPISecurity(route.Auth)
 			op.Responses["401"] = openAPIResponse{Description: "Unauthorized"}
 		}
 
@@ -127,14 +121,8 @@ func BuildOpenAPI(title, version string) openAPISchema {
 		Info:    openAPIInfo{Title: title, Version: version},
 		Paths:   paths,
 		Components: openAPIComponents{
-			SecuritySchemes: map[string]openAPISecurityScheme{
-				"bearerAuth": {
-					Type:         "http",
-					Scheme:       "bearer",
-					BearerFormat: "JWT",
-				},
-			},
-			Schemas: schemas,
+			SecuritySchemes: OpenAPISecuritySchemes(cookieName()),
+			Schemas:         schemas,
 		},
 	}
 }

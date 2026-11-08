@@ -11,6 +11,32 @@ import (
 	"net/http"
 )
 
+// AuthLevel declares how an endpoint authenticates its caller.
+type AuthLevel int
+
+const (
+	// AuthNone: credentials are never looked at; the handler runs anonymous.
+	AuthNone AuthLevel = iota
+	// AuthOptional: the subject if credentials are present, anonymous if
+	// not. Present but invalid credentials are a 401.
+	AuthOptional
+	// AuthRequired: 401 without valid credentials.
+	AuthRequired
+)
+
+// String returns the constant's name, e.g. "AuthRequired".
+func (l AuthLevel) String() string {
+	switch l {
+	case AuthNone:
+		return "AuthNone"
+	case AuthOptional:
+		return "AuthOptional"
+	case AuthRequired:
+		return "AuthRequired"
+	}
+	return fmt.Sprintf("AuthLevel(%d)", int(l))
+}
+
 // Endpoint is the interface that all schemaf API endpoints must implement.
 // Req is the request type (decoded from JSON body or path/query params).
 // Resp is the response type (encoded as JSON).
@@ -24,9 +50,9 @@ import (
 // The first line becomes the OpenAPI summary; subsequent lines the description.
 // Both are extracted by codegen — no annotations required.
 type Endpoint[Req, Resp any] interface {
-	Method() string // HTTP method: "GET", "POST", "PUT", "DELETE", etc.
-	Path() string   // Route path, e.g. "/api/todos/{id}"
-	Auth() bool     // Whether the endpoint requires JWT authentication
+	Method() string  // HTTP method: "GET", "POST", "PUT", "DELETE", etc.
+	Path() string    // Route path, e.g. "/api/todos/{id}"
+	Auth() AuthLevel // AuthNone, AuthOptional or AuthRequired
 	Handle(ctx context.Context, req Req) (Resp, error)
 }
 
@@ -36,17 +62,13 @@ type Endpoint[Req, Resp any] interface {
 func NewRoute[Req, Resp any](e Endpoint[Req, Resp], summary, description string) Route {
 	var zeroReq Req
 	var zeroResp Resp
-	h := newTypedHandler(e)
-	if e.Auth() {
-		h = requireAuth(h)
-	}
 	return Route{
 		Method:      e.Method(),
 		Path:        e.Path(),
 		Auth:        e.Auth(),
 		Summary:     summary,
 		Description: description,
-		Handler:     h,
+		Handler:     withAuth(e.Auth(), newTypedHandler(e)),
 		ReqType:     &zeroReq,
 		RespType:    &zeroResp,
 	}
@@ -99,24 +121,20 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
 type RawEndpoint interface {
 	Method() string
 	Path() string
-	Auth() bool
+	Auth() AuthLevel
 	HandleRaw(w http.ResponseWriter, r *http.Request) error
 }
 
 // NewRawRoute creates a Route from a RawEndpoint. No JSON decode/encode is
 // performed; the handler receives the raw http.ResponseWriter and *http.Request.
 func NewRawRoute(e RawEndpoint, summary, description string) Route {
-	h := newRawHandler(e)
-	if e.Auth() {
-		h = requireAuth(h)
-	}
 	return Route{
 		Method:      e.Method(),
 		Path:        e.Path(),
 		Auth:        e.Auth(),
 		Summary:     summary,
 		Description: description,
-		Handler:     h,
+		Handler:     withAuth(e.Auth(), newRawHandler(e)),
 		ReqType:     nil,
 		RespType:    nil,
 	}

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// TestRequireAuth exercises the real HTTP auth path (requireAuth + Subject) via
+// TestRequireAuth exercises the real HTTP auth path (AuthRequired + Subject) via
 // the always-present /api/user/me endpoint, using an in-process httptest server.
 // This is the mechanism the `auth token` CLI relies on.
 func TestRequireAuth(t *testing.T) {

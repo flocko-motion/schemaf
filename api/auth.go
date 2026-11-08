@@ -20,7 +20,7 @@ import (
 // ctxKeyAuth is the context key for the authenticated caller (authInfo).
 type ctxKeyAuth struct{}
 
-// authInfo is what requireAuth stores in the request context.
+// authInfo is what the auth middleware stores in the request context.
 type authInfo struct {
 	subject        string
 	sessionID      string    // "" for stateless tokens
@@ -123,13 +123,16 @@ func verifyToken(token string) (jwtClaims, error) {
 
 // authError is an authentication failure with the HTTP status to answer.
 type authError struct {
-	status int
-	msg    string
+	status        int
+	msg           string
+	noCredentials bool // the request carried no credentials at all
 }
 
 func (e *authError) Error() string { return e.msg }
 
-func unauthorized(msg string) *authError { return &authError{http.StatusUnauthorized, msg} }
+func unauthorized(msg string) *authError {
+	return &authError{status: http.StatusUnauthorized, msg: msg}
+}
 
 // authenticate verifies the request's token (Bearer wins over the cookie),
 // the Origin check for cookie requests, and the session or subject-level
@@ -143,13 +146,15 @@ func authenticate(r *http.Request) (info authInfo, renew bool, aerr *authError) 
 		token = c.Value
 		info.viaCookie = true
 	} else {
-		return info, false, unauthorized("missing credentials: no Bearer token or session cookie")
+		aerr := unauthorized("missing credentials: no Bearer token or session cookie")
+		aerr.noCredentials = true
+		return info, false, aerr
 	}
 
 	// CSRF: cookies are sent by the browser automatically, so a state-changing
 	// cookie request must come from our own origin. Bearer is exempt.
 	if info.viaCookie && r.Method != http.MethodGet && r.Method != http.MethodHead && !sameOrigin(r) {
-		return info, false, &authError{http.StatusForbidden, "cross-origin request rejected: Origin header missing or not matching the host"}
+		return info, false, &authError{status: http.StatusForbidden, msg: "cross-origin request rejected: Origin header missing or not matching the host"}
 	}
 
 	claims, err := verifyToken(token)
@@ -169,7 +174,7 @@ func authenticate(r *http.Request) (info authInfo, renew bool, aerr *authError) 
 		if sessionStore != nil {
 			rb, err := sessionStore.RevokedBefore(r.Context(), claims.Sub)
 			if err != nil {
-				return info, false, &authError{http.StatusInternalServerError, err.Error()}
+				return info, false, &authError{status: http.StatusInternalServerError, msg: err.Error()}
 			}
 			// iat has second precision: a token from the same second as the
 			// revocation counts as revoked (safe side).
@@ -185,7 +190,7 @@ func authenticate(r *http.Request) (info authInfo, renew bool, aerr *authError) 
 	}
 	sess, ok, err := sessionStore.GetSession(r.Context(), claims.Sid)
 	if err != nil {
-		return info, false, &authError{http.StatusInternalServerError, err.Error()}
+		return info, false, &authError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	t := now()
 	switch {
@@ -230,13 +235,32 @@ func sameOrigin(r *http.Request) bool {
 	return false
 }
 
-// requireAuth is middleware that authenticates the request (cookie or Bearer),
-// renews cookie session tokens past half their lifetime, and injects the
-// caller into the context.
-func requireAuth(next http.Handler) http.Handler {
+// withAuth wraps next in the auth middleware for level.
+//
+// AuthNone returns next unchanged: credentials are never looked at.
+// AuthRequired and AuthOptional authenticate the request (cookie or Bearer),
+// renew cookie session tokens past half their lifetime and inject the caller
+// into the context. Without any credentials, AuthRequired answers 401 while
+// AuthOptional runs next anonymously. Present but invalid credentials are a
+// 401 at both levels, and clear the cookie when they came from it.
+func withAuth(level AuthLevel, next http.Handler) http.Handler {
+	switch level {
+	case AuthNone:
+		return next
+	case AuthOptional, AuthRequired:
+	default:
+		panic(fmt.Sprintf("api: invalid auth level %d", level))
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info, renew, aerr := authenticate(r)
 		if aerr != nil {
+			if aerr.noCredentials && level == AuthOptional {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if aerr.status == http.StatusUnauthorized && info.viaCookie {
+				clearSessionCookie(w)
+			}
 			writeJSONError(w, aerr.status, aerr.msg)
 			return
 		}

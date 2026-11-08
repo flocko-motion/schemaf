@@ -9,6 +9,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
   - [Runtime config: `PUBLIC_*`](#runtime-config-public_)
 - [Built-in Endpoints](#built-in-endpoints)
 - [Endpoint Interface](#endpoint-interface)
+  - [Auth levels](#auth-levels)
 - [Authentication](#authentication)
   - [Identity providers](#identity-providers)
   - [Activating Auth0](#activating-auth0)
@@ -263,7 +264,7 @@ The interface (defined in `api/endpoint.go`):
 type Endpoint[Req, Resp any] interface {
     Method() string                                    // HTTP method: "GET", "POST", "PUT", "DELETE"
     Path() string                                      // Route path, e.g. "/api/todos/{id}"
-    Auth() bool                                        // Whether JWT authentication is required
+    Auth() api.AuthLevel                               // AuthNone, AuthOptional or AuthRequired
     Handle(ctx context.Context, req Req) (Resp, error) // Your business logic
 }
 ```
@@ -276,7 +277,7 @@ type GetUserEndpoint struct{}
 
 func (e GetUserEndpoint) Method() string { return "GET" }
 func (e GetUserEndpoint) Path()   string { return "/api/users/{id}" }
-func (e GetUserEndpoint) Auth()   bool   { return true }
+func (e GetUserEndpoint) Auth() api.AuthLevel { return api.AuthRequired }
 
 func (e GetUserEndpoint) Handle(ctx context.Context, req GetUserReq) (GetUserResp, error) {
     user, err := db.GetUser(ctx, req.ID)
@@ -295,15 +296,65 @@ type GetUserResp struct {
 Each endpoint struct has four methods:
 - `Method()` — HTTP method (GET, POST, PUT, DELETE)
 - `Path()` — route with `{param}` placeholders
-- `Auth()` — whether JWT auth is required
+- `Auth()` — the endpoint's [auth level](#auth-levels)
 - `Handle(ctx, req) (resp, error)` — your business logic
 
 **What the framework does for you:**
 - Decodes the request (path params, query params, JSON body) into the request type
-- Checks the JWT if `Auth()` returns `true`
+- Authenticates the caller according to `Auth()`
 - Calls `Handle(ctx, req)`
 - Encodes the response as JSON
 - On error: maps the error to an appropriate HTTP status (see below)
+
+### Auth levels
+
+`Auth()` returns one of three levels:
+
+```go
+// package api
+type AuthLevel int
+
+const (
+    AuthNone     AuthLevel = iota // credentials are never looked at
+    AuthOptional                  // the subject if credentials are present, anonymous if not
+    AuthRequired                  // 401 without valid credentials
+)
+```
+
+| Level | No credentials | Valid credentials | Invalid credentials |
+|---|---|---|---|
+| `AuthNone` | handler runs | ignored, handler runs anonymous | ignored, handler runs anonymous |
+| `AuthOptional` | handler runs; `api.Subject` → `("", false)` | as `AuthRequired` | **401** + cookie cleared |
+| `AuthRequired` | 401 | session check, cookie renewal, `Origin` check | **401** + cookie cleared |
+
+- **Valid** credentials are a token `AuthRequired` accepts: a valid Bearer token, or a session cookie, including an expired cookie token for a live session (renewed, see [Sessions](#sessions)).
+- **Invalid** credentials are present but rejected: bad signature, revoked or ended session, expired Bearer token, revoked subject. A signed-in caller is never silently downgraded to anonymous.
+- When invalid credentials came from the cookie, the 401 also clears the cookie, so the browser stops sending it and the next request to an optional endpoint is anonymous. A rejected Bearer token leaves the cookie alone.
+- The [CSRF `Origin` check](#sessions) applies to cookie-authenticated requests at `AuthOptional` exactly as at `AuthRequired`.
+
+Use `AuthOptional` for endpoints that serve signed-in users and guests alike, such as a shared or public page:
+
+```go
+func (e GetShareEndpoint) Auth() api.AuthLevel { return api.AuthOptional }
+
+func (e GetShareEndpoint) Handle(ctx context.Context, req GetShareReq) (GetShareResp, error) {
+    if sub, ok := api.Subject(ctx); ok {
+        return shares.GetForUser(ctx, req.ID, sub)
+    }
+    return shares.GetPublic(ctx, req.ID)
+}
+```
+
+In `openapi.json`, `AuthRequired` endpoints declare `security: [{bearerAuth: []}, {cookieAuth: []}]` and `AuthOptional` endpoints `security: [{}, {bearerAuth: []}, {cookieAuth: []}]` (anonymous allowed); both list a `401` response. `AuthNone` endpoints declare no security.
+
+Codegen is strict: an endpoint whose `Auth()` does not return one of the three constants, whose `Method()` or `Path()` does not return a string literal, whose `Handle` does not have the `(ctx, Req) (Resp, error)` shape, or that has `Method()`, `Path()` and `Auth()` but no `Handle`/`HandleRaw` (e.g. a misnamed `Handler`) is a codegen error, never silently skipped.
+
+#### Upgrading: `Auth() bool` → `api.AuthLevel`
+
+Before v1.11.0, `Auth()` returned `bool`. Codegen rejects the old signature and names the endpoint. Replace:
+
+- `Auth() bool { return true }` → `Auth() api.AuthLevel { return api.AuthRequired }`
+- `Auth() bool { return false }` → `Auth() api.AuthLevel { return api.AuthNone }`
 
 **Error responses:** return one of the framework's sentinel errors (directly or wrapped with `%w`) to control the status code; any other error is `500`.
 
@@ -355,7 +406,8 @@ You write the struct. Everything else is generated or framework-provided.
 
 schemaf has built-in auth, fully managed by the framework:
 
-- **Per-endpoint**: return `true` from `Auth()` to require a valid token (see [Endpoint Interface](#endpoint-interface)). `/api/health`, `/api/status` and `/api/config` are always open.
+- **Per-endpoint**: `Auth()` returns `api.AuthRequired`, `api.AuthOptional` or `api.AuthNone` (see [Auth levels](#auth-levels)). `/api/health`, `/api/status`, `/api/config`, `/openapi.json` and the login routes are always open; `/api/user/me` and `/api/auth/refresh` require auth.
+- **Optional auth**: at `api.AuthOptional` the handler also runs for anonymous callers, and `api.Subject(ctx)` tells it whether someone is signed in. Present but invalid credentials still give 401 (and clear a dead cookie); the `Origin` check applies to cookie requests as usual.
 - **One token, two transports**: schemaf's token (an HMAC-SHA256 JWT) is accepted from the session cookie or from `Authorization: Bearer <token>`. Browsers use the cookie; scripts and other servers use Bearer. If both are present, Bearer wins.
 - **Signing key is auto-managed**: generated on first boot and stored in Postgres (`_schemaf_config`). Nothing to configure, no secret to manage.
 - In a handler, `api.Subject(ctx)` returns the authenticated subject; `/api/user/me` returns the current user.
@@ -523,7 +575,7 @@ Post the ID token **right after sign-in**: schemaf rejects ID tokens issued more
 
 #### 5. Backend: who is calling
 
-In any endpoint with `Auth() true`, `api.Subject(ctx)` returns the Auth0 `sub` by default:
+In any endpoint with `api.AuthRequired` (or `api.AuthOptional`, when someone is signed in), `api.Subject(ctx)` returns the Auth0 `sub` by default:
 
 ```go
 func (e ProfileEndpoint) Handle(ctx context.Context, req ProfileReq) (ProfileResp, error) {
@@ -668,7 +720,7 @@ type DownloadBlobEndpoint struct{}
 
 func (e DownloadBlobEndpoint) Method() string { return "GET" }
 func (e DownloadBlobEndpoint) Path() string   { return "/api/blobs/{id}" }
-func (e DownloadBlobEndpoint) Auth() bool     { return true }
+func (e DownloadBlobEndpoint) Auth() api.AuthLevel { return api.AuthRequired }
 
 func (e DownloadBlobEndpoint) HandleRaw(w http.ResponseWriter, r *http.Request) error {
     id := r.PathValue("id")
@@ -696,7 +748,7 @@ Same struct pattern, same `Method()`, `Path()`, `Auth()`. The only difference is
 - Define exactly one of `Handle` or `HandleRaw` — codegen will error if both are present
 - If `HandleRaw` returns a non-nil error and you haven't written a response yet, the framework writes a JSON error response with the standard status code mapping (`ErrNotFound` → 404, etc.)
 - If you've already started writing a response (set headers, streamed bytes), return `nil` and handle errors yourself
-- Auth works identically — if `Auth()` returns `true`, the token and session are validated before `HandleRaw` is called, and `api.Subject(r.Context())` returns the authenticated user ID
+- Auth works identically, with the same [three levels](#auth-levels) — at `api.AuthRequired` the token and session are validated before `HandleRaw` is called, and `api.Subject(r.Context())` returns the authenticated user ID; at `api.AuthOptional` it returns `("", false)` for anonymous callers
 
 ## Database
 

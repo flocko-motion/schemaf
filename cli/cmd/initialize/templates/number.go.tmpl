@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 
+	schemafapi "github.com/flocko-motion/schemaf/api"
 	schemafdb "github.com/flocko-motion/schemaf/db"
 
 	"schemaf.local/{{.Name}}/db"
@@ -14,7 +15,7 @@ type GetNumberEndpoint struct{}
 
 func (e GetNumberEndpoint) Method() string { return "GET" }
 func (e GetNumberEndpoint) Path() string   { return "/api/number" }
-func (e GetNumberEndpoint) Auth() bool     { return false }
+func (e GetNumberEndpoint) Auth() schemafapi.AuthLevel { return schemafapi.AuthNone }
 func (e GetNumberEndpoint) Handle(ctx context.Context, req GetNumberReq) (GetNumberResp, error) {
 	q := db.New(schemafdb.DB())
 	n, err := q.GetNumber(ctx)
@@ -36,7 +37,7 @@ type SetNumberEndpoint struct{}
 
 func (e SetNumberEndpoint) Method() string { return "PUT" }
 func (e SetNumberEndpoint) Path() string   { return "/api/number" }
-func (e SetNumberEndpoint) Auth() bool     { return false }
+func (e SetNumberEndpoint) Auth() schemafapi.AuthLevel { return schemafapi.AuthNone }
 func (e SetNumberEndpoint) Handle(ctx context.Context, req SetNumberReq) (SetNumberResp, error) {
 	q := db.New(schemafdb.DB())
 	if err := q.SetNumber(ctx, int32(req.Number)); err != nil {

@@ -140,9 +140,9 @@ func clearSessionCookie(w http.ResponseWriter) {
 // ports don't overwrite each other's cookie.
 func cookieName() string {
 	if constants.IsProjectNameSet() {
-		return constants.ProjectName() + "_session"
+		return SessionCookieName(constants.ProjectName())
 	}
-	return "schemaf_session"
+	return SessionCookieName("schemaf")
 }
 
 func secureCookies() bool { return os.Getenv("SCHEMAF_ENV") == "docker" }
@@ -282,7 +282,7 @@ func logoutHandler() http.Handler {
 	})
 }
 
-// refreshHandler serves POST /api/auth/refresh (behind requireAuth): a fresh
+// refreshHandler serves POST /api/auth/refresh (AuthRequired): a fresh
 // token for the current session.
 func refreshHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -138,6 +138,8 @@ package api
 import (
     "context"
 
+    schemafapi "github.com/flocko-motion/schemaf/api"
+
     "myapp/db"
 )
 
@@ -146,7 +148,7 @@ type ListUsersEndpoint struct{}
 
 func (e ListUsersEndpoint) Method() string { return "GET" }
 func (e ListUsersEndpoint) Path() string   { return "/api/users" }
-func (e ListUsersEndpoint) Auth() bool     { return false }
+func (e ListUsersEndpoint) Auth() schemafapi.AuthLevel { return schemafapi.AuthNone }
 func (e ListUsersEndpoint) Handle(ctx context.Context, req ListUsersReq) (ListUsersResp, error) {
     users, err := db.ListUsers(ctx)
     if err != nil {
