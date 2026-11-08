@@ -229,6 +229,7 @@ The project's data volume may exist only in the selected runtime. Choose one:
 
   1. Migrate the data to %[1]s (a move, not a copy). From the project root:
        set -a; . ~/.%[4]s/etc/env; set +a          # dev: ~/.%[4]s/dev/etc/env
+       export SCHEMAF_IMAGE=%[4]s:unused             # required by compose.gen.yml; only postgres starts
        %[2]s compose -f compose.gen.yml down
        %[2]s compose -f compose.gen.yml up -d --wait postgres
        %[2]s exec %[4]s-postgres pg_dump -U schemaf -d %[4]s > %[4]s.sql

@@ -129,7 +129,11 @@ func runComposeGen() error {
 	}
 	cli.Success("Generated gen/test-env.sh")
 
-	if err := renderTemplate(schemafShTemplate, "schemaf.sh", base); err != nil {
+	shData, err := schemafShData(base)
+	if err != nil {
+		return err
+	}
+	if err := renderTemplate(schemafShTemplate, "schemaf.sh", shData); err != nil {
 		return err
 	}
 	if err := os.Chmod("schemaf.sh", 0755); err != nil {
@@ -138,6 +142,21 @@ func runComposeGen() error {
 	cli.Success("Generated schemaf.sh")
 
 	return nil
+}
+
+// schemafShData adds what schemaf.sh.tmpl needs beyond the compose data: the
+// schemaf version (for the banner, so no Go runs at startup) and the inputs
+// hash definition (inputGlobs / inputExcludes), rendered into shell syntax.
+func schemafShData(base map[string]any) (map[string]any, error) {
+	version, err := readSchemafVersion()
+	if err != nil {
+		return nil, err
+	}
+	d := copyMap(base)
+	d["SchemafVersion"] = version
+	d["InputGlobs"] = strings.Join(inputGlobs, " ")
+	d["InputExcludes"] = strings.Join(inputExcludes, "|")
+	return d, nil
 }
 
 func copyMap(m map[string]any) map[string]any {

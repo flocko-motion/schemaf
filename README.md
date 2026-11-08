@@ -29,6 +29,8 @@ Common tasks and where they're documented (jump straight to the section):
 | Write & run tests | [EXTEND › Testing](EXTEND.md#testing) |
 | Configure database backups | [EXTEND › Database Backups](EXTEND.md#database-backups) |
 | Secrets / env files | [INSTALL › Secrets](INSTALL.md#secrets) |
+| Deploy: build an image, run it | [INSTALL › Deployment](INSTALL.md#deployment) |
+| Build as one user, run as another | [INSTALL › Separate build and run users](INSTALL.md#separate-build-and-run-users) |
 | Container runtime (podman / Docker) | [INSTALL › Container runtime](INSTALL.md#container-runtime) |
 | Move data from Docker to podman | [INSTALL › Migrating from Docker to podman](INSTALL.md#migrating-from-docker-to-podman) |
 | Compose & extra services | [INSTALL › Compose](INSTALL.md#compose) |
@@ -102,7 +104,8 @@ schemaf is **batteries-included**. These are built-in, not optional:
 - **Compose**: Built-in compose for backend and Postgres — merged with `compose/` in your project
 - **Code generation**: One command generates all glue code — see [Code Generation](EXTEND.md#code-generation)
 - **Ports**: Fixed allocation (see below)
-- **Project entrypoint**: `schemaf.sh codegen`, `schemaf.sh test`, `schemaf.sh run`, `schemaf.sh dev`
+- **Project entrypoint**: `schemaf.sh codegen`, `schemaf.sh test`, `schemaf.sh build`, `schemaf.sh run`, `schemaf.sh dev`
+- **Deployment**: `build` turns a commit into an image, optionally packed with its compose files into one self-extracting `<name>-<tag>.run` file; `run` starts an image. Build and run can be different users on the same host, so the user that runs third-party build code never reaches the database — see [Deployment](INSTALL.md#deployment)
 
 ## What You Add
 
@@ -129,7 +132,8 @@ myapp/
 ├── compose.gen.yml                 # Generated: merged compose definition
 ├── Dockerfile.gen                  # Generated: production Dockerfile
 ├── gen/                            # Other generated files
-│   └── openapi.json                # Generated: OpenAPI spec
+│   ├── openapi.json                # Generated: OpenAPI spec
+│   └── inputs.sha256               # Generated: hash of codegen's inputs (freshness check)
 ├── go/                            # All Go code (CLI + server unified)
 │   ├── main.go                    # Wire up providers, start app
 │   ├── db/                        # All database concerns
@@ -215,6 +219,7 @@ schemaf collapses all of this into a single compiled binary:
 | What | How |
 |---|---|
 | HTTP server | `./myapp server` — runs inside the container |
+| Image build | `./schemaf.sh build` — builds `Dockerfile.gen` with the container runtime; no Go or Node on the host |
 | Compose orchestration | `./schemaf.sh run/dev` — runs `<runtime> compose` (podman by default), then exits |
 | Code generation | `./schemaf.sh codegen` — `go run`s the framework CLI, reads your files |
 | Database migrations | embedded SQL, applied automatically on server startup |
@@ -227,12 +232,16 @@ The binary has full knowledge of itself. Its endpoint structs are compiled in �
 
 **Deployment is therefore trivial:**
 ```bash
-go build -o myapp go/main.go   # one artifact
-./schemaf.sh codegen            # generates compose.gen.yml, Dockerfile.gen, etc.
-./schemaf.sh run                # everything runs
+./schemaf.sh run                                  # single-user host: build the commit, start it
+```
+or, built by one user and run by another:
+```bash
+./schemaf.sh build --output myapp-3f9a2c1.run     # build user: image + compose files in one file
+./myapp-3f9a2c1.run load                          # run user: load it
+~/.myapp/bin/schemaf.sh run --image 3f9a2c1       # run user: start it
 ```
 
-No package manager. No deployment pipeline that installs twelve tools. No config files spread across the filesystem. One binary, one compose file, done.
+No package manager. No deployment pipeline that installs twelve tools. No config files spread across the filesystem. One image, one compose file, done. See [Deployment](INSTALL.md#deployment).
 
 ## Repository Map
 

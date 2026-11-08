@@ -111,6 +111,13 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		return err
 	}
 
+	// compose.gen.yml requires SCHEMAF_IMAGE for the backend service. Dev never
+	// starts that service (the backend runs natively, scaled to 0), so a
+	// placeholder satisfies compose; it is never pulled or run.
+	if os.Getenv("SCHEMAF_IMAGE") == "" {
+		os.Setenv("SCHEMAF_IMAGE", constants.ProjectName()+":dev-runs-natively")
+	}
+
 	// Stop production compose if running — dev and prod can't coexist.
 	if err := stopProdIfRunning(); err != nil {
 		return err

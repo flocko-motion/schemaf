@@ -38,7 +38,7 @@ func newAllCmd(ctx *cli.Context) *cobra.Command {
 	return &cobra.Command{
 		Use:   "all",
 		Short: "Run all codegen steps",
-		Long:  `Runs constants, compose, migrations, sqlc, endpoints, apits, and tests codegen in order.`,
+		Long:  `Runs constants, compose, migrations, sqlc, endpoints, apits, and tests codegen in order, then records the inputs hash (gen/inputs.sha256).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := runConstantsGen(); err != nil {
 				return err
@@ -67,7 +67,10 @@ func newAllCmd(ctx *cli.Context) *cobra.Command {
 			if err := runAPIGo(); err != nil {
 				return err
 			}
-			return runTestsGen()
+			if err := runTestsGen(); err != nil {
+				return err
+			}
+			return runInputsHashGen()
 		},
 	}
 }

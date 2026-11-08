@@ -128,7 +128,7 @@ In dev mode, the Go server reverse-proxies all non-API requests to the Vite dev 
 
 ### Production
 
-The generated `Dockerfile` includes a Node build stage that compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
+The generated `Dockerfile.gen` (built by `./schemaf.sh build`, see [Deployment](INSTALL.md#deployment)) includes a Node build stage that compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
 
 ### Runtime config: `PUBLIC_*`
 
@@ -958,22 +958,28 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
 
 5. **Compose → compose.gen.yml**
    - Merges schemaf's built-in compose (backend, Postgres) with your `compose/*.yml`
+   - The backend service never builds: its image is `${SCHEMAF_IMAGE}`, set by `schemaf.sh` (`run` builds first, `run --image <tag>` starts a loaded image); compose without it fails loudly
    - The backend service loads the production env file `~/.<name>/etc/env` (`env_file`), so every variable in it, including `PUBLIC_*` [runtime config](#runtime-config-public_), reaches the container
    - Files matching `*.dev.yml` are dev/test only — not included in `compose.gen.yml` (prod)
    - Used by `./schemaf.sh run` (prod) and `./schemaf.sh dev` (dev)
 
-**Zero configuration.** Just run `./schemaf.sh codegen` and all the glue code appears.
+6. **Inputs → gen/inputs.sha256**
+   - One SHA-256 over codegen's inputs: `go/api/*.go` (without `*.gen.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, and the schemaf version required in `go/go.mod`
+   - Computed as: for each input file in byte-wise sorted path order, the line `<sha256 of the file>  <path>` (as `sha256sum` prints it); then the line `schemaf <version>`; the hash of that text is the file's content. Dotfiles are not inputs
+   - `./schemaf.sh build` and `./schemaf.sh test` recompute it (with `sha256sum`, or `shasum -a 256` on macOS) and stop on a mismatch: `generated files are stale — run ./schemaf.sh codegen and commit`
+
+**Zero configuration.** Just run `./schemaf.sh codegen` and all the glue code appears. Generated files are committed: `build` runs no codegen and needs no Go, so a commit must carry generated files that match its inputs.
 
 ## Testing
 
 **Running tests:**
 ```bash
-./schemaf.sh test                  # regenerate code, then run all tests
+./schemaf.sh test                  # check generated files are fresh, then run all tests
 ./schemaf.sh test --verbose        # verbose go test output
 ./schemaf.sh test --no-cache       # bypass test cache
 ```
 
-`./schemaf.sh test` always runs codegen first, then `go test ./go/...` and `npx tsc --noEmit`. This guarantees tests always run against freshly generated code.
+`./schemaf.sh test` runs no codegen. It first checks `gen/inputs.sha256` (see [Code Generation](#code-generation)) and stops if generated files are stale — `run ./schemaf.sh codegen and commit` — then runs `go test ./go/...` and `npx tsc --noEmit`. Tests therefore always run against generated code that matches its inputs, and CI catches a commit that forgot codegen.
 
 The tests run against an ephemeral stack (`compose.test.gen.yml`: Postgres without a volume, plus your project services) started with the selected [container runtime](INSTALL.md#container-runtime): podman by default, Docker with `SCHEMAF_RUNTIME=docker`. It runs the same runtime checks as `dev` and `run`, and stops with a clear message if a tool is missing.
 
