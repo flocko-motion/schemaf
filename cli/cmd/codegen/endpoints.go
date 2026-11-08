@@ -564,21 +564,29 @@ func goFieldName(name string) string {
 
 // writeEndpointsGen generates go/api/endpoints.gen.go from the template.
 func writeEndpointsGen(endpoints []endpointInfo) error {
-	tmpl, err := template.New("endpoints").Parse(endpointsGenTemplate)
+	src, err := renderEndpointsGen(endpoints)
 	if err != nil {
-		return fmt.Errorf("parsing endpoints template: %w", err)
+		return err
 	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]any{"Endpoints": endpoints}); err != nil {
-		return fmt.Errorf("executing endpoints template: %w", err)
-	}
-
-	if err := os.WriteFile(endpointsGenOut, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(endpointsGenOut, src, 0644); err != nil {
 		return fmt.Errorf("writing %s: %w", endpointsGenOut, err)
 	}
 	cli.Success("Generated %s", endpointsGenOut)
 	return nil
+}
+
+// renderEndpointsGen renders the content of go/api/endpoints.gen.go.
+func renderEndpointsGen(endpoints []endpointInfo) ([]byte, error) {
+	tmpl, err := template.New("endpoints").Parse(endpointsGenTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parsing endpoints template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]any{"Endpoints": endpoints}); err != nil {
+		return nil, fmt.Errorf("executing endpoints template: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // writeOpenAPIJSON generates openapi.json from the extracted endpoint info.
