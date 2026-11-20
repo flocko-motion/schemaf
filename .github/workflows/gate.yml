@@ -121,35 +121,79 @@ jobs:
         run: |
           set -euo pipefail
           sudo loginctl enable-linger "$USER"
-          # ping_socket <user> <cmd prefix...>: podman's API socket of <user> answers
+          # socket_diagnostics <user>: everything that explains a dead socket.
+          socket_diagnostics() {
+            local u=$1 uid
+            uid=$(id -u "$u")
+            echo "::group::podman socket diagnostics for $u (uid $uid)"
+            if [ "$u" = "$USER" ]; then
+              env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user status podman.socket podman.service --no-pager || true
+              env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user show-environment || true
+            else
+              sudo systemctl --user -M "$u@" status podman.socket podman.service --no-pager || true
+              sudo systemctl --user -M "$u@" show-environment || true
+            fi
+            systemctl status "user@$uid.service" --no-pager || true
+            sudo journalctl --no-pager -n 100 _UID="$uid" || true
+            sudo journalctl --no-pager -n 50 "_SYSTEMD_USER_UNIT=podman.service" _UID="$uid" || true
+            sudo ls -la "/run/user/$uid" "/run/user/$uid/podman" || true
+            echo "-- $u's environment through sudo -H (HOME, XDG_*):"
+            sudo -H -u "$u" env | grep -E '^(HOME|XDG_)' || true
+            echo "-- where a leaked XDG_RUNTIME_DIR could come from:"
+            env | grep -E '^XDG_' || true
+            grep -E '^XDG_' /etc/environment || true
+            sudo grep -rhE '^[[:space:]]*Defaults' /etc/sudoers /etc/sudoers.d 2>/dev/null || true
+            sudo sudo -V | sed -n '/Environment variables to preserve/,/^$/p' || true
+            echo "::endgroup::"
+          }
+
+          # wait_socket <user> <systemctl...>: podman.socket is active (bounded)
+          wait_socket() {
+            local u=$1
+            shift
+            for _ in $(seq 1 15); do "$@" is-active --quiet podman.socket && return 0; sleep 1; done
+            echo "::error::podman.socket of $u is not active after enable --now"
+            socket_diagnostics "$u"
+            exit 1
+          }
+
+          # ping_socket <user> <cmd prefix...>: podman's API socket of <user>
+          # answers. A few tries: the first connection starts podman.service.
           ping_socket() {
             local u=$1 run
             shift
             run=/run/user/$(id -u "$u")
-            if ! "$@" env XDG_RUNTIME_DIR="$run" podman --remote --url "unix://$run/podman/podman.sock" version >/dev/null; then
-              echo "::error::podman's API socket for $u doesn't answer at unix://$run/podman/podman.sock"
-              echo "$u's HOME and XDG_* as podman saw them:"
-              "$@" env | grep -E '^(HOME|XDG_)' || true
-              exit 1
-            fi
-            echo "podman API socket answers for $u: unix://$run/podman/podman.sock"
+            for _ in 1 2 3 4 5; do
+              if "$@" env XDG_RUNTIME_DIR="$run" podman --remote --url "unix://$run/podman/podman.sock" version >/dev/null; then
+                echo "podman API socket answers for $u: unix://$run/podman/podman.sock"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "::error::podman's API socket for $u doesn't answer at unix://$run/podman/podman.sock"
+            socket_diagnostics "$u"
+            exit 1
           }
 
           # The runner: its user systemd is reachable through its own bus.
           run=/run/user/$(id -u)
           for _ in $(seq 1 30); do [ -S "$run/bus" ] && break; sleep 1; done
           [ -S "$run/bus" ] || { echo "::error::$run/bus did not appear: no user systemd for $USER (lingering?)"; exit 1; }
-          env XDG_RUNTIME_DIR="$run" DBUS_SESSION_BUS_ADDRESS="unix:path=$run/bus" \
-            systemctl --user enable --now podman.socket
+          as_runner_systemd=(env XDG_RUNTIME_DIR="$run" DBUS_SESSION_BUS_ADDRESS="unix:path=$run/bus" systemctl --user)
+          "${as_runner_systemd[@]}" enable --now podman.socket
+          wait_socket "$USER" "${as_runner_systemd[@]}"
           ping_socket "$USER"
 
           # The run user: through systemd's machine transport (systemd >= 248),
-          # once lingering has started its user@<uid>.service.
+          # once lingering has started its user@<uid>.service. Its manager
+          # started after /etc/environment was cleaned (previous step), so it
+          # needs no restart.
           u=$E2E_RUN_USER
           svc="user@$(id -u "$u").service"
           for _ in $(seq 1 30); do systemctl is-active --quiet "$svc" && break; sleep 1; done
           systemctl is-active --quiet "$svc" || { echo "::error::$svc is not active: no user systemd for $u (lingering?)"; systemctl status "$svc" --no-pager || true; exit 1; }
           sudo systemctl --user --machine="$u@" enable --now podman.socket
+          wait_socket "$u" sudo systemctl --user --machine="$u@"
           ping_socket "$u" sudo -H -u "$u"   # -H: its own HOME (podman reads ~/.config/containers)
 
           # the runner's own podman and systemctl find its runtime dir from here on
