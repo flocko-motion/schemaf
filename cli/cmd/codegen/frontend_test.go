@@ -118,6 +118,77 @@ func TestValidateFrontendRuntimeConfig(t *testing.T) {
 	})
 }
 
+// schemaf requires Vite + TypeScript, not React: a non-React entry
+// (src/main.ts, as for Vue or Svelte) is accepted, and the runtime config
+// check applies to whichever entry file exists.
+func TestValidateFrontendEntryFile(t *testing.T) {
+	toMainTS := func(t *testing.T) {
+		t.Helper()
+		if err := os.Rename("frontend/src/main.tsx", "frontend/src/main.ts"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("main.ts accepted", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		renderScaffold(t)
+		toMainTS(t)
+		if err := validateFrontend(); err != nil {
+			t.Errorf("main.ts entry rejected: %v", err)
+		}
+	})
+
+	t.Run("config import checked in main.ts", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		renderScaffold(t)
+		toMainTS(t)
+		s := strings.Replace(readFile(t, "frontend/src/main.ts"), `import "./api/generated/config.gen";`, "", 1)
+		if err := os.WriteFile("frontend/src/main.ts", []byte(s), 0644); err != nil {
+			t.Fatal(err)
+		}
+		err := validateFrontend()
+		if err == nil || !strings.Contains(err.Error(), "frontend/src/main.ts:") {
+			t.Errorf("missing config import in main.ts not reported for main.ts: %v", err)
+		}
+	})
+
+	t.Run("no entry file", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		renderScaffold(t)
+		if err := os.Remove("frontend/src/main.tsx"); err != nil {
+			t.Fatal(err)
+		}
+		err := validateFrontend()
+		if err == nil || !strings.Contains(err.Error(), "frontend/src/main.tsx or frontend/src/main.ts") {
+			t.Errorf("missing entry not reported with both options: %v", err)
+		}
+	})
+
+	t.Run("both entry files", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		renderScaffold(t)
+		if err := os.WriteFile("frontend/src/main.ts", []byte(readFile(t, "frontend/src/main.tsx")), 0644); err != nil {
+			t.Fatal(err)
+		}
+		err := validateFrontend()
+		if err == nil || !strings.Contains(err.Error(), "both frontend/src/main.tsx and frontend/src/main.ts exist") {
+			t.Errorf("two entry files not refused: %v", err)
+		}
+	})
+
+	t.Run("error names Vite, not React", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		renderScaffold(t)
+		if err := os.Remove("frontend/vite.config.ts"); err != nil {
+			t.Fatal(err)
+		}
+		err := validateFrontend()
+		if err == nil || !strings.Contains(err.Error(), "Vite + TypeScript") || strings.Contains(err.Error(), "React") {
+			t.Errorf("error should name Vite + TypeScript and not React: %v", err)
+		}
+	})
+}
+
 func TestFrontendGenWritesConfigTS(t *testing.T) {
 	t.Chdir(t.TempDir())
 	for _, d := range []string{"frontend", "go"} {

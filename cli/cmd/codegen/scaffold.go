@@ -66,7 +66,7 @@ func runScaffoldFrontend() error {
 	return validateFrontend()
 }
 
-// scaffoldFrontend creates a minimal React+Vite+TypeScript frontend from templates.
+// scaffoldFrontend creates a minimal Vite + TypeScript frontend (React, the default) from templates.
 func scaffoldFrontend(data map[string]any) error {
 	cli.Info("Scaffolding frontend...")
 
@@ -117,16 +117,19 @@ func validateFrontend() error {
 		"frontend/package.json",
 		"frontend/vite.config.ts",
 		"frontend/index.html",
-		"frontend/src/main.tsx",
 	}
 	for _, path := range required {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Errorf("missing %s — schemaf requires Vite+React+TypeScript frontend conventions. See EXTEND.md", path)
+			return fmt.Errorf("missing %s — schemaf requires a Vite + TypeScript frontend built with npm: frontend/package.json, frontend/vite.config.ts, frontend/index.html and frontend/src/main.tsx or frontend/src/main.ts. See EXTEND.md › Frontend", path)
 		}
+	}
+	entry, err := frontendEntry()
+	if err != nil {
+		return err
 	}
 
 	var missing []string
-	for _, c := range runtimeConfigChecks {
+	for _, c := range runtimeConfigChecks(entry) {
 		raw, err := os.ReadFile(c.path)
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", c.path, err)
@@ -142,40 +145,67 @@ func validateFrontend() error {
 	return nil
 }
 
-// runtimeConfigChecks are the pieces of the scaffold that runtime config
-// (config.gen.ts) relies on.
-var runtimeConfigChecks = []struct {
+// frontendEntries are the accepted entry files, in order of preference:
+// src/main.tsx (the React scaffold) or src/main.ts (Vue, Svelte, plain TS).
+var frontendEntries = []string{"frontend/src/main.tsx", "frontend/src/main.ts"}
+
+// frontendEntry returns the frontend's entry file. Exactly one must exist:
+// none is an error, and so are both (it's unclear which one index.html loads).
+func frontendEntry() (string, error) {
+	var found []string
+	for _, p := range frontendEntries {
+		if _, err := os.Stat(p); err == nil {
+			found = append(found, p)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return "", fmt.Errorf("missing the frontend entry file: frontend/src/main.tsx or frontend/src/main.ts — schemaf requires a Vite + TypeScript frontend. See EXTEND.md › Frontend")
+	default:
+		return "", fmt.Errorf("both frontend/src/main.tsx and frontend/src/main.ts exist — keep only the entry file index.html loads. See EXTEND.md › Frontend")
+	}
+}
+
+type runtimeConfigCheck struct {
 	path    string
 	ok      *regexp.Regexp
 	what    string
 	snippet string
-}{
-	{
-		path: "frontend/vite.config.ts",
-		// es2022 or newer; config.gen.ts uses top-level await.
-		ok:   regexp.MustCompile(`target\s*:\s*["'](es202[2-9]|esnext)["']`),
-		what: "add the build target (config.gen.ts uses top-level await)",
-		snippet: `build: {
+}
+
+// runtimeConfigChecks are the pieces of the frontend that runtime config
+// (config.gen.ts) relies on. entry is the frontend's entry file.
+func runtimeConfigChecks(entry string) []runtimeConfigCheck {
+	return []runtimeConfigCheck{
+		{
+			path: "frontend/vite.config.ts",
+			// es2022 or newer; config.gen.ts uses top-level await.
+			ok:   regexp.MustCompile(`target\s*:\s*["'](es202[2-9]|esnext)["']`),
+			what: "add the build target (config.gen.ts uses top-level await)",
+			snippet: `build: {
   target: "es2022",
 },`,
-	},
-	{
-		path: "frontend/index.html",
-		ok:   regexp.MustCompile(`__schemaf_boot`),
-		what: "add the old-browser check to <head>",
-		snippet: `<script>
+		},
+		{
+			path: "frontend/index.html",
+			ok:   regexp.MustCompile(`__schemaf_boot`),
+			what: "add the old-browser check to <head>",
+			snippet: `<script>
   // schemaf: old-browser check (see EXTEND.md, Runtime config)
   window.addEventListener("load", function () {
     if (!window.__schemaf_boot) alert("This browser is too old to run this app. Please update it.");
   });
 </script>`,
-	},
-	{
-		path:    "frontend/src/main.tsx",
-		ok:      regexp.MustCompile(`import\s+["']\./api/generated/config\.gen(\.ts)?["']`),
-		what:    "add as the first import (loads runtime config before the app renders)",
-		snippet: `import "./api/generated/config.gen";`,
-	},
+		},
+		{
+			path:    entry,
+			ok:      regexp.MustCompile(`import\s+["']\./api/generated/config\.gen(\.ts)?["']`),
+			what:    "add as the first import (loads runtime config before the app renders)",
+			snippet: `import "./api/generated/config.gen";`,
+		},
+	}
 }
 
 func indent(s, prefix string) string {

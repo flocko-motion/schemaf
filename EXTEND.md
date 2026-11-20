@@ -65,17 +65,20 @@ func main() {
 
 ### Stack & conventions
 
-Schemaf enforces a **Vite + React + TypeScript** frontend. If `frontend/` doesn't exist when you run codegen, it's scaffolded automatically with a minimal working setup. If it exists, codegen validates that the required files are present.
+Schemaf requires a **Vite + TypeScript** frontend built with **npm**. Which UI framework you use on top is up to you: React, Vue, Svelte or none. If `frontend/` doesn't exist when you run codegen, it's scaffolded automatically with a minimal working setup, using **React** as the default. If it exists, codegen validates that the required files are present.
 
 **Normative decisions (framework-enforced):**
-- Vite as build tool and dev server
-- React + TypeScript
+- Vite as build tool and dev server, configured in `vite.config.ts`
+- TypeScript
 - Port derived from schemaf.toml (default 8002) with `strictPort: true`
-- Entry point: `index.html` → `src/main.tsx`
+- Entry point: `index.html` → `src/main.tsx` or `src/main.ts`
 - npm as package manager
 
+Required files: `frontend/package.json`, `frontend/vite.config.ts`, `frontend/index.html`, and one entry file, `frontend/src/main.tsx` or `frontend/src/main.ts`.
+
 **Project decisions (up to you):**
-- UI framework (MUI, Tailwind, shadcn, etc.)
+- UI framework (React — the scaffold default —, Vue, Svelte, ...)
+- UI component library (MUI, Tailwind, shadcn, etc.)
 - State management (Redux, Zustand, etc.)
 - Routing (React Router, TanStack, etc.)
 - Any additional dependencies
@@ -104,10 +107,10 @@ app.SetFrontend(FrontendFS())
 
 `./schemaf.sh codegen` does two things for the frontend:
 
-1. **Scaffold** — if `frontend/` doesn't exist, creates the full React+Vite+TS setup and runs `npm install`
+1. **Scaffold** — if `frontend/` doesn't exist, creates a Vite + TypeScript setup with React (the default) and runs `npm install`
 2. **Generate** — creates `go/frontend.gen.go` (embeds `frontend/dist/` into the Go binary), `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec) and `frontend/src/api/generated/config.gen.ts` ([runtime config](#runtime-config-public_))
 
-If `frontend/` exists, codegen validates it: the required files must be present, and `vite.config.ts`, `index.html` and `src/main.tsx` must contain the [runtime config](#runtime-config-public_) setup. If something is missing, codegen stops and prints what to add.
+If `frontend/` exists, codegen validates it: the required files must be present, and `vite.config.ts`, `index.html` and the entry file (`src/main.tsx` or `src/main.ts`) must contain the [runtime config](#runtime-config-public_) setup. If something is missing, codegen stops and prints what to add.
 
 ### Development workflow
 
@@ -192,7 +195,7 @@ const dsn = config("PUBLIC_SENTRY_DSN"); // string | undefined
      });
    </script>
    ```
-3. `frontend/src/main.tsx`: add this as the first import, so the config loads before the app renders and the old-browser check sees the app start:
+3. `frontend/src/main.tsx` (or `src/main.ts`): add this as the first import, so the config loads before the app renders and the old-browser check sees the app start:
    ```ts
    import "./api/generated/config.gen";
    ```
