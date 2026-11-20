@@ -9,6 +9,7 @@
 #   e2e/db-test.sh                 # run ./db and ./schemaftest integration tests
 #   e2e/db-test.sh -run TestRunSet # pass extra flags through to `go test`
 set -euo pipefail
+echo "deliberate failure: red test of the CI gate (throwaway branch, never merged)" >&2; exit 1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
