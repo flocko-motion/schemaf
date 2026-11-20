@@ -3,6 +3,7 @@ package codegen
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/flocko-motion/schemaf/api"
@@ -85,9 +86,82 @@ func TestOpenAPISecurityPerLevel(t *testing.T) {
 		if string(sec) != w {
 			t.Errorf("%s security = %s, want %s", key, sec, w)
 		}
-		_, has401 := op["responses"].(map[string]any)["401"]
-		if has401 != (w != "null") {
-			t.Errorf("%s: 401 present = %v", key, has401)
+		checkDefaultErrorResponse(t, key, op)
+	}
+}
+
+// TestOpenAPIErrorResponses: one shared Error schema, and every operation,
+// raw and auth routes included, has a default response referencing it
+// instead of description-only 400/401/500 entries.
+func TestOpenAPIErrorResponses(t *testing.T) {
+	spec := writeAndReadSpec(t, []endpointInfo{
+		{StructName: "A", Method: "GET", Path: "/api/none", Auth: api.AuthNone, IsRaw: true},
+		{StructName: "C", Method: "POST", Path: "/api/required", Auth: api.AuthRequired, IsRaw: true},
+	})
+	checkErrorSchema(t, spec.Components.Schemas)
+	n := 0
+	for path, item := range spec.Paths {
+		for method, op := range item {
+			n++
+			checkDefaultErrorResponse(t, method+" "+path, op)
+		}
+	}
+	if n < 6 {
+		t.Errorf("only %d operations checked", n)
+	}
+}
+
+// TestOpenAPIReservedSchemaName: an endpoint type named like a framework
+// schema is a codegen error, never a silent overwrite.
+func TestOpenAPIReservedSchemaName(t *testing.T) {
+	t.Chdir(t.TempDir())
+	structs := map[string]structInfo{
+		"Error":  {Name: "Error", Fields: []fieldInfo{{JSONName: "msg", GoType: "string", TSType: "string"}}},
+		"GetReq": {Name: "GetReq"},
+	}
+	err := writeOpenAPIJSON("myapp", []endpointInfo{
+		{StructName: "G", Method: "GET", Path: "/api/g", Auth: api.AuthNone, ReqType: "GetReq", RespType: "Error"},
+	}, structs)
+	if err == nil || !strings.Contains(err.Error(), `"Error"`) || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("err = %v, want a reserved-name error naming Error", err)
+	}
+}
+
+func checkErrorSchema(t *testing.T, schemas map[string]any) {
+	t.Helper()
+	s, _ := schemas["Error"].(map[string]any)
+	if s == nil {
+		t.Fatal("components.schemas.Error missing")
+	}
+	req, _ := json.Marshal(s["required"])
+	if string(req) != `["error","code"]` {
+		t.Errorf("Error.required = %s", req)
+	}
+	props, _ := s["properties"].(map[string]any)
+	for _, p := range []string{"error", "code", "id"} {
+		if pp, _ := props[p].(map[string]any); pp["type"] != "string" {
+			t.Errorf("Error.properties.%s = %v", p, props[p])
+		}
+	}
+	code, _ := props["code"].(map[string]any)
+	if d, _ := code["description"].(string); !strings.Contains(d, "too_many_requests") || !strings.Contains(d, "internal") {
+		t.Errorf("Error.code description doesn't list the default codes: %q", d)
+	}
+	if _, hasEnum := code["enum"]; hasEnum {
+		t.Error("Error.code has an enum; app codes are an open set")
+	}
+}
+
+func checkDefaultErrorResponse(t *testing.T, name string, op map[string]any) {
+	t.Helper()
+	resps, _ := op["responses"].(map[string]any)
+	def, _ := json.Marshal(resps["default"])
+	if !strings.Contains(string(def), `"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}`) {
+		t.Errorf("%s: default response = %s", name, def)
+	}
+	for code := range resps {
+		if code != "default" && code[0] != '2' {
+			t.Errorf("%s: has a %s response besides default", name, code)
 		}
 	}
 }

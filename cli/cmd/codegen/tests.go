@@ -88,10 +88,9 @@ func runTestsGen() error {
 		})
 	}
 
-	if len(files) == 0 {
-		cli.Info("no *.test.ts files found in %s — skipping", testsDir)
-		return nil
-	}
+	// No TS tests: the wrappers are still generated, with no tests, so they
+	// always match go/tests (EXTEND.md › Empty inputs). Tests are optional,
+	// so this is not an empty input and there is no warning.
 
 	// Flatten all tests for the Go template
 	var allTests []tsTestFunc

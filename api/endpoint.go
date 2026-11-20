@@ -79,31 +79,31 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
 		var req Req
 		// Decode path params (fields tagged with `path:"name"`).
 		if err := decodePathParams(r, &req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
 			return
 		}
 		// Decode query params (fields tagged with `query:"name"`).
 		if err := decodeQueryParams(r, &req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
 			return
 		}
 		// Decode body for methods that carry one.
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-				writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+				writeError(w, r, Error(ErrBadRequest, "bad_request", "invalid request body: "+err.Error()))
 				return
 			}
 		}
 
 		resp, err := e.Handle(r.Context(), req)
 		if err != nil {
-			writeJSONError(w, statusFor(err), err.Error())
+			writeError(w, r, err)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "encoding response: "+err.Error())
+			writeError(w, r, fmt.Errorf("encoding response: %w", err))
 		}
 	})
 }
@@ -117,7 +117,7 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
 // The framework does not decode the request or encode the response — you
 // have full control over http.ResponseWriter and *http.Request.
 // If HandleRaw returns a non-nil error and no response has been written yet,
-// the framework writes a JSON error response using the standard error mapping.
+// the framework writes the standard error response (see writeError).
 type RawEndpoint interface {
 	Method() string
 	Path() string
@@ -143,13 +143,7 @@ func NewRawRoute(e RawEndpoint, summary, description string) Route {
 func newRawHandler(e RawEndpoint) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := e.HandleRaw(w, r); err != nil {
-			writeJSONError(w, statusFor(err), err.Error())
+			writeError(w, r, err)
 		}
 	})
-}
-
-func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	fmt.Fprintf(w, `{"error":%q}`, msg)
 }

@@ -30,6 +30,33 @@ Do not make architectural changes unilaterally. This includes:
 
 When you identify a need for an architectural change: surface it, propose it, and wait for the user to agree before implementing. Treat design decisions as pair programming — think out loud, discuss, then act.
 
+## Working on an Issue: One Worktree per Issue
+
+Several agents work on this repository at the same time. The main checkout belongs to the maintainer and the planner (reviews, commits, releases). **Never implement an issue in the main checkout.** Each issue gets its own git worktree, so changes from different issues never mix in one working tree.
+
+**Naming scheme.** Before creating a worktree, **propose exactly this name, branch and base to the maintainer and wait for confirmation** — e.g. "I'll create `.worktrees/53-error-responses/` on branch `feat/53-error-responses` from `origin/main` — OK?". Don't invent other names or bases; deviate only if the maintainer says so.
+
+| What | Pattern | Example |
+|---|---|---|
+| Worktree directory | `.worktrees/<issue>-<slug>/` in the repo root | `.worktrees/53-error-responses/` |
+| Branch | `<type>/<issue>-<slug>` | `feat/53-error-responses` |
+| Base | a freshly fetched `origin/main` | |
+
+- `<issue>` is the GitHub issue number. `<slug>` is 2–4 lowercase words from the issue title, joined with `-`.
+- `<type>` is `feat`, `fix`, `docs` or `chore`, matching the commit type the change will get.
+- After confirmation, create it from the repo root:
+  ```bash
+  git fetch origin
+  git worktree add -b feat/53-error-responses .worktrees/53-error-responses origin/main
+  cd .worktrees/53-error-responses
+  ```
+- If the worktree or branch already exists (an earlier session on the same issue), say so and propose continuing in it — don't create a second one.
+- Do all work for the issue inside its worktree: edits, tests, docs. `.worktrees/` is gitignored.
+- Work that isn't tied to an issue still gets a worktree (proposed the same way); use a descriptive slug without a number (e.g. `.worktrees/release-gate-docs/`, branch `docs/release-gate-docs`).
+- The usual git rules still apply inside the worktree: don't stage, don't commit, don't push unless the maintainer asks. Tell the maintainer the worktree path when the work is ready for review.
+- Ports: the dev stack uses the fixed ports from `schemaf.toml`, so don't run `./schemaf.sh dev` in two worktrees at once. The test layers (`go test`, `e2e/db-test.sh`, the onboarding e2e) use their own ports and project names and can run in parallel.
+- Clean-up after the branch is merged: `git worktree remove .worktrees/<name>` and `git branch -d <branch>`. Only the maintainer (or an agent the maintainer asks) removes worktrees.
+
 ## Repository Structure
 
 ```

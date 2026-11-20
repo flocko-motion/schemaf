@@ -33,3 +33,6 @@ build
 
 # Agent task handoffs
 /.tasks/
+
+# Per-issue git worktrees (CLAUDE.md › Working on an Issue)
+/.worktrees/

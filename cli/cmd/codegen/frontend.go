@@ -45,7 +45,10 @@ func runFrontendGen() error {
 	}
 
 	// Ensure go/frontend_dist/ exists with a .gitkeep so //go:embed resolves.
-	// In production, the Dockerfile populates this with real assets.
+	// This is the one deliberate placeholder file (EXTEND.md › Empty inputs):
+	// every other empty input selects a template variant instead, but this
+	// directory is filled by the frontend build at image build time
+	// (Dockerfile.gen), so a variant chosen now would be wrong for the image.
 	if err := os.MkdirAll("go/frontend_dist", 0755); err != nil {
 		return fmt.Errorf("creating frontend_dist: %w", err)
 	}

@@ -11,7 +11,6 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"strings"
 	"text/template"
 
 	sqllcpkg "github.com/sqlc-dev/sqlc/pkg/cli"
@@ -52,20 +51,14 @@ func runSQLC(_ *cli.Context) error {
 		}
 	}
 
-	// Skip sqlc if there are no query files
-	entries, err := os.ReadDir(queriesDir)
+	// No queries: sqlc refuses an empty query set, so it doesn't run and
+	// generates nothing (EXTEND.md › Empty inputs).
+	hasQueries, err := hasSQLFiles(queriesDir)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", queriesDir, err)
+		return err
 	}
-	hasSQL := false
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			hasSQL = true
-			break
-		}
-	}
-	if !hasSQL {
-		cli.Warning("no .sql files found in %s — skipping sqlc", queriesDir)
+	if !hasQueries {
+		warnEmptyInput("no queries in %s — sqlc generates no query code", queriesDir)
 		return nil
 	}
 
