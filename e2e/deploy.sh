@@ -82,11 +82,16 @@ RUN_SH="$RUN_HOME/.${NAME}/bin/schemaf.sh"
 # PATH, its rootless runtime dir, and the selected runtime. cwd is /, since the
 # current user's directories aren't readable for it.
 as_user() {
-  local u="$1" uid
+  local u="$1" uid bus=()
   shift
   uid=$(id -u "$u")
-  ( cd / && sudo -n -H -u "$u" env XDG_RUNTIME_DIR="/run/user/$uid" \
-      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+  # Its session bus, if its user systemd provides one (podman then uses the
+  # systemd cgroup manager; without one it falls back to cgroupfs). Tested
+  # through sudo: /run/user/<uid> is private to that user.
+  if sudo -n test -S "/run/user/$uid/bus"; then
+    bus=("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus")
+  fi
+  ( cd / && sudo -n -H -u "$u" env XDG_RUNTIME_DIR="/run/user/$uid" "${bus[@]}" \
       SCHEMAF_RUNTIME="$RUNTIME" PODMAN_COMPOSE_WARNING_LOGS=false "$@" )
 }
 

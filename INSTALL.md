@@ -464,6 +464,7 @@ echo "SCHEMAF_RUNTIME=docker" >> ~/.myapp/etc/env
 | podman not installed | install podman, or set `SCHEMAF_RUNTIME=docker` |
 | `podman compose` uses `podman-compose`, or no provider at all | install docker-compose |
 | Linux: podman's API socket isn't running (docker-compose can't reach podman) | `systemctl --user enable --now podman.socket`, or point `DOCKER_HOST` at podman's socket |
+| `DOCKER_HOST` is set but empty (podman compose passes it on, so docker-compose would use Docker's default socket) | unset it, or point it at podman's socket |
 | macOS: podman machine not running | `podman machine start` (and `podman machine init` first if no machine exists) |
 | Docker selected but not installed | install Docker, or unset `SCHEMAF_RUNTIME` to use podman |
 | Docker selected but the daemon is not running | start Docker (Docker Desktop, or `sudo systemctl start docker`) |

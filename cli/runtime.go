@@ -215,9 +215,12 @@ func (r Runtime) checkPodmanSocket() error {
 	if r != Podman || goos == "darwin" {
 		return nil
 	}
+	// podman compose passes an existing DOCKER_HOST on as is, even an empty one.
 	sock, fromEnv := os.LookupEnv("DOCKER_HOST")
-	if !fromEnv || sock == "" {
-		fromEnv = false
+	if fromEnv && sock == "" {
+		return errors.New(PodmanSocketEmptyDockerHost)
+	}
+	if !fromEnv {
 		out, err := r.command("info", "--format", "{{.Host.RemoteSocket.Path}}").Output()
 		sock = strings.TrimSpace(string(out))
 		if err != nil || sock == "" {
@@ -247,6 +250,11 @@ const (
 	PodmanSocketFixDefault    = "Start it once (it stays enabled):\n  systemctl --user enable --now podman.socket"
 	PodmanSocketFixDockerHost = "The address comes from DOCKER_HOST: point DOCKER_HOST at podman's socket, or unset it to use podman's own (start that once: systemctl --user enable --now podman.socket)."
 )
+
+// PodmanSocketEmptyDockerHost is the refusal when DOCKER_HOST is set but
+// empty: podman compose passes it on as is (it only fills in DOCKER_HOST when
+// unset), and docker-compose then uses Docker's default socket, not podman's.
+const PodmanSocketEmptyDockerHost = "DOCKER_HOST is set but empty: podman compose passes it on as is, so docker-compose would not reach podman. Unset it, or point it at podman's socket."
 
 // PodmanSocketText is the refusal when podman's API socket doesn't answer:
 // sock is the address tried, fix one of the PodmanSocketFix* texts, said

@@ -244,6 +244,7 @@ func TestShellPodmanSocketCheck(t *testing.T) {
 		{name: "DOCKER_HOST down", uname: "Linux", down: true, dockerHost: "unix:///tmp/elsewhere.sock",
 			sock: "unix:///tmp/elsewhere.sock", fix: cli.PodmanSocketFixDockerHost},
 		{name: "macOS skips it", uname: "Darwin", down: true},
+		{name: "DOCKER_HOST set but empty", uname: "Linux", dockerHost: "<empty>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
@@ -276,12 +277,25 @@ exit 0
 			}
 			cmd := exec.Command(bash, "-c", "set -euo pipefail\n"+funcs+"_schemaf_check_runtime compose\necho STARTED")
 			cmd.Env = []string{"PATH=" + bin, "SCHEMAF_RUNTIME=podman"}
-			if tc.dockerHost != "" {
+			switch tc.dockerHost {
+			case "":
+			case "<empty>":
+				cmd.Env = append(cmd.Env, "DOCKER_HOST=")
+			default:
 				cmd.Env = append(cmd.Env, "DOCKER_HOST="+tc.dockerHost)
 			}
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			err := cmd.Run()
+			if tc.dockerHost == "<empty>" {
+				if err == nil || strings.Contains(stdout.String(), "STARTED") {
+					t.Fatalf("want refusal of an empty DOCKER_HOST, got start:\n%s", stderr.String())
+				}
+				if got, want := stderr.String(), "ERROR: "+cli.PodmanSocketEmptyDockerHost+"\n"; got != want {
+					t.Errorf("shell refusal differs from Go's.\n--- shell\n%s\n--- go\n%s", got, want)
+				}
+				return
+			}
 			if tc.sock == "" {
 				if err != nil || stdout.String() != "STARTED\n" {
 					t.Fatalf("want start, got %v:\n%s", err, stderr.String())

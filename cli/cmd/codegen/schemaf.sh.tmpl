@@ -190,6 +190,11 @@ _schemaf_check_podman_socket() {
   local sock fix out said
   [ "${SCHEMAF_RUNTIME:-podman}" = podman ] || return 0
   [ "$(uname)" != Darwin ] || return 0
+  # podman compose passes an existing DOCKER_HOST on as is, even an empty one.
+  if [ -n "${DOCKER_HOST+set}" ] && [ -z "$DOCKER_HOST" ]; then
+    echo "ERROR: {{.PodmanSocketEmptyDockerHost}}" >&2
+    exit 1
+  fi
   if [ -n "${DOCKER_HOST:-}" ]; then
     sock="$DOCKER_HOST" fix="{{.PodmanSocketFixDockerHost}}"
   else

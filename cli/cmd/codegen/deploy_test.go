@@ -52,7 +52,12 @@ echo "$me $* | SCHEMAF_IMAGE=${SCHEMAF_IMAGE:-}" >> "$S/calls"
 if [ "$me" = docker ] && [ "${1:-}" != --help ] && [ ! -f "$S/docker_usable" ]; then echo "docker: daemon not running" >&2; exit 1; fi
 key() { echo "$1" | sed 's#^localhost/##; s#[:/]#_#g'; }
 case "${1:-}" in
-  --help|info) exit 0 ;;
+  --help) exit 0 ;;
+  info)
+    # podman's API socket (schemaf.sh's podman socket check on Linux)
+    case "$*" in *RemoteSocket.Path*) echo "$S/podman.sock" ;; esac
+    exit 0 ;;
+  --remote) exit 0 ;; # podman --remote --url <socket> version: the socket answers
   compose)
     case "$*" in *" version"*) echo "Docker Compose version v2.30.0" ;; esac
     env > "$S/compose_env"; exit 0 ;;
@@ -120,8 +125,20 @@ func newShUser(t *testing.T) *shUser {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(u.bin, "uname"), []byte(fakeUname), 0755); err != nil {
+		t.Fatal(err)
+	}
 	return u
 }
+
+// fakeUname makes schemaf.sh take its Linux branches (e.g. the podman API
+// socket check) on every OS, so a Mac runs what CI runs. Other uname calls
+// (uname -m for the image platform) go to the real one.
+const fakeUname = `#!/bin/sh
+[ $# -eq 0 ] && { echo Linux; exit 0; }
+for u in /usr/bin/uname /bin/uname; do [ -x "$u" ] && exec "$u" "$@"; done
+echo "fake uname: no real uname for: $*" >&2; exit 1
+`
 
 // run executes a script with bash as this user and returns stdout, stderr and
 // the exit code.

@@ -66,7 +66,8 @@ func fakeRuntimes(t *testing.T, sel string, stubs map[Runtime]stub) {
 		writeStub(t, dir, name, s)
 	}
 	t.Setenv("PATH", dir)
-	t.Setenv("DOCKER_HOST", "") // empty counts as unset
+	t.Setenv("DOCKER_HOST", "") // restored after the test …
+	os.Unsetenv("DOCKER_HOST")  // … but unset during it
 	t.Setenv(RuntimeEnv, sel)
 	if sel == "" {
 		os.Unsetenv(RuntimeEnv)
@@ -335,6 +336,12 @@ func TestPodmanSocketCheck(t *testing.T) {
 			want:       []string{"nothing answers at unix:///tmp/elsewhere.sock", "The address comes from DOCKER_HOST"},
 		},
 		{
+			name:       "DOCKER_HOST set but empty",
+			dockerHost: "<empty>",
+			stubs:      map[Runtime]stub{Podman: healthy},
+			want:       []string{PodmanSocketEmptyDockerHost},
+		},
+		{
 			name:  "podman reports no socket path",
 			stubs: map[Runtime]stub{Podman: noPath},
 			want:  []string{"podman info doesn't report its path"},
@@ -347,7 +354,13 @@ func TestPodmanSocketCheck(t *testing.T) {
 			if tc.goos != "" {
 				goos = tc.goos
 			}
-			t.Setenv("DOCKER_HOST", tc.dockerHost)
+			switch tc.dockerHost {
+			case "": // unset (fakeRuntimes)
+			case "<empty>":
+				t.Setenv("DOCKER_HOST", "")
+			default:
+				t.Setenv("DOCKER_HOST", tc.dockerHost)
+			}
 			err := CheckRuntime("myapp", 0)
 			if tc.want == nil {
 				if err != nil {

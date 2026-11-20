@@ -108,22 +108,33 @@ jobs:
         run: |
           set -euo pipefail
           sudo loginctl enable-linger "$USER"
-          # start_socket <user>: enable podman.socket in its user systemd, then ping it
-          start_socket() {
-            local u=$1 uid run as=()
-            uid=$(id -u "$u")
-            run=/run/user/$uid
-            for _ in $(seq 1 30); do [ -S "$run/bus" ] && break; sleep 1; done
-            [ -S "$run/bus" ] || { echo "::error::$run/bus did not appear: no user systemd for $u (lingering?)"; exit 1; }
-            [ "$u" = "$USER" ] || as=(sudo -u "$u")
-            "${as[@]}" env XDG_RUNTIME_DIR="$run" DBUS_SESSION_BUS_ADDRESS="unix:path=$run/bus" \
-              systemctl --user enable --now podman.socket
-            "${as[@]}" env XDG_RUNTIME_DIR="$run" podman --remote --url "unix://$run/podman/podman.sock" version >/dev/null \
+          # ping_socket <user> <cmd prefix...>: podman's API socket of <user> answers
+          ping_socket() {
+            local u=$1 run
+            shift
+            run=/run/user/$(id -u "$u")
+            "$@" env XDG_RUNTIME_DIR="$run" podman --remote --url "unix://$run/podman/podman.sock" version >/dev/null \
               || { echo "::error::podman's API socket for $u doesn't answer at unix://$run/podman/podman.sock"; exit 1; }
             echo "podman API socket answers for $u: unix://$run/podman/podman.sock"
           }
-          start_socket "$USER"
-          start_socket "$E2E_RUN_USER"
+
+          # The runner: its user systemd is reachable through its own bus.
+          run=/run/user/$(id -u)
+          for _ in $(seq 1 30); do [ -S "$run/bus" ] && break; sleep 1; done
+          [ -S "$run/bus" ] || { echo "::error::$run/bus did not appear: no user systemd for $USER (lingering?)"; exit 1; }
+          env XDG_RUNTIME_DIR="$run" DBUS_SESSION_BUS_ADDRESS="unix:path=$run/bus" \
+            systemctl --user enable --now podman.socket
+          ping_socket "$USER"
+
+          # The run user: through systemd's machine transport (systemd >= 248),
+          # once lingering has started its user@<uid>.service.
+          u=$E2E_RUN_USER
+          svc="user@$(id -u "$u").service"
+          for _ in $(seq 1 30); do systemctl is-active --quiet "$svc" && break; sleep 1; done
+          systemctl is-active --quiet "$svc" || { echo "::error::$svc is not active: no user systemd for $u (lingering?)"; systemctl status "$svc" --no-pager || true; exit 1; }
+          sudo systemctl --user --machine="$u@" enable --now podman.socket
+          ping_socket "$u" sudo -u "$u"
+
           # the runner's own podman and systemctl find its runtime dir from here on
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
 
