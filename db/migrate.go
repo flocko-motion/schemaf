@@ -23,8 +23,21 @@ type MigrationSet struct {
 var registeredSets []MigrationSet
 
 // RegisterMigrations registers a MigrationSet to be run by RunMigrations.
-// Call before RunMigrations; typically in init().
+// Call before RunMigrations; typically in init(). Registering a prefix again
+// with the same files keeps one set, so wiring an app twice (every
+// schemaftest instance does) never duplicates it. The same prefix with
+// different files is a wiring bug and panics.
 func RegisterMigrations(ms MigrationSet) {
+	for _, s := range registeredSets {
+		if s.Prefix == ms.Prefix {
+			// embed.FS compares by identity: the same //go:embed variable
+			// is equal to itself, any other one is not.
+			if s.Files != ms.Files {
+				panic(fmt.Sprintf("db: migration identifier %q registered twice with different files: one identifier names one set of migrations (EXTEND.md › Migration identifiers)", ms.Prefix))
+			}
+			return
+		}
+	}
 	registeredSets = append(registeredSets, ms)
 }
 

@@ -11,7 +11,7 @@ import (
 	cli "github.com/flocko-motion/schemaf/cli"
 )
 
-// emptyInputsFile lists the empty inputs of the last `codegen all`, one
+// emptyInputsFile lists the empty inputs of the last `codegen`, one
 // warning per line; build (schemaf.sh) prints them. Missing or empty = nothing
 // empty. See EXTEND.md › Code Generation › Empty inputs.
 const emptyInputsFile = "gen/empty-inputs"

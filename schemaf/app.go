@@ -8,12 +8,17 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -37,6 +42,11 @@ type App struct {
 	identityProviders []api.IdentityProvider
 	onLogin           api.OnLoginFunc
 
+	// apiProviders and frontend are applied by Start, which rebuilds the
+	// routes on every start.
+	apiProviders []func()
+	frontend     fs.FS
+
 	// projectRoot is the checkout (where schemaf.toml is), found before
 	// SCHEMAF_CWD moves the working directory; "" if there is none.
 	projectRoot string
@@ -51,14 +61,15 @@ func New(ctx context.Context) *App {
 	return &App{ctx: ctx, project: name}
 }
 
-// AddApi registers all API endpoints by calling the generated provider function.
-// Wire up in go/main.go: app.AddApi(api.Provider)
+// AddApi registers the API endpoints: the server calls the generated
+// provider function on every start.
+// Wire up in Wire (go/app/app.go): app.AddApi(api.Provider)
 func (a *App) AddApi(provider func()) {
-	provider()
+	a.apiProviders = append(a.apiProviders, provider)
 }
 
 // AddDb registers the project's database migrations.
-// Wire up in go/main.go: app.AddDb(db.Provider)
+// Wire up in Wire (go/app/app.go): app.AddDb(db.Provider)
 func (a *App) AddDb(provider func() embed.FS) {
 	a.hasDB = true
 	db.RegisterMigrations(db.MigrationSet{Prefix: a.project, Files: provider()})
@@ -66,15 +77,16 @@ func (a *App) AddDb(provider func() embed.FS) {
 
 // AddSubcommand registers a subcommand provider. Providers follow the same
 // pattern as framework CLI subcommands (see cli/cmd/* for examples).
-// Wire up in go/main.go: app.AddSubcommand(importer.SubcommandProvider)
+// Wire up in Wire (go/app/app.go): app.AddSubcommand(importer.SubcommandProvider)
 func (a *App) AddSubcommand(provider cli.SubcommandProvider) {
 	a.subcommands = append(a.subcommands, provider)
 }
 
 // AddService registers a background function that runs as a goroutine when
 // the server starts (after DB init and migrations). The context is cancelled
-// on server shutdown. Services are not started for CLI subcommands.
-// Wire up in go/main.go: app.AddService(myworker.Run)
+// when the server stops, and the server waits for the function to return.
+// Services are not started for CLI subcommands.
+// Wire up in Wire (go/app/app.go): app.AddService(myworker.Run)
 func (a *App) AddService(fn func(context.Context)) {
 	a.services = append(a.services, fn)
 }
@@ -82,7 +94,7 @@ func (a *App) AddService(fn func(context.Context)) {
 // AddIdentityProvider registers a custom identity provider. Its login route is
 // POST /api/auth/{Name()}/login. A reserved name (a built-in such as "auth0")
 // or a duplicate name makes the server fail at startup.
-// Wire up in go/main.go: app.AddIdentityProvider(auth.PasskeyProvider{})
+// Wire up in Wire (go/app/app.go): app.AddIdentityProvider(auth.PasskeyProvider{})
 func (a *App) AddIdentityProvider(p api.IdentityProvider) {
 	a.identityProviders = append(a.identityProviders, p)
 }
@@ -97,9 +109,9 @@ func (a *App) OnLogin(fn func(ctx context.Context, id api.Identity) (subject str
 
 // SetFrontend registers an embedded frontend filesystem for production serving.
 // In development mode (api.DevMode), the server proxies to the frontend dev server instead.
-// Wire up in go/main.go: app.SetFrontend(FrontendFS())
+// Wire up in Wire (go/app/app.go): app.SetFrontend(FrontendFS())
 func (a *App) SetFrontend(fsys fs.FS) {
-	api.SetFrontend(fsys)
+	a.frontend = fsys
 }
 
 // Run hands over to Cobra for command routing. The "server" command (default
@@ -227,14 +239,14 @@ func isDevCommand(cmd *cobra.Command) bool {
 	return cmd.Name() == "dev" && cmd.Parent() != nil && !cmd.Parent().HasParent()
 }
 
-// initDB connects to the database and runs migrations.
-func (a *App) initDB() error {
+// initDB connects to the database at dsn and runs migrations.
+func (a *App) initDB(ctx context.Context, dsn string) error {
 	slog.Info("connecting to database", "project", a.project)
-	if err := db.Init(a.dsn()); err != nil {
+	if err := db.Init(dsn); err != nil {
 		return fmt.Errorf("db init: %w", err)
 	}
 	slog.Info("running migrations")
-	if err := db.RunMigrations(a.ctx); err != nil {
+	if err := db.RunMigrations(ctx); err != nil {
 		return fmt.Errorf("migrations: %w", err)
 	}
 	return nil
@@ -274,48 +286,15 @@ func (a *App) serverProvider(_ *cli.Context) []*cobra.Command {
 	return []*cobra.Command{cmd}
 }
 
-// serve eagerly initializes the database and starts the HTTP server.
+// shutdownTimeout bounds the graceful stop on SIGINT/SIGTERM: inside the 10
+// seconds a container runtime gives a container to stop.
+const shutdownTimeout = 8 * time.Second
+
+// serve runs the server command: Start on the instance's port, then a
+// graceful Stop on SIGINT or SIGTERM.
 func (a *App) serve() error {
-	providers, err := a.identityProvidersFor(os.Getenv)
-	if err != nil {
-		return err
-	}
-
-	if a.hasDB {
-		if err := a.initDB(); err != nil {
-			return err
-		}
-		if err := a.initAuth(); err != nil {
-			return fmt.Errorf("auth init: %w", err)
-		}
-		sessions := db.NewSessionStore(db.DB())
-		api.InitSessions(sessions)
-		go sessions.RunSessionCleanup(a.ctx)
-	}
-	api.SetIdentityProviders(providers)
-	api.SetOnLogin(a.onLogin)
-	if api.DevMode() {
-		slog.Info("server mode", "mode", "development")
-	} else {
-		slog.Info("server mode", "mode", "production")
-	}
-	if len(providers) > 0 {
-		names := make([]string, len(providers))
-		for i, p := range providers {
-			names[i] = p.Name()
-		}
-		slog.Info("identity providers active", "providers", names)
-	}
-
-	// Auto-start backup scheduler if SFTP is configured.
-	if cfg, ok := db.ReadSFTPConfigFromEnv(); ok {
-		go db.RunBackupScheduler(a.ctx, a.dsn(), cfg)
-	}
-
-	// Launch registered services as background goroutines.
-	for _, svc := range a.services {
-		go svc(a.ctx)
-	}
+	sigCtx, stopSignals := signal.NotifyContext(a.ctx, os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
 	// A parallel dev instance always listens on its own base port; PORT (e.g.
 	// from the shared dev env file) would collide with the default instance.
@@ -323,9 +302,28 @@ func (a *App) serve() error {
 	if port == "" || constants.Instance() != 0 {
 		port = strconv.Itoa(constants.Port())
 	}
+	ln, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return fmt.Errorf("listen on :%s: %w", port, err)
+	}
+	var dsn string
+	if a.hasDB {
+		dsn = a.dsn()
+	}
+	srv, err := a.Start(a.ctx, ServerOptions{Listener: ln, DSN: dsn})
+	if err != nil {
+		return err
+	}
 
-	slog.Info("starting server", "addr", ":"+port)
-	return api.Serve(":" + port)
+	var serveErr error
+	select {
+	case <-sigCtx.Done():
+		slog.Info("shutting down")
+	case serveErr = <-srv.Err():
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	return errors.Join(serveErr, srv.Stop(ctx))
 }
 
 // providerNameRe matches URL-safe provider names.
@@ -362,16 +360,16 @@ func (a *App) identityProvidersFor(getenv func(string) string) ([]api.IdentityPr
 		for i, p := range providers {
 			names[i] = p.Name()
 		}
-		return nil, fmt.Errorf("identity providers (%s) need a database for sessions: call app.AddDb(db.Provider) in main.go",
+		return nil, fmt.Errorf("identity providers (%s) need a database for sessions: call app.AddDb(db.Provider) in Wire (go/app/app.go)",
 			strings.Join(names, ", "))
 	}
 	return providers, nil
 }
 
 // initAuth loads (or generates) the JWT signing key from _schemaf_config.
-func (a *App) initAuth() error {
+func (a *App) initAuth(ctx context.Context) error {
 	const keyName = "jwt_signing_key"
-	val, ok, err := db.ConfigGet(a.ctx, keyName)
+	val, ok, err := db.ConfigGet(ctx, keyName)
 	if err != nil {
 		return fmt.Errorf("loading jwt signing key: %w", err)
 	}
@@ -382,7 +380,7 @@ func (a *App) initAuth() error {
 			return fmt.Errorf("generating jwt signing key: %w", err)
 		}
 		val = hex.EncodeToString(raw)
-		if err := db.ConfigSet(a.ctx, keyName, val); err != nil {
+		if err := db.ConfigSet(ctx, keyName, val); err != nil {
 			return fmt.Errorf("storing jwt signing key: %w", err)
 		}
 		slog.Info("jwt signing key generated and stored")

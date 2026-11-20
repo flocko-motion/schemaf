@@ -17,6 +17,8 @@ cd mynumber
 test -f schemaf.toml        && echo "  schemaf.toml ✓"
 test -f go.work              && echo "  go.work ✓"
 test -f go/main.go           && echo "  go/main.go ✓"
+test -f go/app/app.go        && echo "  go/app/app.go ✓"
+test -f go/tests/health_test.go && echo "  go/tests/health_test.go ✓"
 test -f go/api/number.go     && echo "  go/api/number.go ✓"
 test -f go/db/migrations/0001_number.sql && echo "  migration ✓"
 test -f go/db/queries/number.sql         && echo "  queries ✓"

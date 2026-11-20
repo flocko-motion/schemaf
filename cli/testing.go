@@ -5,15 +5,10 @@ package cli
 
 import (
 	"bytes"
-	"database/sql"
-	"fmt"
 	"io"
 	"os"
-	"testing"
 
 	"github.com/spf13/viper"
-	"github.com/flocko-motion/schemaf/compose"
-	basedb "github.com/flocko-motion/schemaf/db"
 )
 
 // NewTestContext creates a Context for testing with in-memory config/state
@@ -43,71 +38,6 @@ func (ctx *Context) SetTestConfig(key string, value interface{}) {
 // SetTestState sets state values for testing
 func (ctx *Context) SetTestState(key string, value interface{}) {
 	ctx.State.v.Set(key, value)
-}
-
-// TestDB opens a database connection derived from a schemaf compose file.
-// It reads the x-schemaf metadata (project name, db-port, dev-db-pass) from
-// the resolved compose files so tests never need to hardcode credentials or
-// set DATABASE_URL manually.
-//
-// Falls back to DATABASE_URL if set (CI / external Postgres).
-// Registers t.Cleanup to close the connection automatically.
-//
-// Example:
-//
-//	db := cli.TestDB(t, "../compose/test.yml")
-func TestDB(t *testing.T, composeFile string) *sql.DB {
-	t.Helper()
-
-	// If DATABASE_URL is explicitly set, use it (CI override).
-	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
-		db, err := basedb.Open(dsn)
-		if err != nil {
-			t.Fatalf("TestDB: open from DATABASE_URL: %v", err)
-		}
-		t.Cleanup(func() { db.Close() })
-		return db
-	}
-
-	// Resolve the compose file to extract x-schemaf metadata.
-	files, err := compose.Resolve([]string{composeFile})
-	if err != nil {
-		t.Fatalf("TestDB: resolve %q: %v", composeFile, err)
-	}
-
-	// Find the entry file's x-schemaf extension (last in resolution order).
-	var schemaf *compose.SchemafExtension
-	for i := len(files) - 1; i >= 0; i-- {
-		if files[i].Schemaf != nil && files[i].Schemaf.Project != "" {
-			schemaf = files[i].Schemaf
-			break
-		}
-	}
-	if schemaf == nil {
-		t.Fatalf("TestDB: no x-schemaf.project found in %q", composeFile)
-	}
-
-	port := schemaf.DBPort
-	if port == 0 {
-		t.Fatalf("TestDB: x-schemaf.db-port not set in %q", composeFile)
-	}
-
-	pass := schemaf.DevDBPass
-	if pass == "" {
-		pass = "dev"
-	}
-
-	dsn := fmt.Sprintf(
-		"postgres://schemaf:%s@127.0.0.1:%d/%s?sslmode=disable",
-		pass, port, schemaf.Project,
-	)
-
-	db, err := basedb.Open(dsn)
-	if err != nil {
-		t.Fatalf("TestDB: open %s: %v", dsn, err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
 }
 
 // CaptureOutput captures stdout and stderr for testing

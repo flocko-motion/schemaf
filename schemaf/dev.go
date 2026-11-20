@@ -112,7 +112,7 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 	// Ensure codegen has been run.
 	if _, err := os.Stat("compose.gen.yml"); os.IsNotExist(err) {
 		fmt.Fprintln(os.Stderr, "compose.gen.yml not found — running codegen first...")
-		if err := runCmd("go", "run", "github.com/flocko-motion/schemaf/cmd/schemaf", "codegen", "all"); err != nil {
+		if err := runCmd("go", "run", "github.com/flocko-motion/schemaf/cmd/schemaf", "codegen"); err != nil {
 			return fmt.Errorf("codegen: %w", err)
 		}
 	}
@@ -224,12 +224,19 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		}
 	}
 
+	// Until the backend runs, a signal stops the background processes and
+	// exits. Once it runs, the server's own handler takes over (serve): it
+	// stops gracefully, and cleanup runs after serve returns.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	backendUp := make(chan struct{})
 	go func() {
-		<-sigCh
-		cleanup()
-		os.Exit(0)
+		select {
+		case <-sigCh:
+			cleanup()
+			os.Exit(0)
+		case <-backendUp:
+		}
 	}()
 
 	// Start frontend dev server.
@@ -264,6 +271,8 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 
 	// Start Go server (foreground) — reuse the app's serve() method.
 	if svc.backend {
+		signal.Stop(sigCh)
+		close(backendUp)
 		err := a.serve()
 		cleanup()
 		return err

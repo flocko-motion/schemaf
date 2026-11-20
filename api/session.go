@@ -42,7 +42,7 @@ func InitSessions(store SessionStore) {
 	sessionStore = store
 }
 
-var errNoSessions = errors.New("auth: sessions not initialized (sessions need a database: call app.AddDb in main.go)")
+var errNoSessions = errors.New("auth: sessions not initialized (sessions need a database: call app.AddDb in Wire, go/app/app.go)")
 
 // StartSession starts a session for subject, sets the session cookie on w and
 // returns the token for Bearer clients. Use it for logins the app handles

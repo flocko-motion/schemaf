@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	cli "github.com/flocko-motion/schemaf/cli"
-	"github.com/spf13/cobra"
 )
 
 //go:embed scaffold/package.json.tmpl
@@ -38,16 +37,6 @@ var scaffoldGitignore string
 
 // Ensure the embed import is used.
 var _ embed.FS
-
-func newScaffoldCmd(_ *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "scaffold",
-		Short: "Scaffold frontend if missing, validate if present",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runScaffoldFrontend()
-		},
-	}
-}
 
 func runScaffoldFrontend() error {
 	name, err := readProjectName()

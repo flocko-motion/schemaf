@@ -11,27 +11,11 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/spf13/cobra"
 	cli "github.com/flocko-motion/schemaf/cli"
 )
 
 //go:embed migrations.gen.go.tmpl
 var migrationsGenTemplate string
-
-func newMigrationsCmd(ctx *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "migrations",
-		Short: "Generate go/db/migrations.gen.go",
-		Long: `Scans go/db/migrations/*.sql and generates go/db/migrations.gen.go.
-
-The generated file embeds all migration SQL files and exposes Provider()
-for use in main.go: app.AddDb(db.Provider). With no migrations, Provider()
-returns an empty embed.FS.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMigrationsGen(ctx)
-		},
-	}
-}
 
 func runMigrationsGen(_ *cli.Context) error {
 	// Ensure normative migrations directory exists

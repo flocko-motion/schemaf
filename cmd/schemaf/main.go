@@ -4,8 +4,8 @@
 // This is a CLI built from the extensible, modular CLI kit provided by the framwork. Users will
 // build their own CLI extending(!) the built in features - so the users project CLI is an *extended*
 // version of this CLI, not a seperate CLI. The single CLI will be used for framwork operations like
-// codegen and running the server, but also for user defined commands. The user will write his own main.go
-// to mount all subcommands and call Execute().
+// codegen and running the server, but also for user defined commands. The project mounts its
+// subcommands in Wire (go/app/app.go), and its go/main.go calls Run().
 package main
 
 import (

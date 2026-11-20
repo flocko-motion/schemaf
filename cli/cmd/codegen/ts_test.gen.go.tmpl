@@ -3,26 +3,21 @@
 package tests
 
 import (
-	"net/http/httptest"
 	"os/exec"
 	"testing"
+{{- if .Runnable}}
 
-	schemafapi "github.com/flocko-motion/schemaf/api"
-	"{{.Module}}/api"
+	"github.com/flocko-motion/schemaf/schemaftest"
+
+	"{{.Module}}/app"
+{{- end}}
 )
 
-func newTSTestServer(t *testing.T) *httptest.Server {
+// runTSTest runs one exported test function of a .test.ts file against a
+// running instance: npx tsx runner.gen.ts <func> <baseUrl> <token>.
+func runTSTest(t *testing.T, funcName, baseURL, token string) {
 	t.Helper()
-	schemafapi.Reset()
-	api.Provider()
-	srv := httptest.NewServer(schemafapi.NewMux())
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-func runTSTest(t *testing.T, funcName string, srv *httptest.Server) {
-	t.Helper()
-	cmd := exec.Command("npx", "tsx", "runner.gen.ts", funcName, srv.URL)
+	cmd := exec.Command("npx", "tsx", "runner.gen.ts", funcName, baseURL, token)
 	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
 		t.Log(string(out))
@@ -31,13 +26,21 @@ func runTSTest(t *testing.T, funcName string, srv *httptest.Server) {
 		t.Fatalf("TS test %q failed", funcName)
 	}
 }
-{{range .Tests}}
-func Test{{.GoName}}(t *testing.T) {
+{{range .Files}}
+// TestTS{{.GoName}} runs {{.Name}} against one instance.
+func TestTS{{.GoName}}(t *testing.T) {
+{{- if .Runnable}}
+	inst := schemaftest.Start(t, app.Wire)
+	token := inst.Token("test")
+{{- end}}
+{{- range .Tests}}
+	t.Run({{printf "%q" .GoName}}, func(t *testing.T) {
 {{- if .Skip}}
-	t.Skip({{printf "%q" .Skip}})
+		t.Skip({{printf "%q" .Skip}})
 {{- else}}
-	srv := newTSTestServer(t)
-	runTSTest(t, {{printf "%q" .FuncName}}, srv)
+		runTSTest(t, {{printf "%q" .FuncName}}, inst.URL(), token)
+{{- end}}
+	})
 {{- end}}
 }
 {{end}}

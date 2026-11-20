@@ -244,7 +244,7 @@ func checkRoutes(table specTable, handlers []handlerRoute) error {
 	seen := map[string]bool{}
 	for _, h := range handlers {
 		// ServeMux panics on two patterns matching the same requests; report
-		// it here so Serve returns an error.
+		// it here so NewHandler returns an error.
 		if key := h.routeKey(); seen[key] {
 			problems = append(problems, fmt.Sprintf("%s: more than one handler for this route (an endpoint on one of schemaf's own routes?)", h))
 			continue

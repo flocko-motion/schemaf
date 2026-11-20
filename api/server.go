@@ -40,17 +40,18 @@ func frameworkRoutes() []frameworkRoute {
 // /api/: a path not in the spec is a 404, a method not in the spec a 405
 // (see EXTEND.md, Routing). NewMux panics, as http.ServeMux does on
 // conflicting patterns, if the spec and the handlers don't agree (see
-// checkRoutes); Serve returns that error instead.
+// checkRoutes); NewHandler returns that error instead.
 func NewMux() *http.ServeMux {
-	mux, err := buildMux()
+	mux, err := buildMux(DevMode())
 	if err != nil {
 		panic(err)
 	}
 	return mux
 }
 
-// buildMux builds the mux behind NewMux and Serve.
-func buildMux() (*http.ServeMux, error) {
+// buildMux builds the mux behind NewMux and NewHandler. proxyFrontend
+// selects the frontend: the dev server proxy, or the embedded files.
+func buildMux(proxyFrontend bool) (*http.ServeMux, error) {
 	if openAPISpec == "" {
 		return nil, fmt.Errorf("api: %w", errNoOpenAPISpec)
 	}
@@ -93,20 +94,17 @@ func buildMux() (*http.ServeMux, error) {
 	mux.Handle(apiPrefix, gated)
 	// Everything else is the frontend (dev proxy or embedded static files),
 	// for GET and HEAD only.
-	mux.Handle("/", frontendOnly(frontendHandler()))
+	mux.Handle("/", frontendOnly(frontendHandler(proxyFrontend)))
 	return mux, nil
 }
 
 // openAPIPattern is the one route outside /api/.
 const openAPIPattern = "GET /openapi.json"
 
-// Serve starts the HTTP server on the given address using the registered
-// routes. addr should be in the form ":8000". It returns NewMux's startup
-// error instead of panicking.
-func Serve(addr string) error {
-	mux, err := buildMux()
-	if err != nil {
-		return err
-	}
-	return http.ListenAndServe(addr, mux)
+// NewHandler builds the server's handler from the registered routes, like
+// NewMux, but returns the startup error instead of panicking. proxyFrontend
+// proxies paths outside /api/ to the frontend dev server (development mode);
+// otherwise they are the embedded frontend set by SetFrontend, or a 404.
+func NewHandler(proxyFrontend bool) (http.Handler, error) {
+	return buildMux(proxyFrontend)
 }

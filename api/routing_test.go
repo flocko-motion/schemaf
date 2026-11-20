@@ -181,10 +181,10 @@ func startupError(t *testing.T) string {
 	if panicked == nil {
 		t.Fatal("NewMux did not panic")
 	}
-	// Serve must fail before listening: the address is never bound.
-	serveErr := Serve("256.0.0.0:0")
+	// NewHandler returns the same error instead of panicking.
+	_, serveErr := NewHandler(false)
 	if serveErr == nil || serveErr.Error() != fmt.Sprint(panicked) {
-		t.Fatalf("Serve returned %v, want NewMux's error %q", serveErr, panicked)
+		t.Fatalf("NewHandler returned %v, want NewMux's error %q", serveErr, panicked)
 	}
 	return serveErr.Error()
 }

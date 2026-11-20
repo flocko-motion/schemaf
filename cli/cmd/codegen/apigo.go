@@ -8,20 +8,8 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/spf13/cobra"
 	cli "github.com/flocko-motion/schemaf/cli"
 )
-
-func newAPIGoCmd(_ *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "apigo",
-		Short: "Generate Go API client from openapi.json",
-		Long:  `Runs oapi-codegen on gen/openapi.json to produce go/apiclient/client.gen.go.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAPIGo()
-		},
-	}
-}
 
 const (
 	oapiCodegenPkg = "github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen"

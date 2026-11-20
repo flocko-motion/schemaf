@@ -8,7 +8,7 @@ Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
 - [Quickstart](#quickstart) — create a project with one command
 - Manual setup (what `init` does, step by step):
   - [1. Create the project](#1-create-the-project-what-init-does)
-  - [2. Wire up main.go](#2-wire-up-maingo)
+  - [2. Wire up the app](#2-wire-up-the-app)
   - [3. Add a database migration](#3-add-a-database-migration)
   - [4. Add database queries](#4-add-database-queries)
   - [5. Add an API endpoint](#5-add-an-api-endpoint)
@@ -56,7 +56,7 @@ cd myapp
 ./schemaf.sh dev all
 ```
 
-`init` creates `myapp/` with the full structure (`schemaf.toml`, `go.work`, the Go module, a sample endpoint + migration + query, and the frontend scaffold) and runs codegen. You write nothing by hand. Pin a specific release with `@v1.2.3` in place of `@latest`.
+`init` creates `myapp/` with the full structure (`schemaf.toml`, `go.work`, the Go module, the app wiring in `go/app/app.go` with a three-line `go/main.go`, a sample endpoint + migration + query, an integration test in `go/tests/health_test.go`, and the frontend scaffold) and runs codegen. You write nothing by hand. Pin a specific release with `@v1.2.3` in place of `@latest`.
 
 That's the whole onboarding. **The sections below explain what `init` does under the hood — you don't need them to get started.**
 
@@ -64,7 +64,7 @@ That's the whole onboarding. **The sections below explain what `init` does under
 
 ```bash
 mkdir myapp && cd myapp
-mkdir -p go/db/migrations go/db/queries go/api frontend
+mkdir -p go/app go/db/migrations go/db/queries go/api go/tests frontend
 ```
 
 Create `schemaf.toml`:
@@ -87,7 +87,26 @@ use (
 )
 ```
 
-## 2. Wire up main.go
+## 2. Wire up the app
+
+Create `go/app/app.go`. `Wire` holds every `Add*`/`On*`/`Set*` call; `main.go` and the integration tests share it (see [EXTEND › App Wiring](EXTEND.md#app-wiring-goappappgo)):
+```go
+package app
+
+import (
+    "github.com/flocko-motion/schemaf/schemaf"
+
+    "myapp/api"
+    "myapp/db"
+)
+
+// Wire registers the app's providers, hooks and services.
+func Wire(app *schemaf.App) {
+    app.AddDb(db.Provider)
+    app.AddApi(api.Provider)
+    app.SetFrontend(FrontendFS())
+}
+```
 
 Create `go/main.go`:
 ```go
@@ -99,24 +118,21 @@ import (
 
     "github.com/flocko-motion/schemaf/schemaf"
 
-    "myapp/api"
-    "myapp/db"
+    "myapp/app"
 )
 
 func main() {
-    ctx := context.Background()
-    app := schemaf.New(ctx)
-
-    app.AddDb(db.Provider)
-    app.AddApi(api.Provider)
-
-    if err := app.Run(); err != nil {
+    a := schemaf.New(context.Background())
+    app.Wire(a)
+    if err := a.Run(); err != nil {
         log.Fatal(err)
     }
 }
 ```
 
-`schemaf.New(ctx)` reads the project name from `schemaf.toml`. `app.Run()` hands over to Cobra — the `server` command starts the HTTP server, and any custom subcommands you register are available alongside it.
+`schemaf.New(ctx)` takes the project name that codegen compiles in from `schemaf.toml` (`go/app/constants.gen.go`), and `FrontendFS()` comes from `go/app/frontend.gen.go`; both appear with the first codegen. `a.Run()` hands over to Cobra — the `server` command starts the HTTP server, and any custom subcommands you register are available alongside it.
+
+Create `go/tests/health_test.go`, the first [integration test](EXTEND.md#integration-tests-schemaftest): it starts the app on its own database, calls `GET /api/health`, mints a token and calls `GET /api/user/me` with it.
 
 ## 3. Add a database migration
 
@@ -188,7 +204,7 @@ See [Endpoint Interface](EXTEND.md#endpoint-interface) for the full pattern.
 
 ```bash
 # First run — generates schemaf.sh + all glue code:
-go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
+go run github.com/flocko-motion/schemaf/cmd/schemaf codegen
 
 # From now on, use the generated script:
 ./schemaf.sh codegen    # regenerate all glue code
@@ -523,7 +539,7 @@ myapp/
     └── minio.dev.yml     # Dev/test only (not included in prod)
 ```
 
-Files ending in `.dev.yml` are only included in the dev and test compose files — not in production. Regular `*.yml` files are included everywhere.
+Files ending in `.dev.yml` are only included in the dev and test compose files — not in production. Regular `*.yml` files are included everywhere. The test compose file (`compose.test.gen.yml`) holds only these project services, no Postgres: tests get their databases from the [test harness](EXTEND.md#integration-tests-schemaftest).
 
 Codegen merges the framework's built-in compose with your extensions and produces `compose.gen.yml` (prod) and `compose.dev.gen.yml` (dev) at the project root.
 

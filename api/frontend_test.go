@@ -38,7 +38,7 @@ func TestFrontendFollowsDevMode(t *testing.T) {
 			t.Setenv("SCHEMAF_DEV", tc.dev)
 			t.Setenv("SCHEMAF_ENV", "") // native, outside compose: must not decide the mode
 			rec := httptest.NewRecorder()
-			frontendHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+			frontendHandler(DevMode()).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 			if got := rec.Body.String(); got != tc.want {
 				t.Errorf("GET / served %q, want %q", got, tc.want)
 			}

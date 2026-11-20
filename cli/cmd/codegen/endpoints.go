@@ -23,7 +23,6 @@ import (
 
 	"github.com/flocko-motion/schemaf/api"
 	cli "github.com/flocko-motion/schemaf/cli"
-	"github.com/spf13/cobra"
 )
 
 //go:embed endpoints.gen.go.tmpl
@@ -38,33 +37,6 @@ const (
 	// dependencies). They are codegen inputs: see inputs.go.
 	schemaSourcesFile = "gen/schema-sources"
 )
-
-func newEndpointsCmd(ctx *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "endpoints",
-		Short: "Scan go/api/ and generate endpoints.gen.go + openapi.json",
-		Long: `Scans go/api/*.go (excluding *.gen.go) for endpoint structs.
-
-An endpoint struct is any struct that implements:
-  Method() string, Path() string, Auth() api.AuthLevel,
-  Handle(ctx, req Req) (Resp, error),  HandleRaw(w, r) error
-  or  Stream(ctx, req Req) (<-chan Event, error)
-
-A struct with that shape that can't be parsed is an error, never skipped.
-
-Request and response types may be declared in any package; codegen
-type-checks go/api to build their schemas.
-
-Generates:
-  go/api/endpoints.gen.go  — Provider() that registers all endpoints and the
-                             spec served at /openapi.json
-  gen/openapi.json         — OpenAPI 3.0 spec (input for the TS and Go clients)
-  gen/schema-sources       — packages declaring the API's types (codegen inputs)`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEndpointsGen(ctx)
-		},
-	}
-}
 
 // endpointInfo holds everything extracted from a single endpoint struct.
 type endpointInfo struct {

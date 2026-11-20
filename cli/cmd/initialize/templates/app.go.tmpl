@@ -1,0 +1,18 @@
+// Package app holds the app's wiring, shared by main.go and the tests
+// (docs: EXTEND.md › App Wiring).
+package app
+
+import (
+	"github.com/flocko-motion/schemaf/schemaf"
+
+	"schemaf.local/{{.Name}}/api"
+	"schemaf.local/{{.Name}}/db"
+)
+
+// Wire registers the app's providers, hooks and services. Every Add*, On*
+// and Set* call goes here.
+func Wire(app *schemaf.App) {
+	app.AddApi(api.Provider)
+	app.AddDb(db.Provider)
+	app.SetFrontend(FrontendFS())
+}

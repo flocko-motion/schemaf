@@ -6,26 +6,13 @@ package codegen
 import (
 	_ "embed"
 	"fmt"
+	"os"
 
 	cli "github.com/flocko-motion/schemaf/cli"
-	"github.com/spf13/cobra"
 )
 
 //go:embed constants.gen.go.tmpl
 var constantsGenTemplate string
-
-func newConstantsCmd(_ *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "constants",
-		Short: "Generate go/constants.gen.go",
-		Long: `Generates go/constants.gen.go with the project name from schemaf.toml.
-
-The generated file provides ProjectName for use in main.go: schemaf.New(ctx, ProjectName)`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runConstantsGen()
-		},
-	}
-}
 
 func runConstantsGen() error {
 	name, err := readProjectName()
@@ -39,9 +26,15 @@ func runConstantsGen() error {
 
 	data := map[string]any{"Name": name, "Port": port}
 
-	const outPath = "go/constants.gen.go"
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", appDir, err)
+	}
+	const outPath = "go/app/constants.gen.go"
 	if err := renderTemplate(constantsGenTemplate, outPath, data); err != nil {
 		return fmt.Errorf("generating constants: %w", err)
+	}
+	if err := removeLegacyAppFiles(); err != nil {
+		return err
 	}
 
 	cli.Success("Generated %s (project: %s, port: %d)", outPath, name, port)

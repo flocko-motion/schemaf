@@ -13,7 +13,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/spf13/cobra"
 	cli "github.com/flocko-motion/schemaf/cli"
 )
 
@@ -29,17 +28,6 @@ var reExportedTestFunc = regexp.MustCompile(`^export\s+async\s+function\s+(test\
 var reSkipComment = regexp.MustCompile(`//\s*skip:\s*(.+)`)
 var reManualComment = regexp.MustCompile(`//\s*manual:`)
 
-func newTestsCmd(_ *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "tests",
-		Short: "Generate Go wrappers for TypeScript tests",
-		Long:  `Scans go/tests/*.test.ts and generates ts_test.gen.go and runner.gen.ts.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTestsGen()
-		},
-	}
-}
-
 type tsTestFunc struct {
 	FuncName string // e.g. "testHealth"
 	GoName   string // e.g. "Health"
@@ -48,9 +36,11 @@ type tsTestFunc struct {
 }
 
 type tsTestFile struct {
-	Name  string // e.g. "api.test.ts"
-	Alias string // e.g. "m0"
-	Tests []tsTestFunc
+	Name     string // e.g. "api.test.ts"
+	Alias    string // e.g. "m0"
+	GoName   string // e.g. "Api": the Go test is TestTSApi
+	Runnable bool   // at least one test isn't skipped, so the file starts an instance
+	Tests    []tsTestFunc
 }
 
 func runTestsGen() error {
@@ -70,6 +60,7 @@ func runTestsGen() error {
 	}
 
 	var files []tsTestFile
+	goNames := map[string]string{} // Go test name → .test.ts file
 	for i, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".test.ts") {
 			continue
@@ -81,10 +72,23 @@ func runTestsGen() error {
 		if len(tests) == 0 {
 			continue
 		}
+		goName := tsFileToGoName(e.Name())
+		if other, ok := goNames[goName]; ok {
+			return fmt.Errorf("%s and %s both become the Go test TestTS%s: rename one", other, e.Name(), goName)
+		}
+		goNames[goName] = e.Name()
+		runnable := false
+		for _, tf := range tests {
+			if tf.Skip == "" {
+				runnable = true
+			}
+		}
 		files = append(files, tsTestFile{
-			Name:  e.Name(),
-			Alias: fmt.Sprintf("m%d", i),
-			Tests: tests,
+			Name:     e.Name(),
+			Alias:    fmt.Sprintf("m%d", i),
+			GoName:   goName,
+			Runnable: runnable,
+			Tests:    tests,
 		})
 	}
 
@@ -92,19 +96,20 @@ func runTestsGen() error {
 	// always match go/tests (EXTEND.md › Empty inputs). Tests are optional,
 	// so this is not an empty input and there is no warning.
 
-	// Flatten all tests for the Go template
-	var allTests []tsTestFunc
+	n, anyRunnable := 0, false
 	for _, f := range files {
-		allTests = append(allTests, f.Tests...)
+		n += len(f.Tests)
+		anyRunnable = anyRunnable || f.Runnable
 	}
 
 	if err := renderTemplate(tsTestGenTemplate, filepath.Join(testsDir, "ts.gen_test.go"), map[string]any{
-		"Module": module,
-		"Tests":  allTests,
+		"Module":   module,
+		"Files":    files,
+		"Runnable": anyRunnable, // the harness imports are used only then
 	}); err != nil {
 		return err
 	}
-	cli.Success("Generated %s (%d test(s))", filepath.Join(testsDir, "ts.gen_test.go"), len(allTests))
+	cli.Success("Generated %s (%d test(s) in %d file(s))", filepath.Join(testsDir, "ts.gen_test.go"), n, len(files))
 
 	if err := renderTemplate(runnerGenTemplate, filepath.Join(testsDir, "runner.gen.ts"), map[string]any{
 		"Files": files,
@@ -166,6 +171,22 @@ func tsToGoTestName(name string) string {
 	r := []rune(name)
 	r[0] = unicode.ToUpper(r[0])
 	return string(r)
+}
+
+// tsFileToGoName converts "user-me.test.ts" → "UserMe": the file name
+// without ".test.ts", split at every non-alphanumeric rune, each part
+// capitalized.
+func tsFileToGoName(name string) string {
+	base := strings.TrimSuffix(name, ".test.ts")
+	var b strings.Builder
+	for _, part := range strings.FieldsFunc(base, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		r := []rune(part)
+		r[0] = unicode.ToUpper(r[0])
+		b.WriteString(string(r))
+	}
+	return b.String()
 }
 
 // readModuleName reads the module name from go/go.mod.
