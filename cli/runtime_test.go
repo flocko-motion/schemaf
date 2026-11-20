@@ -16,7 +16,11 @@ type stub struct {
 	volume     bool   // `<rt> volume inspect <name>` succeeds
 	volumeName string // if set, volume inspect succeeds only for this name (needs volume)
 	machines   string // output of `podman machine list --format {{.Name}}`
+	socketPath string // output of `podman info --format {{.Host.RemoteSocket.Path}}` (default: a rootless path; "-" prints nothing)
+	socketDown bool   // `podman --remote --url <socket> version` fails: nothing answers
 }
+
+const defaultSocketPath = "/run/user/1000/podman/podman.sock"
 
 // healthy is a runtime that is installed and usable, with docker-compose and no volume.
 var healthy = stub{compose: "Docker Compose version v2.29.0"}
@@ -30,15 +34,24 @@ func rc(fail bool) int {
 
 func writeStub(t *testing.T, dir string, name Runtime, s stub) {
 	t.Helper()
+	socketPath := s.socketPath
+	switch socketPath {
+	case "":
+		socketPath = defaultSocketPath
+	case "-":
+		socketPath = ""
+	}
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1 $2" in
+  "info --format") printf '%%s\n' %q; exit 0 ;;
+  "--remote --url") [ %d = 0 ] && exit 0; echo "Client: 1.0"; echo "Cannot connect to Podman at $3" >&2; exit 1 ;;
   "info "*) echo "info output"; exit %d ;;
   "compose version") echo %q; exit %d ;;
   "volume inspect") [ -z %q ] || [ "$3" = %q ] || exit 1; exit %d ;;
   "machine list") printf '%%s' %q; exit 0 ;;
 esac
 exit 0
-`, rc(s.infoFails), s.compose, rc(s.composeErr), s.volumeName, s.volumeName, rc(!s.volume), s.machines)
+`, socketPath, rc(s.socketDown), rc(s.infoFails), s.compose, rc(s.composeErr), s.volumeName, s.volumeName, rc(!s.volume), s.machines)
 	if err := os.WriteFile(filepath.Join(dir, string(name)), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +66,7 @@ func fakeRuntimes(t *testing.T, sel string, stubs map[Runtime]stub) {
 		writeStub(t, dir, name, s)
 	}
 	t.Setenv("PATH", dir)
+	t.Setenv("DOCKER_HOST", "") // empty counts as unset
 	t.Setenv(RuntimeEnv, sel)
 	if sel == "" {
 		os.Unsetenv(RuntimeEnv)
@@ -287,5 +301,71 @@ func TestVolumeCheckPerInstance(t *testing.T) {
 		if !strings.Contains(err.Error(), s) {
 			t.Errorf("refusal should mention %q:\n%s", s, err)
 		}
+	}
+}
+
+// Under podman on Linux, docker-compose reaches podman only through its API
+// socket: CheckRuntime refuses when it doesn't answer, says where it looked
+// and how to start it, and never starts it itself.
+func TestPodmanSocketCheck(t *testing.T) {
+	down := healthy
+	down.socketDown = true
+	noPath := healthy
+	noPath.socketPath = "-"
+
+	for _, tc := range []struct {
+		name       string
+		sel        string
+		goos       string
+		dockerHost string
+		stubs      map[Runtime]stub
+		want       []string // nil: CheckRuntime passes
+	}{
+		{name: "socket answers", stubs: map[Runtime]stub{Podman: healthy}},
+		{
+			name:  "socket down",
+			stubs: map[Runtime]stub{Podman: down},
+			want: []string{"podman's API socket isn't running: nothing answers at unix://" + defaultSocketPath,
+				"systemctl --user enable --now podman.socket", "Cannot connect to Podman at unix://" + defaultSocketPath},
+		},
+		{
+			name:       "DOCKER_HOST set, nothing answers there",
+			dockerHost: "unix:///tmp/elsewhere.sock",
+			stubs:      map[Runtime]stub{Podman: down},
+			want:       []string{"nothing answers at unix:///tmp/elsewhere.sock", "The address comes from DOCKER_HOST"},
+		},
+		{
+			name:  "podman reports no socket path",
+			stubs: map[Runtime]stub{Podman: noPath},
+			want:  []string{"podman info doesn't report its path"},
+		},
+		{name: "macOS: the podman machine provides it", goos: "darwin", stubs: map[Runtime]stub{Podman: down}},
+		{name: "docker: no podman socket needed", sel: "docker", stubs: map[Runtime]stub{Docker: down}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeRuntimes(t, tc.sel, tc.stubs)
+			if tc.goos != "" {
+				goos = tc.goos
+			}
+			t.Setenv("DOCKER_HOST", tc.dockerHost)
+			err := CheckRuntime("myapp", 0)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("want pass, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("want error, got nil")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("error should contain %q:\n%v", w, err)
+				}
+			}
+			if strings.Contains(err.Error(), "Client: 1.0") {
+				t.Errorf("error quotes podman's stdout (the client part), want only its stderr:\n%v", err)
+			}
+		})
 	}
 }

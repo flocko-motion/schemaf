@@ -76,6 +76,9 @@ func TestGeneratedScriptsUseRuntimeFunction(t *testing.T) {
 	for k, v := range volumeConflictShell("myapp") {
 		data[k] = v
 	}
+	for k, v := range podmanSocketShell() {
+		data[k] = v
+	}
 	if err := renderTemplate(schemafShTemplate, "schemaf.sh", data); err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +119,9 @@ func renderSchemafSh(t *testing.T, dir string) string {
 		"SchemafVersion": "v1.0.0", "InputGlobs": "go/api/*.go", "InputExcludes": "go/api/*.gen.go",
 	}
 	for k, v := range volumeConflictShell("myapp") {
+		data[k] = v
+	}
+	for k, v := range podmanSocketShell() {
 		data[k] = v
 	}
 	path := filepath.Join(dir, "schemaf.sh")
@@ -213,5 +219,83 @@ func TestShellVolumeCheck(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestShellPodmanSocketCheck runs _schemaf_check_runtime compose against a
+// stub podman whose API socket doesn't answer, on "Linux", and requires
+// exactly the Go refusal text (cli.PodmanSocketText).
+func TestShellPodmanSocketCheck(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not installed")
+	}
+	script := renderSchemafSh(t, t.TempDir())
+	funcs := shellFunc(t, script, "_schemaf_container") + shellFunc(t, script, "_schemaf_check_runtime") +
+		shellFunc(t, script, "_schemaf_check_podman_socket")
+
+	const sockPath = "/run/user/1000/podman/podman.sock"
+	for _, tc := range []struct {
+		name, dockerHost, uname, sock, fix string
+		down                               bool
+	}{
+		{name: "answers", uname: "Linux"},
+		{name: "down", uname: "Linux", down: true, sock: "unix://" + sockPath, fix: cli.PodmanSocketFixDefault},
+		{name: "DOCKER_HOST down", uname: "Linux", down: true, dockerHost: "unix:///tmp/elsewhere.sock",
+			sock: "unix:///tmp/elsewhere.sock", fix: cli.PodmanSocketFixDockerHost},
+		{name: "macOS skips it", uname: "Darwin", down: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			for _, tool := range []string{"cat", "sed"} {
+				p, err := exec.LookPath(tool)
+				if err != nil {
+					t.Skipf("%s not installed", tool)
+				}
+				if err := os.Symlink(p, filepath.Join(bin, tool)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rc := 0
+			if tc.down {
+				rc = 1
+			}
+			podman := fmt.Sprintf(`#!/bin/sh
+case "$1 $2" in
+  "info --format") echo %q; exit 0 ;;
+  "compose version") echo "Docker Compose version v2.29.0"; exit 0 ;;
+  "--remote --url") [ %d = 0 ] && exit 0; echo "Client: 1.0"; echo "Cannot connect to Podman at $3" >&2; echo "Error: no socket" >&2; exit 1 ;;
+esac
+exit 0
+`, sockPath, rc)
+			stubs := map[string]string{"podman": podman, "uname": "#!/bin/sh\necho " + tc.uname + "\n"}
+			for name, body := range stubs {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(bash, "-c", "set -euo pipefail\n"+funcs+"_schemaf_check_runtime compose\necho STARTED")
+			cmd.Env = []string{"PATH=" + bin, "SCHEMAF_RUNTIME=podman"}
+			if tc.dockerHost != "" {
+				cmd.Env = append(cmd.Env, "DOCKER_HOST="+tc.dockerHost)
+			}
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			err := cmd.Run()
+			if tc.sock == "" {
+				if err != nil || stdout.String() != "STARTED\n" {
+					t.Fatalf("want start, got %v:\n%s", err, stderr.String())
+				}
+				return
+			}
+			if err == nil || strings.Contains(stdout.String(), "STARTED") {
+				t.Fatalf("want refusal, got start:\n%s", stderr.String())
+			}
+			said := "  Cannot connect to Podman at " + tc.sock + "\n  Error: no socket"
+			want := "ERROR: " + cli.PodmanSocketText(tc.sock, tc.fix, said) + "\n"
+			if got := stderr.String(); got != want {
+				t.Errorf("shell refusal differs from Go's.\n--- shell\n%s\n--- go\n%s", got, want)
+			}
+		})
 	}
 }

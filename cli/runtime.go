@@ -175,12 +175,13 @@ podman info said:
 %s`, indent(out))
 }
 
-// checkCompose fails unless `<runtime> compose` is docker-compose (Compose v2).
+// checkCompose fails unless `<runtime> compose` is docker-compose (Compose v2)
+// and, under podman, docker-compose can reach podman (checkPodmanSocket).
 func (r Runtime) checkCompose() error {
 	out, err := r.command("compose", "version").CombinedOutput()
 	text := string(out)
 	if err == nil && strings.Contains(text, "Docker Compose version") {
-		return nil
+		return r.checkPodmanSocket()
 	}
 	if r == Docker {
 		return fmt.Errorf(`docker compose is not available.
@@ -199,6 +200,64 @@ and make sure podman picks it: podman compose version must print "Docker Compose
 (macOS: brew install docker-compose; other systems: https://github.com/docker/compose/releases).
 podman compose version said:
 %s`, indent(strings.TrimSpace(text)))
+}
+
+// checkPodmanSocket fails when podman's API socket doesn't answer. podman
+// compose hands off to docker-compose, which talks to podman through that
+// socket: DOCKER_HOST if set, else podman's own API socket. On Linux that is
+// the user's podman.socket, which nobody starts implicitly; without it
+// docker-compose fails with a misleading "is the docker daemon running?".
+// On macOS the podman machine provides the socket, and checkEngine has
+// already checked the machine answers. Pinged with podman's remote client
+// (`podman --remote --url <socket> version`), so no other tool is needed.
+// Never starts anything itself.
+func (r Runtime) checkPodmanSocket() error {
+	if r != Podman || goos == "darwin" {
+		return nil
+	}
+	sock, fromEnv := os.LookupEnv("DOCKER_HOST")
+	if !fromEnv || sock == "" {
+		fromEnv = false
+		out, err := r.command("info", "--format", "{{.Host.RemoteSocket.Path}}").Output()
+		sock = strings.TrimSpace(string(out))
+		if err != nil || sock == "" {
+			return fmt.Errorf("podman compose hands off to docker-compose, which needs podman's API socket, but podman info doesn't report its path (podman info --format '{{.Host.RemoteSocket.Path}}')")
+		}
+		if !strings.Contains(sock, "://") {
+			sock = "unix://" + sock
+		}
+	}
+	// stderr only: on failure, version still prints the client part to stdout.
+	ping := r.command("--remote", "--url", sock, "version")
+	var stderr strings.Builder
+	ping.Stderr = &stderr
+	if err := ping.Run(); err == nil {
+		return nil
+	}
+	fix := PodmanSocketFixDefault
+	if fromEnv {
+		fix = PodmanSocketFixDockerHost
+	}
+	return errors.New(PodmanSocketText(sock, fix, indent(strings.TrimSpace(stderr.String()))))
+}
+
+// The last sentences of PodmanSocketText: how to fix it, depending on where
+// the socket address came from.
+const (
+	PodmanSocketFixDefault    = "Start it once (it stays enabled):\n  systemctl --user enable --now podman.socket"
+	PodmanSocketFixDockerHost = "The address comes from DOCKER_HOST: point DOCKER_HOST at podman's socket, or unset it to use podman's own (start that once: systemctl --user enable --now podman.socket)."
+)
+
+// PodmanSocketText is the refusal when podman's API socket doesn't answer:
+// sock is the address tried, fix one of the PodmanSocketFix* texts, said
+// podman's indented output. schemaf.sh prints the same text: codegen renders
+// it with shell variables in place of the three parts.
+func PodmanSocketText(sock, fix, said string) string {
+	return fmt.Sprintf(`podman's API socket isn't running: nothing answers at %s.
+podman compose hands off to docker-compose, which talks to podman through that socket.
+%s
+podman said:
+%s`, sock, fix, said)
 }
 
 // PostgresVolume is the fixed name of the Postgres data volume of a project's

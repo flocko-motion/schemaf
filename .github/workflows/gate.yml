@@ -99,6 +99,34 @@ jobs:
             if [ "$SCHEMAF_RUNTIME" = docker ]; then sudo usermod -aG docker "$u"; fi
           done
 
+      # podman compose hands off to docker-compose, which talks to podman
+      # through the user's API socket (INSTALL.md › Prerequisites). Started for
+      # every user that runs compose: the runner (test, dev, instances) and the
+      # run user. Not the build user: build and load don't use compose.
+      - name: podman API sockets (runner, run user)
+        if: matrix.runtime == 'podman'
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger "$USER"
+          # start_socket <user>: enable podman.socket in its user systemd, then ping it
+          start_socket() {
+            local u=$1 uid run as=()
+            uid=$(id -u "$u")
+            run=/run/user/$uid
+            for _ in $(seq 1 30); do [ -S "$run/bus" ] && break; sleep 1; done
+            [ -S "$run/bus" ] || { echo "::error::$run/bus did not appear: no user systemd for $u (lingering?)"; exit 1; }
+            [ "$u" = "$USER" ] || as=(sudo -u "$u")
+            "${as[@]}" env XDG_RUNTIME_DIR="$run" DBUS_SESSION_BUS_ADDRESS="unix:path=$run/bus" \
+              systemctl --user enable --now podman.socket
+            "${as[@]}" env XDG_RUNTIME_DIR="$run" podman --remote --url "unix://$run/podman/podman.sock" version >/dev/null \
+              || { echo "::error::podman's API socket for $u doesn't answer at unix://$run/podman/podman.sock"; exit 1; }
+            echo "podman API socket answers for $u: unix://$run/podman/podman.sock"
+          }
+          start_socket "$USER"
+          start_socket "$E2E_RUN_USER"
+          # the runner's own podman and systemctl find its runtime dir from here on
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+
       - name: make test all (unit, db, onboarding e2e with two-user deploy and data-volume check)
         run: make test all REF="$GATE_SHA"
 
