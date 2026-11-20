@@ -118,6 +118,17 @@ func CheckRuntime(project string, instance int) error {
 	return checkVolume(rt, project, instance)
 }
 
+// CheckEngine verifies that the selected runtime is installed and its engine
+// answers (podman machine up, Docker daemon running), with the same messages
+// as CheckRuntime. For callers that run single containers, not compose.
+func CheckEngine() error {
+	rt, err := SelectedRuntime()
+	if err != nil {
+		return err
+	}
+	return rt.checkEngine()
+}
+
 func (r Runtime) notInstalledError() error {
 	if r == Podman {
 		return fmt.Errorf(`podman is not installed.

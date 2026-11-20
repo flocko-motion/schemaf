@@ -4,7 +4,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 
 ## Contents
 
-- [main.go Wiring](#maingo-wiring)
+- [App Wiring (`go/app/app.go`)](#app-wiring-goappappgo)
 - [Frontend](#frontend)
   - [Runtime config: `PUBLIC_*`](#runtime-config-public_)
 - [Built-in Endpoints](#built-in-endpoints)
@@ -30,13 +30,41 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 - [Code Generation](#code-generation)
   - [Empty inputs](#empty-inputs)
 - [Testing](#testing)
+  - [Integration tests (`schemaftest`)](#integration-tests-schemaftest)
+  - [TypeScript tests](#typescript-tests)
 - [Database Backups](#database-backups)
 
-## main.go Wiring
+## App Wiring (`go/app/app.go`)
 
-Your `go/main.go` wires up providers — generated and custom:
+Your app's wiring lives in one function, `Wire` in `go/app/app.go` (package `app`). It registers providers, generated and custom, and hooks. `main.go` and the [integration tests](#integration-tests-schemaftest) both call it, so the tests boot exactly the app that production runs:
 
 ```go
+// go/app/app.go
+package app
+
+import (
+    "github.com/flocko-motion/schemaf/schemaf"
+
+    "myapp/api"
+    "myapp/db"
+    "myapp/importer"
+)
+
+// Wire registers the app's providers, hooks and services.
+func Wire(app *schemaf.App) {
+    app.AddDb(db.Provider)                        // generated: migrations + queries
+    app.AddApi(api.Provider)                       // generated: endpoint registration
+    app.SetFrontend(FrontendFS())                  // generated: embedded frontend assets (go/app/frontend.gen.go)
+    app.AddSubcommand(importer.SubcommandProvider) // custom: CLI commands
+    // optional: app.OnLogin(...), app.AddIdentityProvider(...) — see Authentication
+    // optional: app.AddService(...) — see Services vs. subcommands
+}
+```
+
+Every `Add*`, `On*` and `Set*` call goes into `Wire`. `go/main.go` only creates the app, wires it and runs it:
+
+```go
+// go/main.go
 package main
 
 import (
@@ -45,28 +73,31 @@ import (
 
     "github.com/flocko-motion/schemaf/schemaf"
 
-    "myapp/api"
-    "myapp/db"
-    "myapp/importer"
+    "myapp/app"
 )
 
 func main() {
-    ctx := context.Background()
-    app := schemaf.New(ctx)
-
-    app.AddDb(db.Provider)                        // generated: migrations + queries
-    app.AddApi(api.Provider)                       // generated: endpoint registration
-    app.SetFrontend(FrontendFS())                  // generated: embedded frontend assets
-    app.AddSubcommand(importer.SubcommandProvider) // custom: CLI commands
-    // optional: app.OnLogin(...), app.AddIdentityProvider(...) — see Authentication
-
-    if err := app.Run(); err != nil {
+    a := schemaf.New(context.Background())
+    app.Wire(a)
+    if err := a.Run(); err != nil {
         log.Fatal(err)
     }
 }
 ```
 
-`app.Run()` hands over to Cobra. The `server` command (default) starts the HTTP server. Custom subcommands are available alongside it.
+`a.Run()` hands over to Cobra. The `server` command (default) starts the HTTP server. Custom subcommands are available alongside it. Name the variable anything but `app`, so it doesn't shadow the package.
+
+Codegen writes two files into `go/app/` next to `app.go`: `constants.gen.go` (the project name and port from `schemaf.toml`) and `frontend.gen.go` (`FrontendFS()`, see [Frontend › Wiring](#wiring)). Because they live in package `app`, a test binary that imports `app` gets them too.
+
+#### Upgrading: `main.go` → `go/app/app.go`
+
+Codegen stops while `go/app/app.go` doesn't define `func Wire(app *schemaf.App)`:
+
+```
+go/app/app.go doesn't exist: move your wiring from go/main.go into func Wire in go/app/app.go (EXTEND.md › App Wiring)
+```
+
+Move every `app.Add*`/`On*`/`Set*` call from `go/main.go` into `Wire`, and shrink `main.go` to the three lines above. Then run `./schemaf.sh codegen`: it writes `go/app/constants.gen.go` and `go/app/frontend.gen.go`, and removes the old generated `go/constants.gen.go`, `go/frontend.gen.go` and `go/frontend_dist/.gitkeep`.
 
 ## Frontend
 
@@ -104,7 +135,7 @@ localhost:{port}
 
 ### Wiring
 
-Codegen generates `go/frontend.gen.go` with `FrontendFS()` returning the embedded assets. Wire it in `main.go`:
+Codegen generates `go/app/frontend.gen.go` with `FrontendFS()` returning the embedded assets. Wire it in `Wire` (`go/app/app.go`):
 
 ```go
 app.SetFrontend(FrontendFS())
@@ -115,7 +146,7 @@ app.SetFrontend(FrontendFS())
 `./schemaf.sh codegen` does two things for the frontend:
 
 1. **Scaffold** — if `frontend/` doesn't exist, creates a Vite + TypeScript setup with React (the default) and runs `npm install`
-2. **Generate** — creates `go/frontend.gen.go` (embeds `frontend/dist/` into the Go binary), `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec) and `frontend/src/api/generated/config.gen.ts` ([runtime config](#runtime-config-public_))
+2. **Generate** — creates `go/app/frontend.gen.go` (embeds `frontend/dist/` into the Go binary), `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec) and `frontend/src/api/generated/config.gen.ts` ([runtime config](#runtime-config-public_))
 
 If `frontend/` exists, codegen validates it: the required files must be present, and `vite.config.ts`, `index.html` and the entry file (`src/main.tsx` or `src/main.ts`) must contain the [runtime config](#runtime-config-public_) setup. If something is missing, codegen stops and prints what to add.
 
@@ -305,7 +336,7 @@ endpoint BlobEndpoint: Path() "/api/blob/{path...}" uses {path...}, which OpenAP
 - a handler is registered outside `/api/` (the only exception is schemaf's `GET /openapi.json`);
 - two handlers serve the same method and path;
 - a handler's path uses `{name...}` or `{$}`;
-- no spec is set at all: wire the generated provider in `go/main.go`, `app.AddApi(api.Provider)`;
+- no spec is set at all: wire the generated provider in `Wire` (`go/app/app.go`), `app.AddApi(api.Provider)`;
 - a spec path item is a `$ref`, or declares no operation. Codegen never writes either, so the spec was edited by hand or is broken.
 
 Codegen builds the spec and the handler registration from the same endpoint structs, so these only fire when something was registered by hand or the generated files are out of date. `api.NewMux()` (for tests with `httptest`) panics with the same error, as `http.ServeMux` does on conflicting patterns; the server returns it from `app.Run`.
@@ -763,7 +794,7 @@ type Identity struct {
 }
 ```
 
-schemaf ships one built-in provider, [`auth0`](#activating-auth0), which is switched on by environment variables alone. Your own providers are registered in `main.go` (see [Writing your own provider](#writing-your-own-provider)).
+schemaf ships one built-in provider, [`auth0`](#activating-auth0), which is switched on by environment variables alone. Your own providers are registered in `Wire` (see [Writing your own provider](#writing-your-own-provider)).
 
 #### Login routes
 
@@ -777,7 +808,7 @@ All auth routes are in `openapi.json`, so the generated TypeScript and Go client
 
 By default the subject is the provider's subject, unchanged: `api.Subject(ctx)` returns e.g. the Auth0 `sub` (`google-oauth2|1234...`). Auth0 subjects already carry the upstream connection, so they don't collide.
 
-To map identities to your own users, register an optional `OnLogin` hook in `main.go`:
+To map identities to your own users, register an optional `OnLogin` hook in `Wire`:
 
 ```go
 app.OnLogin(func(ctx context.Context, id api.Identity) (string, error) {
@@ -938,7 +969,7 @@ await auth0.logout({ logoutParams: { returnTo: window.location.origin } });
 
 ### Writing your own provider
 
-Implement `api.IdentityProvider` in your project (e.g. `go/auth/passkey.go`) and register it in `main.go`:
+Implement `api.IdentityProvider` in your project (e.g. `go/auth/passkey.go`) and register it in `Wire`:
 
 ```go
 app.AddIdentityProvider(auth.PasskeyProvider{})
@@ -1215,6 +1246,8 @@ db.RunSet(ctx, sharedDB, db.MigrationSet{Prefix: "appB", Files: appBMigrations})
 
 `appA` and `appB` evolve their schemas independently; the shared `schemaf_migrations` table keeps each line's history apart. If both apps are schemaf apps, the `"schemaf"` line is applied once and skipped by whoever runs second (already-applied versions are never re-run).
 
+Within one binary, an identifier names one set of files. Registering it again with the same files (wiring the app again, as every [test instance](#integration-tests-schemaftest) does) keeps one set; registering it with different files is a wiring bug, and the app panics at registration, naming the identifier.
+
 ### Applying migrations to another database
 
 The framework runs your project's migrations against the built-in Postgres automatically on startup. The same versioned, transaction-safe mechanism is also available for **secondary databases your project owns** — a separate analytics store, a per-tenant database, an external Postgres you provision yourself.
@@ -1281,7 +1314,7 @@ Files are identified only by that header, never by name: your own files in `go/d
 
 ### Wiring
 
-Wire the database in `main.go`:
+Wire the database in `Wire` (`go/app/app.go`):
 ```go
 app.AddDb(db.Provider)
 ```
@@ -1363,6 +1396,8 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
 
 `app.AddService()` providers are **only started** when running `./myapp server` — codegen and subcommands never start services.
 
+A service gets a context that is cancelled when the server stops. On SIGINT or SIGTERM (Ctrl-C in `./schemaf.sh dev`, `docker stop`/`podman stop` in production) the server shuts down gracefully: it cancels the services' context, stops accepting connections and waits for in-flight requests (`http.Server.Shutdown`), waits for every service to return, then closes the database pool. All of that has 8 seconds, inside the 10 seconds a container runtime gives a container to stop. A service must return once its context is done; one that doesn't makes the shutdown fail loudly instead of hanging.
+
 ## Code Generation
 
 **One command generates everything:**
@@ -1370,6 +1405,8 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
 ```bash
 ./schemaf.sh codegen
 ```
+
+Codegen is fast, so it always runs every step; there are no single-step subcommands. (`codegen all` is still accepted as the old spelling, which `schemaf.sh` scripts generated by earlier versions call, e.g. during `upgrade`.)
 
 `schemaf.sh` uses `go run` to build a standalone schemaf CLI on the fly — no project binary needed, no dependencies beyond Go itself.
 
@@ -1436,7 +1473,7 @@ Each line of `gen/empty-inputs` is one of these warnings. `./schemaf.sh build` p
 
 TypeScript tests are optional and not an input: with no tests in `go/tests/*.test.ts`, `ts.gen_test.go` and `runner.gen.ts` are generated with no tests, and there is no warning. Without a `go/tests/` directory nothing is generated for tests.
 
-**One exception: `go/frontend_dist/.gitkeep`.** `frontend.gen.go` embeds `go/frontend_dist/`, which the frontend build fills at image build time (`Dockerfile.gen`). Its contents aren't known at codegen time, so codegen can't pick a variant; it creates `go/frontend_dist/.gitkeep` instead, so the embed always matches. Commit it.
+**One exception: `go/app/frontend_dist/.gitkeep`.** `go/app/frontend.gen.go` embeds `go/app/frontend_dist/`, which the frontend build fills at image build time (`Dockerfile.gen`). Its contents aren't known at codegen time, so codegen can't pick a variant; it creates `go/app/frontend_dist/.gitkeep` instead, so the embed always matches. Commit it.
 
 **Zero configuration.** Just run `./schemaf.sh codegen` and all the glue code appears. Generated files are committed: `build` runs no codegen and needs no Go, so a commit must carry generated files that match its inputs.
 
@@ -1451,27 +1488,96 @@ TypeScript tests are optional and not an input: with no tests in `go/tests/*.tes
 
 `./schemaf.sh test` runs no codegen. It first checks `gen/inputs.sha256` (see [Code Generation](#code-generation)) and stops if generated files are stale — `run ./schemaf.sh codegen and commit` — then runs `go test ./go/...` and `npx tsc --noEmit`. Tests therefore always run against generated code that matches its inputs, and CI catches a commit that forgot codegen.
 
-The tests run against an ephemeral stack (`compose.test.gen.yml`: Postgres without a volume, plus your project services) started with the selected [container runtime](INSTALL.md#container-runtime): podman by default, Docker with `SCHEMAF_RUNTIME=docker`. It runs the same runtime checks as `dev` and `run`, and stops with a clear message if a tool is missing.
+The test stack (`compose.test.gen.yml`) holds only your project services (`compose/*.yml`), with no volumes; it has no Postgres. Each test that boots the app gets its own database from the [harness](#integration-tests-schemaftest). `./schemaf.sh test` starts the stack with the selected [container runtime](INSTALL.md#container-runtime) (podman by default, Docker with `SCHEMAF_RUNTIME=docker`), sets the services' URLs (`gen/test-env.sh`), and tears it down after the tests. A project without services starts no stack at all. A project service in the test stack can't depend on `postgres` (`depends_on`): there is none, so codegen stops with a message naming the service.
 
-### Go tests
+### Where tests live
 
-Standard Go test files in `go/api/*_test.go` using `httptest`.
+| Test | Where | Package |
+|---|---|---|
+| Unit test of one file | next to it, e.g. `go/api/users_test.go` | the file's package |
+| Integration test that boots the app | `go/tests/*_test.go` | `tests` |
+| TypeScript test against the running app | `go/tests/*.test.ts` | — |
+
+`init` scaffolds `go/tests/health_test.go`: it starts an instance, calls `GET /api/health`, mints a token and calls `GET /api/user/me` with it.
 
 Codegen does not read test files: an endpoint struct declared in a `*_test.go` file (in package `api` or `api_test`) belongs to the test, e.g. to serve a route through `api.NewRawRoute`, and is never registered in `endpoints.gen.go` or listed in `gen/openapi.json`.
 
+### Integration tests (`schemaftest`)
+
+`github.com/flocko-motion/schemaf/schemaftest` starts your app in the test process, against its own fresh database, on a free port. An app's tests import only this package:
+
+```go
+// go/tests/users_test.go
+package tests
+
+import (
+    "net/http"
+    "testing"
+
+    "github.com/flocko-motion/schemaf/schemaftest"
+
+    "myapp/app"
+)
+
+func TestUsers(t *testing.T) {
+    inst := schemaftest.Start(t, app.Wire) // migrations applied, server listening
+
+    inst.URL()           // http://127.0.0.1:<port>
+    inst.DB()            // *sql.DB of this instance's database
+    tok := inst.Token("alice")       // a signed token for a subject
+    inst.AuthHeader(tok) // http.Header{"Authorization": {"Bearer <tok>"}}, e.g. for the generated apiclient
+    inst.Restart()       // graceful stop, then start again on the same database and port
+
+    req, _ := http.NewRequest("GET", inst.URL()+"/api/user/me", nil)
+    req.Header = inst.AuthHeader(tok)
+    // ...
+}   // t.Cleanup: the server stops, the pool closes, the database is dropped
+```
+
+| | |
+|---|---|
+| `Start(t, app.Wire)` | A fresh instance: a new database with the full schema and no data, then the server started the way `./myapp server` starts it (migrations, auth, sessions and their cleanup, your `AddService` services). `t` is a `testing.TB`. |
+| `URL()` | The instance's base URL. It stays the same across `Restart`, so clients built from it stay valid. |
+| `DB()` | A connection pool on the instance's database, for setting up and checking data. The server sees what you write, and you see what it writes. |
+| `Token(subject)` | A token signed with the instance's key, minted in the test process: stateless and without expiry, like `api.IssueToken(subject, time.Time{})`. `api.RevokeSubject` still ends it. |
+| `AuthHeader(tok)` | An `http.Header` carrying `Authorization: Bearer <tok>`. |
+| `Restart()` | Stops the server gracefully and starts it again on the same database and port, with nothing kept in memory, as after a deployment. Data, the signing key and sessions survive, since they all live in the database, so a token minted before the restart still works. |
+
+Every failure stops the test with `t.Fatal` and says what to do: the container runtime is missing or not running, the image pull failed, a migration failed, the server couldn't start.
+
+**Development mode, always.** An instance runs in [development mode](#development-mode) however the tests were started: `Start` sets `SCHEMAF_DEV=1` for the test (`t.Setenv`, restored at cleanup), so `./schemaf.sh test` and a plain `go test` from your IDE behave the same. Your `api.DevMode()` branches run, and session cookies carry no `Secure` flag, so cookie logins work over the instance's plain `http://`. (Because of `t.Setenv`, a test that starts an instance can't call `t.Parallel()`, which instances don't support anyway.)
+
+**What an instance runs.** Migrations, auth, sessions and their cleanup, and your services. Not the SFTP backup scheduler and not the frontend dev proxy: the embedded frontend is served if `Wire` calls `SetFrontend`, and other paths outside `/api/` are a 404. Identity providers come only from `Wire` (`AddIdentityProvider`), never from the OIDC environment variables, so tests don't depend on your secrets. Project compose services (MinIO etc.) come from the test stack, not from the harness.
+
+**Databases.** The first `Start` in a test binary starts one Postgres container (`postgres:17-alpine`, on a free `127.0.0.1` port, with the selected container runtime) and runs your migrations, the framework's and the app's, once into a template database. Each `Start` then creates its own database from that template (`CREATE DATABASE … TEMPLATE …`), so it begins with the full schema, no data, no signing key and no sessions, and `t.Cleanup` drops it. The container dies with the test process, even on Ctrl-C or SIGKILL: the process holds it through a pipe, and the runtime removes it (`--rm`). No `TestMain` is needed. `go test ./...` runs packages as parallel processes; each has its own container, so they never clash.
+
+**One instance at a time.** The server's signing key, sessions and database connection are process-wide, so a test binary runs one instance at a time: start a fresh one per test, one after another. A second `Start` while one is still running stops the test: `schemaftest: another instance is still running; instances run one after another, not in parallel`. `t.Parallel()` across instances is not supported.
+
+**Production safety.** Neither `DB()` nor `Token()` can reach a real database or mint a token that works anywhere else:
+- `Start` panics outside a `go test` binary (`testing.Testing()`), and refuses to run with `SCHEMAF_ENV=docker`.
+- The harness builds its database address only from the container it started. It never reads `DATABASE_URL`, `DB_HOST`, `DB_PASS` or the app's own DSN, and there is no option to pass one in.
+- An `Instance` has no exported constructor or fields.
+- Each instance generates its signing key fresh in its own throwaway database, so its tokens fail everywhere else.
+
 ### TypeScript tests
 
-Write exported async functions named `test*` in `go/tests/*.test.ts`:
+Write exported async functions named `test*` in `go/tests/*.test.ts`. Each gets the instance's base URL and a token for the subject `test` (minted with `Token("test")`):
 
 ```typescript
 // go/tests/api.test.ts
-export async function testCreateUser(baseUrl: string) {
-    const resp = await fetch(`${baseUrl}/api/users`, { method: "POST", ... })
+export async function testCreateUser(baseUrl: string, token: string) {
+    const resp = await fetch(`${baseUrl}/api/users`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        ...
+    })
     if (!resp.ok) throw new Error(`expected 200, got ${resp.status}`)
 }
 ```
 
-Codegen generates Go wrappers (`go/tests/ts.gen_test.go`) that start an `httptest.Server`, run the TypeScript via `npx tsx`, and report pass/fail as a standard Go test.
+A test that doesn't need the token can leave out the second parameter.
+
+Codegen generates Go wrappers (`go/tests/ts.gen_test.go`): one Go test per `.test.ts` file, named `TestTS<File>` (`api.test.ts` → `TestTSApi`), which starts one [instance](#integration-tests-schemaftest) for the file. Its `test*` functions run as subtests (`TestTSApi/CreateUser`) against that instance, one after another, so they share its database. Each runs the TypeScript via `npx tsx` and reports pass or fail as a Go test.
 
 To skip a TS test, add a comment on the preceding line:
 
@@ -1480,11 +1586,11 @@ To skip a TS test, add a comment on the preceding line:
 export async function testClockTime(baseUrl: string) { ... }
 ```
 
-The generated Go wrapper will call `t.Skip(...)` with that message.
+The generated subtest calls `t.Skip(...)` with that message. A file whose tests are all skipped starts no instance.
 
 ### Testing the framework under both runtimes
 
-For work on schemaf itself (`make test <unit|db|e2e|all>`): `e2e/db-test.sh` and `e2e/build-example.sh` follow `SCHEMAF_RUNTIME` like everything else (default podman), and the release gate (`make release`) runs under podman only. Nothing beyond `make release` is required. To try the Docker path anyway:
+For work on schemaf itself (`make test <unit|db|e2e|all>`): `e2e/db-test.sh` and `e2e/build-example.sh` follow `SCHEMAF_RUNTIME` like everything else (default podman), and the release gate (`make release`) runs under podman only. Nothing beyond `make release` is required. `schemaftest`'s own tests start containers, so they skip unless `SCHEMAF_CONTAINER_TESTS=1`; `e2e/db-test.sh` (`make test db`) sets it and runs them, and a project's `./schemaf.sh test`, which also runs the framework's tests, stays fast. To try the Docker path anyway:
 
 ```bash
 SCHEMAF_RUNTIME=docker make test e2e

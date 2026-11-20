@@ -46,10 +46,10 @@ key is stored there.`,
 			if !api.DevMode() {
 				return fmt.Errorf("auth token is dev-only and refuses to run in production: run it as ./schemaf.sh auth token, which sets SCHEMAF_DEV=1")
 			}
-			if err := a.initDB(); err != nil {
+			if err := a.initDB(a.ctx, a.dsn()); err != nil {
 				return err
 			}
-			if err := a.initAuth(); err != nil {
+			if err := a.initAuth(a.ctx); err != nil {
 				return fmt.Errorf("auth init: %w", err)
 			}
 			var exp time.Time

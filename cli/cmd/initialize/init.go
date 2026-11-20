@@ -68,6 +68,8 @@ func runInit(name string) error {
 
 	// Create directory structure.
 	dirs := []string{
+		"go/app",
+		"go/tests",
 		"go/api",
 		"go/db/migrations",
 		"go/db/queries",
@@ -86,6 +88,8 @@ func runInit(name string) error {
 		{"templates/schemaf.toml.tmpl", "schemaf.toml"},
 		{"templates/go.work.tmpl", "go.work"},
 		{"templates/main.go.tmpl", "go/main.go"},
+		{"templates/app.go.tmpl", "go/app/app.go"},
+		{"templates/health_test.go.tmpl", "go/tests/health_test.go"},
 		{"templates/number.go.tmpl", "go/api/number.go"},
 		{"templates/0001_number.sql.tmpl", "go/db/migrations/0001_number.sql"},
 		{"templates/number.sql.tmpl", "go/db/queries/number.sql"},
@@ -113,7 +117,7 @@ func runInit(name string) error {
 
 	// Run codegen to generate schemaf.sh, compose files, frontend scaffold, etc.
 	cli.Info("Running codegen...")
-	if err := run(name, "go", "run", "github.com/flocko-motion/schemaf/cmd/schemaf", "codegen", "all"); err != nil {
+	if err := run(name, "go", "run", "github.com/flocko-motion/schemaf/cmd/schemaf", "codegen"); err != nil {
 		return fmt.Errorf("codegen: %w", err)
 	}
 

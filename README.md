@@ -15,7 +15,7 @@ Common tasks and where they're documented (jump straight to the section):
 | Task | Where |
 |---|---|
 | Create a new project | [INSTALL › Quickstart](INSTALL.md#quickstart) |
-| Wire providers in `main.go` | [EXTEND › main.go Wiring](EXTEND.md#maingo-wiring) |
+| Wire providers (`go/app/app.go`) | [EXTEND › App Wiring](EXTEND.md#app-wiring-goappappgo) |
 | Add an API endpoint | [EXTEND › Endpoint Interface](EXTEND.md#endpoint-interface) |
 | Authenticate / mint dev tokens | [EXTEND › Authentication](EXTEND.md#authentication) |
 | Sign users in with Auth0 | [EXTEND › Activating Auth0](EXTEND.md#activating-auth0) |
@@ -29,6 +29,7 @@ Common tasks and where they're documented (jump straight to the section):
 | Add a CLI subcommand | [EXTEND › CLI Subcommands](EXTEND.md#cli-subcommands) |
 | Run code generation | [EXTEND › Code Generation](EXTEND.md#code-generation) |
 | Write & run tests | [EXTEND › Testing](EXTEND.md#testing) |
+| Boot the app in a test (own database, tokens, restart) | [EXTEND › Integration tests](EXTEND.md#integration-tests-schemaftest) |
 | Configure database backups | [EXTEND › Database Backups](EXTEND.md#database-backups) |
 | Secrets / env files | [INSTALL › Secrets](INSTALL.md#secrets) |
 | Deploy: build an image, run it | [INSTALL › Deployment](INSTALL.md#deployment) |
@@ -141,7 +142,12 @@ myapp/
 │   ├── schema-sources              # Generated: packages declaring the API's types
 │   └── inputs.sha256               # Generated: hash of codegen's inputs (freshness check)
 ├── go/                            # All Go code (CLI + server unified)
-│   ├── main.go                    # Wire up providers, start app
+│   ├── main.go                    # New → app.Wire → Run (three lines)
+│   ├── app/                       # The app's wiring, shared by main.go and the tests
+│   │   ├── app.go                 # func Wire(app *schemaf.App): every Add*/On*/Set* call
+│   │   ├── constants.gen.go       # Generated: project name + port from schemaf.toml
+│   │   ├── frontend.gen.go        # Generated: FrontendFS() (embeds frontend_dist/)
+│   │   └── frontend_dist/         # Filled by the image build; holds .gitkeep in git
 │   ├── db/                        # All database concerns
 │   │   ├── migrations/            # Your SQL migrations
 │   │   │   ├── 001_users.sql
@@ -155,8 +161,12 @@ myapp/
 │   ├── api/                       # Your API handlers (normative!)
 │   │   ├── users.go              # Your handler implementations
 │   │   └── endpoints.gen.go      # Generated: api.Provider
-│   └── apiclient/
-│       └── client.gen.go         # Generated: Go API client (oapi-codegen)
+│   ├── apiclient/
+│   │   └── client.gen.go         # Generated: Go API client (oapi-codegen)
+│   └── tests/                     # Integration tests that boot the app (package tests)
+│       ├── health_test.go        # Scaffolded by init: schemaftest.Start(t, app.Wire)
+│       ├── *.test.ts             # TypeScript tests against a running instance
+│       └── ts.gen_test.go        # Generated: Go wrappers for the TypeScript tests
 ├── frontend/                      # Your static site (any language/framework)
 │   ├── api/
 │   │   └── openapi.gen.ts        # Generated: TypeScript client
@@ -269,6 +279,8 @@ compose/        - Reusable compose blocks (postgres, future: redis, etc.)
 e2e/            - From-scratch onboarding e2e + DB integration harness
 api/            - API registry + OpenAPI generation
 schemaf/        - App lifecycle (schemaf.New, app.Run)
+schemaftest/    - Test harness: start the app in-process on its own database
+internal/       - Framework-only hooks between packages (Go internal: apps can't import them)
 cli/            - schemaf CLI framework (subcommands, config/state)
 compose/        - Compose dependency resolver (x-schemaf metadata)
 db/             - Database helpers + migrations

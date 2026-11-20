@@ -6,19 +6,13 @@ import (
 
 	"github.com/flocko-motion/schemaf/schemaf"
 
-	"schemaf.local/{{.Name}}/api"
-	"schemaf.local/{{.Name}}/db"
+	"schemaf.local/{{.Name}}/app"
 )
 
 func main() {
-	ctx := context.Background()
-	app := schemaf.New(ctx)
-
-	app.AddApi(api.Provider)
-	app.AddDb(db.Provider)
-	app.SetFrontend(FrontendFS())
-
-	if err := app.Run(); err != nil {
+	a := schemaf.New(context.Background())
+	app.Wire(a)
+	if err := a.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # db-test.sh — Run the framework's real-Postgres integration tests against an
 # ephemeral database (no consumer project needed). Spins postgres, exports
-# DATABASE_URL, runs the gated tests in ./db, and always tears down.
+# DATABASE_URL, runs the gated tests in ./db, and always tears down. Then runs
+# the test harness's own tests (./schemaftest), which start their own Postgres
+# container and are gated by SCHEMAF_CONTAINER_TESTS=1.
 #
 # Usage:
-#   e2e/db-test.sh                 # run ./db integration tests
+#   e2e/db-test.sh                 # run ./db and ./schemaftest integration tests
 #   e2e/db-test.sh -run TestRunSet # pass extra flags through to `go test`
 set -euo pipefail
 
@@ -36,3 +38,6 @@ echo "▶ DATABASE_URL=${DATABASE_URL}"
 
 echo "▶ go test ./db/..."
 go -C "$REPO_ROOT" test ./db/... "$@"
+
+echo "▶ go test ./schemaftest/... (SCHEMAF_CONTAINER_TESTS=1)"
+SCHEMAF_CONTAINER_TESTS=1 go -C "$REPO_ROOT" test ./schemaftest/... "$@"

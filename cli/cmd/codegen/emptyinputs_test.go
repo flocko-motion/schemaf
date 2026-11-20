@@ -7,7 +7,7 @@ import (
 )
 
 // runEmptyInputSteps runs the codegen steps that have empty-input variants,
-// then writes gen/empty-inputs, in the order `codegen all` runs them.
+// then writes gen/empty-inputs, in the order `codegen` runs them.
 func runEmptyInputSteps(t *testing.T) {
 	t.Helper()
 	emptyInputs = nil

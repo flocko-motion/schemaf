@@ -1,0 +1,39 @@
+// Integration tests boot the app on its own database (docs: EXTEND.md ›
+// Integration tests).
+package tests
+
+import (
+	"net/http"
+	"testing"
+
+	"github.com/flocko-motion/schemaf/schemaftest"
+
+	"schemaf.local/{{.Name}}/app"
+)
+
+func TestHealth(t *testing.T) {
+	inst := schemaftest.Start(t, app.Wire)
+
+	resp, err := http.Get(inst.URL() + "/api/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/health = %d, want 200", resp.StatusCode)
+	}
+
+	req, err := http.NewRequest("GET", inst.URL()+"/api/user/me", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header = inst.AuthHeader(inst.Token("alice"))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/user/me with a token = %d, want 200", resp.StatusCode)
+	}
+}

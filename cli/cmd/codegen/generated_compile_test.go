@@ -5,22 +5,20 @@ import (
 	"testing"
 )
 
-// frontend.gen.go embeds go/frontend_dist/. Before the frontend build fills
-// it, the directory holds only .gitkeep, the one placeholder codegen keeps
-// (EXTEND.md › Empty inputs).
+// go/app/frontend.gen.go embeds go/app/frontend_dist/. Before the frontend
+// build fills it, the directory holds only .gitkeep, the one placeholder
+// codegen keeps (EXTEND.md › Empty inputs).
 func TestFrontendGenOnlyGitkeepCompiles(t *testing.T) {
 	compileGenerated(t, map[string]string{
-		"frontend.gen.go":        frontendGenTemplate,
-		"frontend_dist/.gitkeep": "",
-		"main.go":                mainStub,
+		"app/frontend.gen.go":        frontendGenTemplate,
+		"app/frontend_dist/.gitkeep": "",
 	})
 }
 
 func TestConstantsGenCompiles(t *testing.T) {
 	src := renderForTest(t, constantsGenTemplate, map[string]any{"Name": "myapp", "Port": 8000})
 	compileGenerated(t, map[string]string{
-		"constants.gen.go": src,
-		"main.go":          mainStub,
+		"app/constants.gen.go": src,
 	})
 }
 

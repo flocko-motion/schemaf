@@ -15,7 +15,7 @@ case "${1:-}" in
 	"")
 		echo "Usage: make test <unit|db|e2e|all>"
 		echo "  unit  fast Go unit tests (real-Postgres tests auto-skip)"
-		echo "  db    DB integration tests on an ephemeral Postgres"
+		echo "  db    DB integration tests on an ephemeral Postgres, and the test harness (schemaftest)"
 		echo "  e2e   from-scratch onboarding e2e (online tag; REF=<tag>)"
 		echo "  all   unit + db + e2e"
 		;;

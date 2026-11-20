@@ -7,7 +7,7 @@ import schemafapi "github.com/flocko-motion/schemaf/api"
 
 // Provider registers all API endpoints, and the OpenAPI spec served at
 // /openapi.json, with the schemaf framework.
-// Wire up in go/main.go: app.AddApi(api.Provider)
+// Wire up in Wire (go/app/app.go): app.AddApi(api.Provider)
 func Provider() {
 	schemafapi.SetOpenAPISpec(openAPISpec)
 {{- range .Endpoints}}

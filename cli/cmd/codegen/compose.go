@@ -13,7 +13,6 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/spf13/cobra"
 	cli "github.com/flocko-motion/schemaf/cli"
 	"gopkg.in/yaml.v3"
 )
@@ -35,20 +34,6 @@ var dockerfileTemplate string
 
 //go:embed schemaf.sh.tmpl
 var schemafShTemplate string
-
-func newComposeCmd(_ *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "compose",
-		Short: "Generate compose.gen.yml",
-		Long: `Generates compose.gen.yml from the framework template.
-
-Includes postgres + backend services. Any *.yml files in compose/ are
-included via Docker Compose include directives.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runComposeGen()
-		},
-	}
-}
 
 func runComposeGen() error {
 	name, err := readProjectName()
@@ -103,7 +88,11 @@ func runComposeGen() error {
 	}
 	cli.Success("Generated compose.dev.gen.yml")
 
-	// Test: shared + dev-only extensions.
+	// Test: shared + dev-only extensions, without Postgres.
+	testServices, err := checkTestStack(allExts)
+	if err != nil {
+		return err
+	}
 	testData := copyMap(base)
 	testData["Extensions"] = allExts
 	testData["ExtServices"] = allServices
@@ -129,7 +118,9 @@ func runComposeGen() error {
 	}
 	cli.Success("Generated gen/test-env.sh")
 
-	shData, err := schemafShData(base)
+	shBase := copyMap(base)
+	shBase["HasTestStack"] = testServices > 0
+	shData, err := schemafShData(shBase)
 	if err != nil {
 		return err
 	}
@@ -277,4 +268,59 @@ func scanExtServices(extensions []string) ([]ExtService, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil
+}
+
+// checkTestStack returns how many services the test stack (extensions)
+// declares. The test stack has no Postgres, so a service depending on
+// postgres is an error naming it.
+func checkTestStack(extensions []string) (int, error) {
+	type composeFile struct {
+		Services map[string]struct {
+			DependsOn yaml.Node `yaml:"depends_on"`
+		} `yaml:"services"`
+	}
+	n := 0
+	var problems []string
+	for _, path := range extensions {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return 0, fmt.Errorf("reading %s: %w", path, err)
+		}
+		var cf composeFile
+		if err := yaml.Unmarshal(data, &cf); err != nil {
+			return 0, fmt.Errorf("parsing %s: %w", path, err)
+		}
+		n += len(cf.Services)
+		for name, svc := range cf.Services {
+			if dependsOn(svc.DependsOn, "postgres") {
+				problems = append(problems, fmt.Sprintf("service %s in %s depends on postgres", name, path))
+			}
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		return 0, fmt.Errorf("the test stack (compose.test.gen.yml) has no postgres: tests get their databases from the test harness (EXTEND.md › Testing). Remove the dependency, or move the service to a file the test stack doesn't include:\n  - %s",
+			strings.Join(problems, "\n  - "))
+	}
+	return n, nil
+}
+
+// dependsOn reports whether a depends_on node (a list of names, or a map
+// keyed by name) names service.
+func dependsOn(node yaml.Node, service string) bool {
+	switch node.Kind {
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			if item.Value == service {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i < len(node.Content); i += 2 {
+			if node.Content[i].Value == service {
+				return true
+			}
+		}
+	}
+	return false
 }

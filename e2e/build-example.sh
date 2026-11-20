@@ -114,16 +114,52 @@ cd "$DIR"
 
 # --- it should have produced a complete, configured project ---
 step "verify scaffold"
-for f in schemaf.toml schemaf.sh go/main.go go/constants.gen.go; do
+for f in schemaf.toml schemaf.sh go/main.go go/app/app.go go/app/constants.gen.go go/app/frontend.gen.go go/tests/health_test.go; do
   [ -f "$f" ] || { echo "expected $f to exist after init" >&2; exit 1; }
   echo "    ✓ $f"
 done
+if grep -q 'AddDb\|AddApi' go/main.go; then
+  echo "go/main.go still wires providers; they belong in go/app/app.go (Wire)" >&2; exit 1
+fi
+if grep -q postgres compose.test.gen.yml; then
+  echo "compose.test.gen.yml still has postgres; tests get their databases from schemaftest" >&2; exit 1
+fi
+echo "    ✓ main.go only wires through app.Wire; the test stack has no postgres"
 
 step "compile"
 ( cd go && go build ./... )
 
-step "run the test stack under ${RUNTIME} (ephemeral postgres + tests)"
+# The #21 scenario: a TypeScript test against an authenticated endpoint (with
+# the token the wrapper passes) and a DB-backed one, on its own instance.
+step "add a TypeScript test against an authenticated and a DB-backed endpoint"
+cat > go/tests/api.test.ts <<'TS'
+export async function testUserMe(baseUrl: string, token: string) {
+  const resp = await fetch(`${baseUrl}/api/user/me`, { headers: { Authorization: `Bearer ${token}` } })
+  if (resp.status !== 200) throw new Error(`GET /api/user/me: expected 200, got ${resp.status}`)
+}
+
+export async function testNumber(baseUrl: string) {
+  const put = await fetch(`${baseUrl}/api/number`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ number: 42 }),
+  })
+  if (put.status !== 200) throw new Error(`PUT /api/number: expected 200, got ${put.status}`)
+  const got = await (await fetch(`${baseUrl}/api/number`)).json()
+  if (got.number !== 42) throw new Error(`GET /api/number: expected 42, got ${JSON.stringify(got)}`)
+}
+TS
+./schemaf.sh codegen
+
+step "run the tests under ${RUNTIME} (each instance on its own database, no postgres in compose)"
 ./schemaf.sh test
+
+step "the scaffolded integration test and the TypeScript tests really ran"
+OUT="$( cd go && go test ./tests/ -count=1 -v -run 'TestHealth|TestTSApi' 2>&1 )" || { echo "$OUT" >&2; exit 1; }
+for t in TestHealth TestTSApi/UserMe TestTSApi/Number; do
+  grep -q -- "--- PASS: ${t} " <<<"$OUT" || { echo "$OUT" >&2; echo "expected ${t} to pass" >&2; exit 1; }
+  echo "    ✓ ${t}"
+done
 
 step "parallel dev instances: the default and instance 1 side by side"
 "$SCRIPT_DIR/instances.sh" "$DIR"

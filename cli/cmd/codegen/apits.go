@@ -8,20 +8,8 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/spf13/cobra"
 	cli "github.com/flocko-motion/schemaf/cli"
 )
-
-func newAPITSCmd(_ *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "apits",
-		Short: "Generate TypeScript API client from openapi.json",
-		Long:  `Runs npx swagger-typescript-api generate on openapi.json to produce frontend/src/api/generated/api.gen.ts.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAPITS()
-		},
-	}
-}
 
 func runAPITS() error {
 	if _, err := os.Stat("gen/openapi.json"); os.IsNotExist(err) {

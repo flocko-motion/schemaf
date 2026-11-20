@@ -3,13 +3,13 @@
 
 package constants
 
-// projectName is set by the generated constants.gen.go init() function.
+// projectName is set by the generated go/app/constants.gen.go init() function.
 var projectName string
 
 // port is the base port from schemaf.toml. Default 8000.
 var port = 8000
 
-// SetProjectName is called from the generated constants.gen.go to register
+// SetProjectName is called from the generated go/app/constants.gen.go to register
 // the project name at init time.
 func SetProjectName(name string) {
 	projectName = name
@@ -24,10 +24,10 @@ func ProjectName() string {
 }
 
 // IsProjectNameSet reports whether a project name has been registered (either
-// compiled in via constants.gen.go, or loaded from schemaf.toml at runtime).
+// compiled in via go/app/constants.gen.go, or loaded from schemaf.toml at runtime).
 func IsProjectNameSet() bool { return projectName != "" }
 
-// SetPort is called from the generated constants.gen.go to register
+// SetPort is called from the generated go/app/constants.gen.go to register
 // the base port at init time.
 func SetPort(p int) {
 	port = p

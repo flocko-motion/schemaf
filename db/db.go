@@ -44,6 +44,17 @@ func Init(dsn string) error {
 	return nil
 }
 
+// Close closes the connection pool and forgets it and the DSN, so DB() is
+// nil again. The server calls it when it stops.
+func Close() error {
+	c := conn
+	conn, dsnValue = nil, ""
+	if c == nil {
+		return nil
+	}
+	return c.Close()
+}
+
 // DB returns the raw *sql.DB singleton. If the connection hasn't been
 // opened yet but a DSN was registered via SetDSN, it connects lazily
 // (without running migrations).

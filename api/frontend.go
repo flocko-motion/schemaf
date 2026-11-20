@@ -23,10 +23,10 @@ func SetFrontend(fsys fs.FS) {
 }
 
 // frontendHandler returns the appropriate handler for non-API requests:
-//   - Dev: reverse proxy to the frontend dev server
-//   - Prod: serve embedded static files with SPA fallback
-func frontendHandler() http.Handler {
-	if DevMode() {
+//   - proxy (development mode): reverse proxy to the frontend dev server
+//   - otherwise: serve embedded static files with SPA fallback
+func frontendHandler(proxy bool) http.Handler {
+	if proxy {
 		return devProxy()
 	}
 	return prodFileServer()

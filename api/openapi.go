@@ -9,7 +9,7 @@ import (
 )
 
 // errNoOpenAPISpec: /openapi.json was requested, but no spec was set.
-var errNoOpenAPISpec = errors.New("no OpenAPI spec registered — wire the generated provider in go/main.go: app.AddApi(api.Provider)")
+var errNoOpenAPISpec = errors.New("no OpenAPI spec registered — wire the generated provider in Wire (go/app/app.go): app.AddApi(api.Provider)")
 
 // OpenAPIHandler serves the OpenAPI spec set by SetOpenAPISpec, byte for
 // byte: gen/openapi.json as codegen wrote it. There is no spec built at

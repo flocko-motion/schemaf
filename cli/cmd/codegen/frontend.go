@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	cli "github.com/flocko-motion/schemaf/cli"
-	"github.com/spf13/cobra"
 )
 
 //go:embed frontend.gen.go.tmpl
@@ -22,41 +21,36 @@ var configGenTS string
 // configGenTSOut is the generated runtime config reader (see EXTEND.md, Runtime config).
 const configGenTSOut = "frontend/src/api/generated/config.gen.ts"
 
-func newFrontendCmd(_ *cli.Context) *cobra.Command {
-	return &cobra.Command{
-		Use:   "frontend",
-		Short: "Generate go/frontend.gen.go and config.gen.ts",
-		Long:  `Generates go/frontend.gen.go with embedded frontend assets for production serving, and frontend/src/api/generated/config.gen.ts (runtime config reader).`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runFrontendGen()
-		},
-	}
-}
-
 func runFrontendGen() error {
 	// Only generate if project has a frontend/ directory.
 	if _, err := os.Stat("frontend"); os.IsNotExist(err) {
 		return nil
 	}
 
-	const outPath = "go/frontend.gen.go"
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", appDir, err)
+	}
+	const outPath = "go/app/frontend.gen.go"
 	if err := renderTemplate(frontendGenTemplate, outPath, nil); err != nil {
 		return fmt.Errorf("generating frontend: %w", err)
 	}
 
-	// Ensure go/frontend_dist/ exists with a .gitkeep so //go:embed resolves.
+	// Ensure go/app/frontend_dist/ exists with a .gitkeep so //go:embed resolves.
 	// This is the one deliberate placeholder file (EXTEND.md › Empty inputs):
 	// every other empty input selects a template variant instead, but this
 	// directory is filled by the frontend build at image build time
 	// (Dockerfile.gen), so a variant chosen now would be wrong for the image.
-	if err := os.MkdirAll("go/frontend_dist", 0755); err != nil {
+	if err := os.MkdirAll("go/app/frontend_dist", 0755); err != nil {
 		return fmt.Errorf("creating frontend_dist: %w", err)
 	}
-	gitkeep := "go/frontend_dist/.gitkeep"
+	gitkeep := "go/app/frontend_dist/.gitkeep"
 	if _, err := os.Stat(gitkeep); os.IsNotExist(err) {
 		if err := os.WriteFile(gitkeep, nil, 0644); err != nil {
 			return fmt.Errorf("creating .gitkeep: %w", err)
 		}
+	}
+	if err := removeLegacyAppFiles(); err != nil {
+		return err
 	}
 
 	cli.Success("Generated %s", outPath)

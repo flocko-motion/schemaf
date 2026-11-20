@@ -68,6 +68,8 @@ Never invent other names or bases; deviate only if the maintainer says so.
 ```
 api/             - API registry + OpenAPI generation
 schemaf/         - App lifecycle (schemaf.New, app.Run)
+schemaftest/     - Test harness: start the app in-process on its own database (schemaftest.Start)
+internal/        - Framework-only hooks between packages; apps can't import them (e.g. internal/isolation: schemaftest's isolated server start)
 cli/             - CLI framework (subcommands, config/state)
 compose/         - Compose dependency resolver (x-schemaf metadata)
 db/              - Database helpers + migrations
@@ -88,6 +90,9 @@ These are framework-wide conventions. Do not deviate.
 - `db/queries/` → sqlc input
 - `db/migrations.gen.go` → generated `db.Provider`
 - `db/db.gen.go`, `db/models.gen.go`, `db/<file>.sql.gen.go` → generated sqlc query code (removed and regenerated on every codegen)
+- `main.go` → `schemaf.New` → `app.Wire` → `Run`, nothing else
+- `app/app.go` → `func Wire(app *schemaf.App)`: every `Add*`/`On*`/`Set*` call, shared by `main.go` and the tests
+- `app/constants.gen.go`, `app/frontend.gen.go` → generated project constants and `FrontendFS()` (package `app`)
 - `api/*.go` → endpoint struct implementations
 - `api/endpoints.gen.go` → generated `api.Provider`
 - `frontend/src/api/generated/api.gen.ts` → generated TypeScript client
@@ -95,6 +100,9 @@ These are framework-wide conventions. Do not deviate.
 - `compose.gen.yml` → generated base compose (postgres + backend)
 - `compose.dev.gen.yml` → generated dev overlay (exposed ports)
 - `compose/*.yml` → project-specific compose extensions
+- `compose.test.gen.yml` → generated test stack: project services only, no Postgres
+- `api/*_test.go` → unit tests next to the file they test
+- `tests/*_test.go` → integration tests that boot the app (`schemaftest.Start(t, app.Wire)`), package `tests`; `tests/*.test.ts` → TypeScript tests
 
 **Port allocation** (base port configurable via `port` in schemaf.toml, default 8000):
 - port — application server
@@ -125,7 +133,7 @@ When in doubt about whether something belongs in the framework or the applicatio
 There is **no committed example project**. Tests come in three layers:
 
 - **Unit tests** — `go test ./...`. Real-Postgres tests auto-skip when `DATABASE_URL` is unset.
-- **DB integration tests** — `e2e/db-test.sh`. Spins an ephemeral Postgres, exports `DATABASE_URL`, and runs the gated tests in `db/` (migration runner, `RunSet`, reset helper). Tears down automatically.
+- **DB integration tests** — `e2e/db-test.sh`. Spins an ephemeral Postgres, exports `DATABASE_URL`, and runs the gated tests in `db/` (migration runner, `RunSet`, reset helper). Tears down automatically. Then runs `schemaftest/`'s own tests with `SCHEMAF_CONTAINER_TESTS=1` (they start their own Postgres container and skip without it).
 - **From-scratch onboarding e2e** — `e2e/build-example.sh [<ref>]`. Builds a complete project in `/tmp` from a single `go run …/cmd/schemaf@<ref> init` call against an online ref, then compiles and tests it. This is the real onboarding lifecycle and replaces the old in-repo example. It needs a pushed commit, so it is **the release gate** (see below), not part of an agent's verification: before hand-off, run the unit and DB layers. The dev loop `e2e/tag-and-test.sh` (tags HEAD as the non-semver `e2e` tag, pushes it, runs the e2e) pushes too: only on the maintainer's order.
   - `<ref>` is a release tag (`vX.Y.Z`; the default is the latest one), a full 40-character commit hash, or a moving ref (a branch, the `e2e` tag). Release tags and commit hashes are immutable, so everything comes through the Go module proxy, with no override. A moving ref could be served stale by the proxy, so for it the script sets `GOPRIVATE=github.com/flocko-motion/schemaf`: only schemaf bypasses the proxy and sumdb, all other dependencies still come through the proxy. An abbreviated hash, or a name that is neither a release tag, a full hash nor a branch or tag on the remote, is refused. The script prints which mode it uses (`ref '<ref>' is …`).
 
