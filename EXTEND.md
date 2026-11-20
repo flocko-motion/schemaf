@@ -1490,6 +1490,20 @@ For work on schemaf itself (`make test <unit|db|e2e|all>`): `e2e/db-test.sh` and
 SCHEMAF_RUNTIME=docker make test e2e
 ```
 
+### The release gate and e2e refs
+
+For work on schemaf itself: `make release` gates every release with the from-scratch onboarding e2e (`e2e/build-example.sh <ref>`), which creates a project with a single `go run github.com/flocko-motion/schemaf/cmd/schemaf@<ref> init <name>` and builds, tests and deploys it. The gate runs it against the commit it is about to release, by its full hash (`"$(git rev-parse HEAD)"`), after pushing that commit. It creates no prerelease tags, so a failed gate leaves nothing behind; the only tag a release creates is `vX.Y.Z`.
+
+Which refs `build-example.sh` accepts, and how Go fetches them:
+
+| `<ref>` | Example | Go module proxy |
+|---|---|---|
+| release tag (default: the latest) | `v1.16.0` | used for everything, no override |
+| full 40-character commit hash | `e74a68e984ad6e9f58efe3340aec25f1a7ddb5a0` | used for everything, no override: Go resolves the hash to a pseudo-version, and a commit is immutable, so the proxy can't serve a stale one |
+| moving ref: a branch, the `e2e` tag | `main`, `e2e` | `GOPRIVATE=github.com/flocko-motion/schemaf`: only schemaf bypasses the proxy and sumdb; all other dependencies still come through the proxy |
+
+Anything else (an abbreviated hash, a name that is no branch or tag on the remote, a name that is both) is refused. The script prints the mode it uses (`ref '<ref>' is …`).
+
 ### Test output
 
 Test output is formatted by [gotestsum](https://github.com/gotestyourself/gotestsum) when installed (recommended):
