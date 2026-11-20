@@ -1793,7 +1793,7 @@ Then nothing — not `gh pr merge` from a script, not a click in the web UI — 
 
 ### Merging and releasing the framework
 
-Not every merge is a release: a PR another branch needs can be merged without releasing. So there are two commands.
+Not every merge is a release: a PR another branch needs can be merged without releasing. So there are two commands: `make merge` merges only, `make release` releases `main`, and merges the current branch first when run on one.
 
 **`make merge`** — per PR, from the feature branch:
 
@@ -1805,14 +1805,15 @@ Not every merge is a release: a PR another branch needs can be merged without re
 
 No local onboarding e2e, no tag. Issues named in `Closes #<n>` trailers go into the PR body and are checked to be closed after the merge.
 
-**`make release <major|minor|patch>`** — per batch, releases what is on `main`:
+**`make release <major|minor|patch>`** — releases what is on `main`. Run it on `main`, or on a feature branch to merge it and release in one go:
 
-1. Refuses unless HEAD equals `origin/main` (after a fetch), and when nothing landed since the last release tag.
-2. Fast local checks (as above).
-3. **On macOS**, the full local gate against that commit, by its full hash: `make test all` under podman (unit, `e2e/db-test.sh`, the onboarding e2e). It's the layer CI doesn't give: CI doesn't cover macOS. On Linux, step 2 is enough locally: the commit already passed CI as part of its up-to-date PR.
-4. Green → tags `vX.Y.Z`, pushes the tag, creates the GitHub release, and closes the issues of the released range that are still open (`Released in vX.Y.Z.`). Red → tags nothing; a macOS-only break is fixed by a PR (`make merge`), then `make release` again.
+1. Refuses an unknown bump and a dirty working tree, before anything is pushed.
+2. **On a feature branch:** everything `make merge` does (its refusals, the fast local checks, push, PR, waiting for the CI gate, merge). Red, timeout or any other refusal → stops with nothing merged and nothing tagged, like `make merge`. After the merge it releases the new `origin/main`, the merge commit, without switching branches (so it works in a worktree, where `main` is checked out elsewhere). It first checks that the merge commit's tree is the branch's tree, so the local checks tested exactly what gets tagged; if `main` moved in between, it stops with the PR merged and nothing tagged: run `make release` again on `main`.
+3. **On `main`:** refuses unless HEAD equals `origin/main` (after a fetch), and when nothing landed since the last release tag. Then the fast local checks (as above).
+4. **On macOS**, the full local gate against the commit to release, by its full hash: `make test all` under podman (unit, `e2e/db-test.sh`, the onboarding e2e). It's the layer CI doesn't give: CI doesn't cover macOS. On Linux, the fast checks are enough locally: the commit already passed CI as part of its up-to-date PR.
+5. Green → tags `vX.Y.Z`, pushes the tag, creates the GitHub release, and closes the issues of the released range that are still open (`Released in vX.Y.Z.`). Red → tags nothing; a macOS-only break is fixed by a PR (`make merge`), then `make release` again.
 
-No PR and no merge in `make release`, and no prerelease tags: the only tag a release creates is `vX.Y.Z`.
+No prerelease tags: the only tag a release creates is `vX.Y.Z`. To merge without releasing, use `make merge`.
 
 ### e2e refs
 
