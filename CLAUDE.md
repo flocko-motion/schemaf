@@ -34,7 +34,13 @@ When you identify a need for an architectural change: surface it, propose it, an
 
 Several agents work on this repository at the same time. The main checkout belongs to the maintainer and the planner (reviews, commits, releases). **Never implement an issue in the main checkout.** Each issue gets its own git worktree, so changes from different issues never mix in one working tree.
 
-**Naming scheme.** Before creating a worktree, **propose exactly this name, branch and base to the maintainer and wait for confirmation** — e.g. "I'll create `.worktrees/53-error-responses/` on branch `feat/53-error-responses` from `origin/main` — OK?". Don't invent other names or bases; deviate only if the maintainer says so.
+**When to ask:**
+- **Explicitly asked to implement a specific GitHub issue** (e.g. "implement #53"): that order includes creating the issue's worktree and branch. Create them per the scheme below **without asking**, and say which ones you created.
+- **Anything else** (no issue number, unclear which issue, work across several issues, or you think the scheme doesn't fit): **propose exactly this name, branch and base and wait for confirmation** — e.g. "I'll create `.worktrees/53-error-responses/` on branch `feat/53-error-responses` from `origin/main` — OK?".
+
+Never invent other names or bases; deviate only if the maintainer says so.
+
+**Naming scheme:**
 
 | What | Pattern | Example |
 |---|---|---|
@@ -44,13 +50,13 @@ Several agents work on this repository at the same time. The main checkout belon
 
 - `<issue>` is the GitHub issue number. `<slug>` is 2–4 lowercase words from the issue title, joined with `-`.
 - `<type>` is `feat`, `fix`, `docs` or `chore`, matching the commit type the change will get.
-- After confirmation, create it from the repo root:
+- Create it from the repo root:
   ```bash
   git fetch origin
   git worktree add -b feat/53-error-responses .worktrees/53-error-responses origin/main
   cd .worktrees/53-error-responses
   ```
-- If the worktree or branch already exists (an earlier session on the same issue), say so and propose continuing in it — don't create a second one.
+- If the worktree or branch already exists (an earlier session on the same issue), continue in it and say so — don't create a second one.
 - Do all work for the issue inside its worktree: edits, tests, docs. `.worktrees/` is gitignored.
 - Work that isn't tied to an issue still gets a worktree (proposed the same way); use a descriptive slug without a number (e.g. `.worktrees/release-gate-docs/`, branch `docs/release-gate-docs`).
 - The usual git rules still apply inside the worktree: don't stage, don't commit, don't push unless the maintainer asks. Tell the maintainer the worktree path when the work is ready for review.

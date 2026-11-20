@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -211,23 +212,45 @@ func checkVolume(rt Runtime, project string) error {
 	if !other.hasVolume(vol) {
 		return nil
 	}
-	return volumeConflictError(rt, other, project, rt.hasVolume(vol))
+	return errors.New(VolumeConflictMessage(rt, project, rt.hasVolume(vol)))
 }
 
-func volumeConflictError(rt, other Runtime, project string, selectedHasIt bool) error {
-	vol := PostgresVolume(project)
+// VolumeConflictMessage is the refusal printed when the runtime that is not
+// selected (rt.Other()) holds the project's Postgres volume; selectedHasIt
+// says whether rt has one too. schemaf.sh prints the same text: codegen
+// renders VolumeConflictText, VolumeConflictBoth and VolumeConflictSwitchHint
+// into it with shell variables in place of the runtimes.
+func VolumeConflictMessage(rt Runtime, project string, selectedHasIt bool) string {
+	other := rt.Other()
 	both := ""
 	if selectedHasIt {
-		both = fmt.Sprintf("\n%s has its own %s as well, so it is unclear which holds the real data.", rt, vol)
+		both = VolumeConflictBoth(string(rt), project)
 	}
-	switchHint := fmt.Sprintf("set %s=%s", RuntimeEnv, other)
+	return VolumeConflictText(string(rt), string(other), project, both, VolumeConflictSwitchHint(other))
+}
+
+// VolumeConflictBoth is the extra sentence of VolumeConflictMessage when the
+// selected runtime rt has the volume as well. It starts with a newline.
+func VolumeConflictBoth(rt, project string) string {
+	return fmt.Sprintf("\n%s has its own %s as well, so it is unclear which holds the real data.", rt, PostgresVolume(project))
+}
+
+// VolumeConflictSwitchHint says how to select other, the runtime that holds the data.
+func VolumeConflictSwitchHint(other Runtime) string {
 	if other == Podman {
-		switchHint = fmt.Sprintf("unset %s (podman is the default)", RuntimeEnv)
+		return fmt.Sprintf("unset %s (podman is the default)", RuntimeEnv)
 	}
-	return fmt.Errorf(`refusing to start: the Postgres volume %[3]s exists in %[2]s, but the selected container runtime is %[1]s.%[5]s
+	return fmt.Sprintf("set %s=%s", RuntimeEnv, other)
+}
+
+// VolumeConflictText is VolumeConflictMessage with every runtime-dependent
+// part passed in as a string: the selected runtime rt, the other runtime, the
+// VolumeConflictBoth sentence (or "") and the VolumeConflictSwitchHint.
+func VolumeConflictText(rt, other, project, both, switchHint string) string {
+	return fmt.Sprintf(`refusing to start: the Postgres volume %[3]s exists in %[2]s, but the selected container runtime is %[1]s.%[5]s
 The project's data volume may exist only in the selected runtime. Choose one:
 
-  1. Migrate the data to %[1]s (a move, not a copy). From the project root:
+  1. Migrate the data to %[1]s (a move, not a copy). From the project root (on a run host: ~/.%[4]s/deploy/<running tag>/):
        set -a; . ~/.%[4]s/etc/env; set +a          # dev: ~/.%[4]s/dev/etc/env
        export SCHEMAF_IMAGE=%[4]s:unused             # required by compose.gen.yml; only postgres starts
        %[2]s compose -f compose.gen.yml down
@@ -245,7 +268,7 @@ The project's data volume may exist only in the selected runtime. Choose one:
      (in your shell profile, or in ~/.%[4]s/etc/env and ~/.%[4]s/dev/etc/env).
 
   3. Or, if the data is throwaway, delete it:
-       %[2]s volume rm %[3]s`, rt, other, vol, project, both, switchHint)
+       %[2]s volume rm %[3]s`, rt, other, PostgresVolume(project), project, both, switchHint)
 }
 
 func indent(s string) string {

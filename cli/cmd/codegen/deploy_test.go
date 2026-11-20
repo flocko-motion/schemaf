@@ -68,7 +68,7 @@ case "${1:-}" in
     done
     d="$S/images/$(key "$img")"; mkdir -p "$d"
     printf '%s' "$labels" > "$d/labels"; echo "$FAKE_PLATFORM" > "$d/platform"; echo "$img" > "$d/name"
-    echo "$1" > "$S/last_ctx"; exit 0 ;;
+    echo "$1" > "$S/last_ctx"; env > "$S/build_env"; exit 0 ;;
   image)
     sub="$2"; shift 2
     case "$sub" in
@@ -95,7 +95,10 @@ case "${1:-}" in
     [ -f "$S/container" ] || { echo "Error: no such container" >&2; exit 1; }
     cat "$S/container"; exit 0 ;;
   volume) exit 1 ;;
-  exec) exit 0 ;;
+  exec)
+    # $S/exec_fail holds "<exit code> <message>": the app binary fails with it.
+    if [ -f "$S/exec_fail" ]; then read -r rc msg < "$S/exec_fail"; echo "$msg" >&2; exit "$rc"; fi
+    exit 0 ;;
 esac
 echo "fake runtime: unhandled call: $*" >&2
 exit 1
@@ -309,6 +312,52 @@ func TestInputsHashShellAgreesWithGo(t *testing.T) {
 	}
 }
 
+// TestInputsHashShasumFallback hides sha256sum, so the shell hash takes the
+// shasum -a 256 path (macOS), and checks it still equals Go's.
+func TestInputsHashShasumFallback(t *testing.T) {
+	root := newDeployProject(t)
+	shasum, err := exec.LookPath("shasum")
+	if err != nil {
+		t.Skip("shasum not installed")
+	}
+	bash, _ := exec.LookPath("bash")
+	// PATH holds exactly the tools the inputs hash needs, without sha256sum.
+	bin := t.TempDir()
+	for _, tool := range []string{"awk", "sort", "cut", "perl"} {
+		p, err := exec.LookPath(tool)
+		if err != nil {
+			if tool == "perl" {
+				continue // shasum may not need perl on PATH (#!/usr/bin/perl)
+			}
+			t.Skipf("%s not installed", tool)
+		}
+		if err := os.Symlink(p, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(shasum, filepath.Join(bin, "shasum")); err != nil {
+		t.Fatal(err)
+	}
+
+	funcs := extractInputsHash(t, readFile(t, "schemaf.sh"))
+	cmd := exec.Command(bash, "-c", "set -euo pipefail\n"+
+		"! command -v sha256sum >/dev/null || { echo 'sha256sum still on PATH' >&2; exit 9; }\n"+
+		funcs+"\n_schemaf_inputs_hash")
+	cmd.Dir = root
+	cmd.Env = []string{"PATH=" + bin}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("shell inputs hash via shasum: %v\n%s", err, out)
+	}
+	want, err := inputsHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != want {
+		t.Fatalf("shasum path: shell %s, go %s", got, want)
+	}
+}
+
 func TestReadSchemafVersion(t *testing.T) {
 	t.Chdir(t.TempDir())
 	_ = os.Mkdir("go", 0755)
@@ -366,20 +415,16 @@ func TestBuild(t *testing.T) {
 		mustContain(t, "calls", u.calls(), "podman build")
 	})
 
-	t.Run("build never reads the env file, only SCHEMAF_RUNTIME", func(t *testing.T) {
-		envDir := filepath.Join(u.home, ".myapp", "dev", "etc")
-		_ = os.MkdirAll(envDir, 0755)
-		if err := os.WriteFile(filepath.Join(envDir, "env"), []byte("SCHEMAF_RUNTIME=docker\nDB_PASS=secret\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		defer os.RemoveAll(filepath.Join(u.home, ".myapp"))
+	t.Run("build reads only SCHEMAF_RUNTIME from the env file", func(t *testing.T) {
+		withEnvFile(t, u, "dev/etc/env", "SCHEMAF_RUNTIME=docker\nDB_PASS=x\nPUBLIC_FOO=y\n")
 		_, stderr, code := u.run(root, "schemaf.sh", "build", "--force")
-		// docker is "not usable" in the fake, so selecting it fails the engine check.
-		if code == 0 {
-			t.Fatal("build ignored SCHEMAF_RUNTIME from dev/etc/env")
+		if code != 0 {
+			t.Fatalf("build failed:\n%s", stderr)
 		}
-		mustContain(t, "stderr", stderr, "docker is installed, but not usable")
-		mustNotContain(t, "calls", u.calls(), "secret")
+		calls := u.calls()
+		mustContain(t, "calls", calls, "docker build")
+		mustNotContain(t, "calls", calls, "podman build", "DB_PASS", "PUBLIC_FOO")
+		mustNotContain(t, "build environment", readFile(t, filepath.Join(u.state, "build_env")), "DB_PASS", "PUBLIC_FOO")
 	})
 
 	t.Run("uncommitted changes: plain build always rebuilds, tagged -dirty", func(t *testing.T) {
@@ -625,11 +670,14 @@ func TestArtifactLoadAndRunSide(t *testing.T) {
 
 	t.Run("app subcommand needs a running backend", func(t *testing.T) {
 		runner.setContainer("")
-		_, stderr, code := runner.run(runner.home, runSide, "db", "backup")
-		if code == 0 {
-			t.Fatal("app subcommand ran without a backend")
+		for _, args := range [][]string{{"db", "backup"}, {"frobnicate"}} {
+			_, stderr, code := runner.run(runner.home, runSide, args...)
+			if code == 0 {
+				t.Fatalf("%v ran without a backend", args)
+			}
+			mustContain(t, "stderr", stderr, "start it first: schemaf.sh run --image <tag>")
+			mustNotContain(t, "calls", runner.calls(), " exec ")
 		}
-		mustContain(t, "stderr", stderr, "start it first: schemaf.sh run --image <tag>")
 	})
 
 	runner.setContainer("true localhost/myapp:v2")
@@ -641,6 +689,21 @@ func TestArtifactLoadAndRunSide(t *testing.T) {
 			t.Fatalf("app subcommand failed:\n%s", stderr)
 		}
 		mustContain(t, "calls", runner.calls(), "podman exec -i myapp-backend /app db backup --local /tmp/x.sql.gz")
+	})
+
+	t.Run("unknown command goes to the app binary, its error and exit code come back", func(t *testing.T) {
+		runner.calls()
+		failFile := filepath.Join(runner.state, "exec_fail")
+		if err := os.WriteFile(failFile, []byte("7 Error: unknown command \"frobnicate\" for \"myapp\"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(failFile)
+		_, stderr, code := runner.run(runner.home, runSide, "frobnicate", "--x")
+		if code != 7 {
+			t.Errorf("exit code %d, want the app's 7", code)
+		}
+		mustContain(t, "stderr", stderr, `Error: unknown command "frobnicate" for "myapp"`)
+		mustContain(t, "calls", runner.calls(), "podman exec -i myapp-backend /app frobnicate --x")
 	})
 
 	t.Run("image ls marks the running tag", func(t *testing.T) {
@@ -711,6 +774,194 @@ func TestArtifactLoadAndRunSide(t *testing.T) {
 	})
 }
 
+// TestArtifactComposeFromCommit: the artifact's compose files come from the
+// commit, so a gitignored compose file (which doesn't make the tree dirty)
+// never ships, even when codegen ran with it present.
+func TestArtifactComposeFromCommit(t *testing.T) {
+	root := newDeployProject(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("compose/extra.yml\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "compose/extra.yml"), []byte("services:\n  extra:\n    image: busybox\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runComposeGen(); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInputsHashGen(); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "ignore extra")
+	if out := git(t, root, "status", "--porcelain"); out != "" {
+		t.Fatalf("tree should be clean, git status says:\n%s", out)
+	}
+	builder, runner := newShUser(t), newShUser(t)
+	art := buildArtifact(t, builder, root, "v1")
+	if _, stderr, code := runner.run(runner.home, art, "load"); code != 0 {
+		t.Fatalf("load failed:\n%s", stderr)
+	}
+	deploy := filepath.Join(runner.home, ".myapp", "deploy", "v1")
+	if _, err := os.Stat(filepath.Join(deploy, "compose/extra.yml")); err == nil {
+		t.Error("a gitignored compose file shipped in the artifact")
+	}
+	if _, err := os.Stat(filepath.Join(deploy, "compose/redis.yml")); err != nil {
+		t.Error("a committed compose file is missing from the artifact")
+	}
+}
+
+// setSchemafVersion makes the project require schemaf version v, regenerates
+// (schemaf.sh carries the version) and commits. The working directory must be root.
+func setSchemafVersion(t *testing.T, root, v string) {
+	t.Helper()
+	gomod := "module myapp\n\ngo 1.24\n\nrequire github.com/flocko-motion/schemaf " + v + "\n"
+	if err := os.WriteFile(filepath.Join(root, "go/go.mod"), []byte(gomod), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runComposeGen(); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInputsHashGen(); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "schemaf "+v)
+}
+
+// TestLoadNeverDowngradesRunSideScript: load replaces ~/.<name>/bin/schemaf.sh
+// only with an equal or newer schemaf version; the newer script runs the
+// deploy dirs of older artifacts.
+func TestLoadNeverDowngradesRunSideScript(t *testing.T) {
+	root := newDeployProject(t)
+	builder, runner := newShUser(t), newShUser(t)
+	runSide := filepath.Join(runner.home, ".myapp", "bin", "schemaf.sh")
+	load := func(t *testing.T, art string) string {
+		t.Helper()
+		_, stderr, code := runner.run(runner.home, art, "load")
+		if code != 0 {
+			t.Fatalf("load %s failed:\n%s", filepath.Base(art), stderr)
+		}
+		return stderr
+	}
+	installed := func(t *testing.T) string {
+		t.Helper()
+		return readFile(t, runSide)
+	}
+
+	setSchemafVersion(t, root, "v1.9.0")
+	oldArt := buildArtifact(t, builder, root, "old")
+	setSchemafVersion(t, root, "v1.12.0")
+	newArt := buildArtifact(t, builder, root, "new")
+	if err := os.WriteFile(filepath.Join(root, "frontend.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "same version, other commit")
+	sameArt := buildArtifact(t, builder, root, "same")
+	setSchemafVersion(t, root, "v1.9.0")
+	old2Art := buildArtifact(t, builder, root, "old2")
+
+	t.Run("first load installs the script", func(t *testing.T) {
+		load(t, oldArt)
+		mustContain(t, "installed script", installed(t), `SCHEMAF_VER="v1.9.0"`)
+	})
+
+	t.Run("newer artifact replaces it", func(t *testing.T) {
+		stderr := load(t, newArt)
+		mustContain(t, "installed script", installed(t), `SCHEMAF_VER="v1.12.0"`)
+		mustNotContain(t, "stderr", stderr, "keeping run-side schemaf.sh")
+	})
+
+	t.Run("equal version replaces it", func(t *testing.T) {
+		if err := os.WriteFile(runSide, []byte(installed(t)+"# test-marker-49\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		load(t, sameArt)
+		mustNotContain(t, "installed script", installed(t), "# test-marker-49")
+		mustContain(t, "installed script", installed(t), `SCHEMAF_VER="v1.12.0"`)
+	})
+
+	t.Run("older artifact keeps it, with one line saying so", func(t *testing.T) {
+		before := installed(t)
+		stderr := load(t, old2Art)
+		mustContain(t, "stderr", stderr, "keeping run-side schemaf.sh v1.12.0 (artifact has v1.9.0)\n")
+		if installed(t) != before {
+			t.Error("an older artifact replaced the run-side script")
+		}
+		if _, err := os.Stat(filepath.Join(runner.home, ".myapp", "deploy", "old2", "compose.gen.yml")); err != nil {
+			t.Error("the older artifact's deploy dir was not installed")
+		}
+	})
+
+	t.Run("newer script runs an older artifact's deploy dir", func(t *testing.T) {
+		runner.calls()
+		_, stderr, code := runner.run(runner.home, runSide, "run", "--image", "old2", "-d")
+		if code != 0 {
+			t.Fatalf("run --image old2 failed:\n%s", stderr)
+		}
+		mustContain(t, "stderr", stderr, "schemaf v1.12.0")
+		deploy := filepath.Join(runner.home, ".myapp", "deploy", "old2", "compose.gen.yml")
+		mustContain(t, "calls", runner.calls(), "podman compose -f "+deploy+" up -d | SCHEMAF_IMAGE=myapp:old2")
+	})
+
+	t.Run("installed script without a readable version: refused", func(t *testing.T) {
+		if _, stderr, code := runner.run(runner.home, runSide, "image", "rm", "new"); code != 0 {
+			t.Fatalf("image rm new failed:\n%s", stderr)
+		}
+		if err := os.WriteFile(runSide, []byte("#!/bin/bash\necho hi\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		runner.calls()
+		_, stderr, code := runner.run(runner.home, newArt, "load")
+		if code == 0 {
+			t.Fatal("load replaced a script whose version it can't read")
+		}
+		mustContain(t, "stderr", stderr, "names no schemaf version")
+		mustNotContain(t, "calls", runner.calls(), "podman load")
+		if readFile(t, runSide) != "#!/bin/bash\necho hi\n" {
+			t.Error("the unreadable script was changed")
+		}
+	})
+}
+
+// TestShellVersionCmp checks _schemaf_version_cmp, which load uses to decide
+// whether to replace the run-side script.
+func TestShellVersionCmp(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not installed")
+	}
+	script := renderSchemafSh(t, t.TempDir())
+	fn := shellFunc(t, script, "_schemaf_version_cmp") + shellFunc(t, script, "_schemaf_prerelease_cmp")
+	for _, tc := range []struct{ a, b, want string }{
+		{"v1.2.3", "v1.2.3", "0"},
+		{"v1.12.0", "v1.9.0", "1"},
+		{"v1.9.0", "v1.12.0", "-1"},
+		{"v2.0.0", "v1.99.99", "1"},
+		{"v1.2.10", "v1.2.9", "1"},
+		{"v1.2.3", "v1.2.3-rc.1", "1"},
+		{"v1.2.3-rc.1", "v1.2.3", "-1"},
+		{"v1.2.4-0.20261120101010-abcdef123456", "v1.2.3", "1"},
+		{"v1.2.4-0.20261120101010-abcdef123456", "v1.2.4-0.20261119101010-abcdef123456", "1"},
+		{"v1.2.3-rc.10", "v1.2.3-rc.9", "1"},
+		{"v1.2.3-rc.9", "v1.2.3-rc.10", "-1"},
+		{"v1.2.3-rc", "v1.2.3-rc.1", "-1"},
+		{"v1.2.3-rc.1", "v1.2.3-1", "1"},
+		{"v1.2.3-beta", "v1.2.3-alpha", "1"},
+		{"v1.2.3+meta", "v1.2.3", "0"},
+		{"v1.2.3", "1.2.3", "error"},
+		{"(devel)", "v1.2.3", "error"},
+		{"", "v1.2.3", "error"},
+	} {
+		cmd := exec.Command(bash, "-c", "set -euo pipefail\n"+fn+"_schemaf_version_cmp \"$1\" \"$2\"", "x", tc.a, tc.b)
+		out, err := cmd.Output()
+		got := strings.TrimSpace(string(out))
+		if err != nil {
+			got = "error"
+		}
+		if got != tc.want {
+			t.Errorf("cmp(%q, %q) = %s, want %s", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 func TestCheckoutRunBuildsThenStarts(t *testing.T) {
 	root := newDeployProject(t)
 	u := newShUser(t)
@@ -725,6 +976,41 @@ func TestCheckoutRunBuildsThenStarts(t *testing.T) {
 	if build < 0 || up < 0 || build > up {
 		t.Errorf("run must build, then start the built image:\n%s", calls)
 	}
+}
+
+func TestCheckoutRunBuildSeesOnlyRuntime(t *testing.T) {
+	root := newDeployProject(t)
+	u := newShUser(t)
+	withEnvFile(t, u, "etc/env", "SCHEMAF_RUNTIME=docker\nDB_PASS=x\nPUBLIC_FOO=y\n")
+	_, stderr, code := u.run(root, "schemaf.sh", "run", "-d")
+	if code != 0 {
+		t.Fatalf("run failed:\n%s", stderr)
+	}
+	calls := u.calls()
+	mustContain(t, "calls", calls, "docker build", "docker compose -f compose.gen.yml up -d")
+	mustNotContain(t, "calls", calls, "podman build", "DB_PASS", "PUBLIC_FOO")
+	mustNotContain(t, "build environment", readFile(t, filepath.Join(u.state, "build_env")), "DB_PASS", "PUBLIC_FOO")
+}
+
+// withEnvFile writes ~/.myapp/<rel> for user u and makes the fake docker
+// usable, until the test ends.
+func withEnvFile(t *testing.T, u *shUser, rel, content string) {
+	t.Helper()
+	p := filepath.Join(u.home, ".myapp", rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	usable := filepath.Join(u.state, "docker_usable")
+	if err := os.WriteFile(usable, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(filepath.Join(u.home, ".myapp"))
+		_ = os.Remove(usable)
+	})
 }
 
 func TestComposeNeverBuilds(t *testing.T) {

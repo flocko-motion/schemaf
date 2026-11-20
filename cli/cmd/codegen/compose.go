@@ -156,7 +156,36 @@ func schemafShData(base map[string]any) (map[string]any, error) {
 	d["SchemafVersion"] = version
 	d["InputGlobs"] = strings.Join(inputGlobs, " ")
 	d["InputExcludes"] = strings.Join(inputExcludes, "|")
+	name, _ := base["Name"].(string)
+	if name == "" {
+		return nil, fmt.Errorf("schemaf.sh needs the project name — set name in schemaf.toml")
+	}
+	for k, v := range volumeConflictShell(name) {
+		d[k] = v
+	}
 	return d, nil
+}
+
+// volumeConflictShell renders the Go volume-conflict refusal
+// (cli.VolumeConflictMessage) for _schemaf_check_volume, so shell and Go print
+// the same text. The runtime-dependent parts become the shell variables
+// ${rt}, ${other}, ${both} and ${hint}:
+//
+//	VolumeConflict      the message, for an unquoted heredoc
+//	VolumeConflictBoth  the value of both after its leading newline, for double quotes
+//	VolumeHintPodman    the value of hint when the other runtime is podman
+//	VolumeHintDocker    … when it is docker
+func volumeConflictShell(project string) map[string]string {
+	const rt, other, both, hint = "\x00rt\x00", "\x00other\x00", "\x00both\x00", "\x00hint\x00"
+	vars := strings.NewReplacer(rt, "${rt}", other, "${other}", both, "${both}", hint, "${hint}")
+	heredoc := strings.NewReplacer(`\`, `\\`, "$", `\$`, "`", "\\`")
+	dquote := strings.NewReplacer(`\`, `\\`, "$", `\$`, "`", "\\`", `"`, `\"`)
+	return map[string]string{
+		"VolumeConflict":     vars.Replace(heredoc.Replace(cli.VolumeConflictText(rt, other, project, both, hint))),
+		"VolumeConflictBoth": vars.Replace(dquote.Replace(strings.TrimPrefix(cli.VolumeConflictBoth(rt, project), "\n"))),
+		"VolumeHintPodman":   dquote.Replace(cli.VolumeConflictSwitchHint(cli.Podman)),
+		"VolumeHintDocker":   dquote.Replace(cli.VolumeConflictSwitchHint(cli.Docker)),
+	}
 }
 
 func copyMap(m map[string]any) map[string]any {
