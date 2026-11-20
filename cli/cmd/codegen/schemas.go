@@ -47,7 +47,7 @@ func loadSchemas(dir string, endpoints []endpointInfo) (components map[string]an
 		if ep.IsRaw {
 			continue
 		}
-		req, resp, err := handleTypes(pkg.Types, ep.StructName)
+		req, resp, err := handleTypes(pkg.Types, ep.StructName, ep.IsStream)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -169,22 +169,36 @@ func loadAPIPackage(dir string) (*packages.Package, error) {
 }
 
 // handleTypes returns the Req and Resp types of endpoint structName's
-// Handle(ctx, req Req) (Resp, error).
-func handleTypes(pkg *types.Package, structName string) (req, resp types.Type, err error) {
+// Handle(ctx, req Req) (Resp, error), or the Req and Event types of its
+// Stream(ctx, req Req) (<-chan Event, error).
+func handleTypes(pkg *types.Package, structName string, isStream bool) (req, resp types.Type, err error) {
 	obj := pkg.Scope().Lookup(structName)
 	if obj == nil {
 		return nil, nil, fmt.Errorf("endpoint %s: type not found in %s", structName, pkg.Path())
 	}
-	m, _, _ := types.LookupFieldOrMethod(obj.Type(), true, pkg, "Handle")
+	name, shape := "Handle", "`Handle(ctx context.Context, req Req) (Resp, error)`"
+	if isStream {
+		name, shape = "Stream", "`Stream(ctx context.Context, req Req) (<-chan Event, error)`"
+	}
+	m, _, _ := types.LookupFieldOrMethod(obj.Type(), true, pkg, name)
 	fn, ok := m.(*types.Func)
 	if !ok {
-		return nil, nil, fmt.Errorf("endpoint %s: no Handle method", structName)
+		return nil, nil, fmt.Errorf("endpoint %s: no %s method", structName, name)
 	}
 	sig := fn.Type().(*types.Signature)
 	if sig.Params().Len() != 2 || sig.Results().Len() != 2 {
-		return nil, nil, fmt.Errorf("endpoint %s: Handle must have the signature `Handle(ctx context.Context, req Req) (Resp, error)`", structName)
+		return nil, nil, fmt.Errorf("endpoint %s: %s must have the signature %s", structName, name, shape)
 	}
-	return sig.Params().At(1).Type(), sig.Results().At(0).Type(), nil
+	resp = sig.Results().At(0).Type()
+	if isStream {
+		// The schema of a stream is the schema of each event: the channel's element.
+		ch, ok := types.Unalias(resp).Underlying().(*types.Chan)
+		if !ok {
+			return nil, nil, fmt.Errorf("endpoint %s: %s must have the signature %s", structName, name, shape)
+		}
+		resp = ch.Elem()
+	}
+	return sig.Params().At(1).Type(), resp, nil
 }
 
 // schemaBuilder turns Go types into OpenAPI schemas following encoding/json.

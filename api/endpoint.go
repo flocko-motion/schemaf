@@ -4,11 +4,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // AuthLevel declares how an endpoint authenticates its caller.
@@ -56,51 +57,97 @@ type Endpoint[Req, Resp any] interface {
 	Handle(ctx context.Context, req Req) (Resp, error)
 }
 
-// NewRoute creates a Route from a typed Endpoint, wiring up JSON decode/encode
-// and auth declaration. summary and description are extracted from the struct's
-// doc comment by codegen and passed as string literals in the generated Provider().
+// NewRoute creates a Route from a typed Endpoint, wiring up request decoding,
+// response encoding (by Consumes()/Produces(), JSON by default) and auth.
+// summary and description are extracted from the struct's doc comment by
+// codegen and passed as string literals in the generated Provider().
 func NewRoute[Req, Resp any](e Endpoint[Req, Resp], summary, description string) Route {
+	consumes, produces := mediaTypes(e, "Consumes"), mediaTypes(e, "Produces")
 	return Route{
 		Method:      e.Method(),
 		Path:        e.Path(),
 		Auth:        e.Auth(),
 		Summary:     summary,
 		Description: description,
-		Handler:     withAuth(e.Auth(), newTypedHandler(e)),
+		Handler:     withAuth(e.Auth(), newTypedHandler(e, consumes, produces)),
 	}
 }
 
-func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp]) http.Handler {
+// hasBody reports whether schemaf decodes a request body for method.
+func hasBody(method string) bool {
+	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch
+}
+
+// decodeRequest fills req from path params, query params and, for methods
+// that carry one, the body (by Content-Type). It writes the error response
+// and returns false on failure.
+func decodeRequest(w http.ResponseWriter, r *http.Request, req any, consumes []string) bool {
+	if err := decodePathParams(r, req); err != nil {
+		writeError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
+		return false
+	}
+	if err := decodeQueryParams(r, req); err != nil {
+		writeError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
+		return false
+	}
+	if !hasBody(r.Method) {
+		return true
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, r, Error(ErrBadRequest, "bad_request", "reading request body: "+err.Error()))
+		return false
+	}
+	if len(body) == 0 {
+		return true
+	}
+	c, err := requestCodec(r.Header.Get("Content-Type"), consumes)
+	if err != nil {
+		writeStatusError(w, http.StatusUnsupportedMediaType, "unsupported_media_type",
+			fmt.Sprintf("Content-Type %q is not supported; send one of: %s", r.Header.Get("Content-Type"), strings.Join(consumes, ", ")))
+		return false
+	}
+	if err := c.decode(body, req); err != nil {
+		writeError(w, r, Error(ErrBadRequest, "bad_request", "invalid request body: "+err.Error()))
+		return false
+	}
+	return true
+}
+
+func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp], consumes, produces []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Negotiate first: a request nothing can answer must not run Handle.
+		mt, ok := negotiate(r.Header.Get("Accept"), produces)
+		if !ok {
+			writeStatusError(w, http.StatusNotAcceptable, "not_acceptable",
+				fmt.Sprintf("Accept %q matches none of: %s", r.Header.Get("Accept"), strings.Join(produces, ", ")))
+			return
+		}
 		var req Req
-		// Decode path params (fields tagged with `path:"name"`).
-		if err := decodePathParams(r, &req); err != nil {
-			writeError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
+		if !decodeRequest(w, r, &req, consumes) {
 			return
-		}
-		// Decode query params (fields tagged with `query:"name"`).
-		if err := decodeQueryParams(r, &req); err != nil {
-			writeError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
-			return
-		}
-		// Decode body for methods that carry one.
-		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-				writeError(w, r, Error(ErrBadRequest, "bad_request", "invalid request body: "+err.Error()))
-				return
-			}
 		}
 
-		resp, err := e.Handle(r.Context(), req)
+		ctx, er := withEndpointRequest(w, r)
+		resp, err := e.Handle(ctx, req)
 		if err != nil {
-			writeError(w, r, err)
+			er.commit(func() { writeError(w, r, err) })
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			writeError(w, r, fmt.Errorf("encoding response: %w", err))
+		// Encode into a buffer, so an encoding error can still answer 500.
+		var buf bytes.Buffer
+		if err := codecs[mt].encode(&buf, resp); err != nil {
+			er.commit(func() { writeError(w, r, fmt.Errorf("encoding response as %s: %w", mt, err)) })
+			return
 		}
+		er.commit(func() {
+			if len(produces) > 1 {
+				w.Header().Set("Vary", "Accept")
+			}
+			w.Header().Set("Content-Type", mt)
+			w.Write(buf.Bytes())
+		})
 	})
 }
 

@@ -53,6 +53,24 @@ func StartSession(ctx context.Context, w http.ResponseWriter, subject string) (s
 	return startSession(ctx, w, subject, "")
 }
 
+// StartSessionCtx starts a session for subject from a typed endpoint (in
+// Handle, or in Stream before it returns): schemaf sets the session cookie on
+// the response the endpoint writes, including an error response. It returns
+// the token for Bearer clients. On a context that doesn't come from a typed
+// endpoint it starts no session and returns an error.
+func StartSessionCtx(ctx context.Context, subject string) (string, error) {
+	er := endpointRequestFrom(ctx)
+	if er == nil {
+		return "", errors.New("auth: StartSessionCtx needs the ctx of a typed endpoint's Handle or Stream; in a raw endpoint use StartSession(ctx, w, subject)")
+	}
+	var token string
+	err := er.setCookieHeader(func(w http.ResponseWriter) (err error) {
+		token, err = startSession(ctx, w, subject, "")
+		return err
+	})
+	return token, err
+}
+
 func startSession(ctx context.Context, w http.ResponseWriter, subject, provider string) (string, error) {
 	if sessionStore == nil {
 		return "", errNoSessions
