@@ -36,7 +36,7 @@ func TestConfigEndpoint(t *testing.T) {
 	t.Setenv("PUBLIC_TEST_EMPTY", "")
 	t.Setenv("TEST_PRIVATE_SECRET", "secret")
 
-	srv := httptest.NewServer(NewMux())
+	srv := httptest.NewServer(testMux(t))
 	defer srv.Close()
 
 	// Changes after server start are not picked up: values are read once.
@@ -76,11 +76,27 @@ func TestConfigEndpoint(t *testing.T) {
 	}
 }
 
-// TestConfigNotInOpenAPI: /api/config is a framework route outside the spec.
-func TestConfigNotInOpenAPI(t *testing.T) {
-	rec := httptest.NewRecorder()
-	OpenAPIHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/openapi.json", nil))
-	if strings.Contains(rec.Body.String(), "/api/config") {
-		t.Error("openapi.json contains /api/config")
+// TestFrameworkRoutesInSpec: /api/health, /api/status, /api/config and
+// /api/user/me are in the framework's part of the spec, so the gate lets them
+// through and the generated clients have them.
+func TestFrameworkRoutesInSpec(t *testing.T) {
+	paths, _ := FrameworkOpenAPI()
+	for _, p := range []string{"/api/health", "/api/status", "/api/config", "/api/user/me"} {
+		item, _ := paths[p].(map[string]any)
+		if _, ok := item["get"]; !ok {
+			t.Errorf("FrameworkOpenAPI has no GET %s", p)
+		}
+	}
+}
+
+// TestErrorSchemaListsFrameworkCodes: the Error schema's code description
+// lists the codes schemaf writes itself, outside the sentinels.
+func TestErrorSchemaListsFrameworkCodes(t *testing.T) {
+	_, schemas := FrameworkOpenAPI()
+	b, _ := json.Marshal(schemas[ErrorSchemaName])
+	for _, code := range []string{"method_not_allowed", "not_acceptable", "unsupported_media_type", "not_found", "internal"} {
+		if !strings.Contains(string(b), code) {
+			t.Errorf("Error schema %s does not list %q", b, code)
+		}
 	}
 }

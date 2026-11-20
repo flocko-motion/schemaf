@@ -29,16 +29,22 @@ func writeAndReadSpec(t *testing.T, endpoints []endpointInfo) staticSpec {
 	return spec
 }
 
-// TestOpenAPIIncludesAuthRoutes: the static gen/openapi.json always carries
-// the framework auth routes, independent of deployment config.
-func TestOpenAPIIncludesAuthRoutes(t *testing.T) {
+// TestOpenAPIIncludesFrameworkRoutes: the static gen/openapi.json always
+// carries the framework's /api/ routes (the server's route gate only lets
+// spec routes through), independent of deployment config.
+func TestOpenAPIIncludesFrameworkRoutes(t *testing.T) {
 	spec := writeAndReadSpec(t, nil)
 	for _, p := range []string{"/api/auth/auth0/login", "/api/auth/{provider}/login", "/api/auth/logout", "/api/auth/refresh"} {
 		if _, ok := spec.Paths[p]["post"]; !ok {
 			t.Errorf("missing POST %s", p)
 		}
 	}
-	for _, s := range []string{"SchemafAuth0LoginRequest", "SchemafLoginResponse", "SchemafRefreshResponse"} {
+	for _, p := range []string{"/api/health", "/api/status", "/api/config", "/api/user/me"} {
+		if _, ok := spec.Paths[p]["get"]; !ok {
+			t.Errorf("missing GET %s", p)
+		}
+	}
+	for _, s := range []string{"SchemafAuth0LoginRequest", "SchemafLoginResponse", "SchemafRefreshResponse", "SchemafUser"} {
 		if _, ok := spec.Components.Schemas[s]; !ok {
 			t.Errorf("missing schema %s", s)
 		}
@@ -154,8 +160,25 @@ func checkDefaultErrorResponse(t *testing.T, name string, op map[string]any) {
 		t.Errorf("%s: default response = %s", name, def)
 	}
 	for code := range resps {
+		// /api/health's 503 is not an error body: it carries the health
+		// report itself, so it is declared with that schema.
+		if name == "get /api/health" && code == "503" {
+			continue
+		}
 		if code != "default" && code[0] != '2' {
 			t.Errorf("%s: has a %s response besides default", name, code)
 		}
+	}
+}
+
+// TestOpenAPIEndpointOnFrameworkRoute: an endpoint on one of schemaf's own
+// routes is a codegen error naming it, never a silent overwrite of the
+// framework's operation.
+func TestOpenAPIEndpointOnFrameworkRoute(t *testing.T) {
+	_, err := buildOpenAPISpec("myapp", []endpointInfo{
+		{StructName: "GetStatusEndpoint", Method: "GET", Path: "/api/status", Auth: api.AuthNone, IsRaw: true},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "GetStatusEndpoint") || !strings.Contains(err.Error(), "GET /api/status") {
+		t.Fatalf("err = %v, want an error naming GetStatusEndpoint and GET /api/status", err)
 	}
 }

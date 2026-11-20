@@ -16,7 +16,7 @@ import (
 type unauthEndpoint struct{}
 
 func (unauthEndpoint) Method() string  { return "GET" }
-func (unauthEndpoint) Path() string    { return "/test/unauth" }
+func (unauthEndpoint) Path() string    { return "/api/test/unauth" }
 func (unauthEndpoint) Auth() AuthLevel { return AuthRequired }
 func (unauthEndpoint) Handle(context.Context, struct{}) (struct{}, error) {
 	return struct{}{}, ErrUnauthorized
@@ -31,7 +31,7 @@ type bodyReq struct {
 type bodyEndpoint struct{}
 
 func (bodyEndpoint) Method() string  { return "POST" }
-func (bodyEndpoint) Path() string    { return "/test/body" }
+func (bodyEndpoint) Path() string    { return "/api/test/body" }
 func (bodyEndpoint) Auth() AuthLevel { return AuthNone }
 func (bodyEndpoint) Handle(context.Context, bodyReq) (struct{}, error) {
 	return struct{}{}, nil
@@ -113,7 +113,7 @@ func TestAuthMiddleware401SaysOnlyUnauthorized(t *testing.T) {
 func TestErrUnauthorizedLeavesCookieAlone(t *testing.T) {
 	e := newErrorEnv(t)
 	_, c := e.login("alice")
-	resp := e.do("GET", "/test/unauth", reqOpts{cookie: c.Value})
+	resp := e.do("GET", "/api/test/unauth", reqOpts{cookie: c.Value})
 	checkErr(t, "ErrUnauthorized", resp, 401, "unauthorized", "unauthorized")
 	if sessionCookie(resp) != nil {
 		t.Error("ErrUnauthorized touched the session cookie")
@@ -127,13 +127,13 @@ func TestFrameworkErrorsShareTheShape(t *testing.T) {
 	e := newErrorEnv(t)
 	_, c := e.login("alice")
 
-	resp := e.do("POST", "/test/body", reqOpts{body: `{"name":`})
+	resp := e.do("POST", "/api/test/body", reqOpts{body: `{"name":`})
 	body := checkErr(t, "bad body", resp, 400, "bad_request", "")
 	if !strings.HasPrefix(body.Error, "invalid request body: ") {
 		t.Errorf("bad body message = %q", body.Error)
 	}
 
-	resp = e.do("POST", "/test/body?limit=many", reqOpts{body: `{}`})
+	resp = e.do("POST", "/api/test/body?limit=many", reqOpts{body: `{}`})
 	body = checkErr(t, "bad query", resp, 400, "bad_request", "")
 	if !strings.Contains(body.Error, `query param "limit"`) {
 		t.Errorf("bad query message = %q", body.Error)

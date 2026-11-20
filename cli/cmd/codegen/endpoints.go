@@ -270,6 +270,13 @@ func parseEndpoint(name string, methods map[methodKey]methodDecl) (ep endpointIn
 	if ep.Path, err = parseStringMethod(name, pathFn); err != nil {
 		return ep, false, err
 	}
+	// The spec gates /api/ at runtime; every endpoint lives under it.
+	if !strings.HasPrefix(ep.Path, "/api/") {
+		return ep, false, fmt.Errorf("endpoint %s: Path() %q must be under /api/ (e.g. \"/api%s\"): the server only routes /api/ to endpoints, everything else is the frontend", name, ep.Path, ep.Path)
+	}
+	if seg, ok := api.UnsupportedWildcard(ep.Path); ok {
+		return ep, false, fmt.Errorf("endpoint %s: Path() %q uses %s, which OpenAPI can't express — use one {param} per segment", name, ep.Path, seg)
+	}
 	if ep.Auth, err = parseAuthMethod(name, authFn); err != nil {
 		return ep, false, err
 	}
@@ -612,8 +619,9 @@ func renderEndpointsGen(endpoints []endpointInfo, spec []byte) ([]byte, error) {
 // and of what the server serves) from the endpoints and the component
 // schemas of their types, plus schemaf's own routes and schemas.
 func buildOpenAPISpec(projectName string, endpoints []endpointInfo, schemas map[string]any) ([]byte, error) {
-	// Framework auth routes (login, logout, refresh) are always part of the spec.
-	paths, authSchemas := api.AuthOpenAPI()
+	// The framework's /api/ routes are always part of the spec.
+	paths, authSchemas := api.FrameworkOpenAPI()
+	frameworkPaths, _ := api.FrameworkOpenAPI()
 
 	for _, ep := range endpoints {
 		method := strings.ToLower(ep.Method)
@@ -659,6 +667,12 @@ func buildOpenAPISpec(projectName string, endpoints []endpointInfo, schemas map[
 
 		if _, ok := paths[ep.Path]; !ok {
 			paths[ep.Path] = map[string]any{}
+		}
+		if _, taken := paths[ep.Path].(map[string]any)[method]; taken {
+			if _, framework := frameworkPaths[ep.Path].(map[string]any)[method]; framework {
+				return nil, fmt.Errorf("endpoint %s: %s %s is one of schemaf's own routes (see EXTEND.md, Built-in Endpoints) — choose another path", ep.StructName, ep.Method, ep.Path)
+			}
+			return nil, fmt.Errorf("endpoint %s: another endpoint already serves %s %s", ep.StructName, ep.Method, ep.Path)
 		}
 		paths[ep.Path].(map[string]any)[method] = op
 	}

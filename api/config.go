@@ -30,7 +30,8 @@ func publicConfig(environ []string) map[string]string {
 // ConfigHandler returns an http.Handler for GET /api/config: a flat JSON
 // object of all PUBLIC_* environment variables. The environment is read once,
 // when the handler is created (at server start). Always open (no auth).
-// Not part of openapi.json; the frontend reads it via the generated config.gen.ts.
+// In openapi.json like every /api/ route (see FrameworkOpenAPI); the
+// frontend reads it via the generated config.gen.ts.
 func ConfigHandler() http.Handler {
 	body, err := json.Marshal(publicConfig(os.Environ()))
 	if err != nil {

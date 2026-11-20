@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +13,9 @@ import (
 func TestOpenAPIServesSetSpec(t *testing.T) {
 	Reset()
 	t.Cleanup(Reset)
-	const spec = "{\n  \"openapi\": \"3.0.0\",\n  \"x-marker\": \"from codegen\"\n}"
+	// The framework's paths (the mux refuses to start without them), plus a
+	// marker and formatting codegen would never produce at runtime.
+	spec := strings.Replace(specFor(nil), `{"openapi":"3.0.0",`, "{\n  \"openapi\": \"3.0.0\",\n  \"x-marker\": \"from codegen\",", 1)
 	SetOpenAPISpec(spec)
 	rec := httptest.NewRecorder()
 	NewMux().ServeHTTP(rec, httptest.NewRequest("GET", "/openapi.json", nil))
@@ -27,14 +30,16 @@ func TestOpenAPIServesSetSpec(t *testing.T) {
 	}
 }
 
-// TestOpenAPIWithoutSpec: without a spec (Provider not wired) the route
-// answers a 500 error, never an empty or made-up spec.
+// TestOpenAPIWithoutSpec: without a spec (Provider not wired) the handler
+// answers a 500 error, never an empty or made-up spec. (NewMux refuses to
+// start without a spec, see TestStartupCheck; the exported handler still
+// fails loudly on its own.)
 func TestOpenAPIWithoutSpec(t *testing.T) {
 	Reset()
 	t.Cleanup(Reset)
 	captureLog(t)
 	rec := httptest.NewRecorder()
-	NewMux().ServeHTTP(rec, httptest.NewRequest("GET", "/openapi.json", nil))
+	OpenAPIHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/openapi.json", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}

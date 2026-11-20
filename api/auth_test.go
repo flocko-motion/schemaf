@@ -16,7 +16,7 @@ import (
 // This is the mechanism the `auth token` CLI relies on.
 func TestRequireAuth(t *testing.T) {
 	InitAuth([]byte("test-signing-key-0123456789abcdef"))
-	srv := httptest.NewServer(NewMux())
+	srv := httptest.NewServer(testMux(t))
 	defer srv.Close()
 
 	get := func(bearer string) *http.Response {

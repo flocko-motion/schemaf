@@ -26,7 +26,7 @@ type whoEndpoint struct {
 }
 
 func (e whoEndpoint) Method() string  { return e.method }
-func (e whoEndpoint) Path() string    { return "/test/" + e.level.String() }
+func (e whoEndpoint) Path() string    { return "/api/test/" + e.level.String() }
 func (e whoEndpoint) Auth() AuthLevel { return e.level }
 func (e whoEndpoint) Handle(ctx context.Context, _ whoReq) (whoResp, error) {
 	sub, ok := Subject(ctx)
@@ -37,7 +37,7 @@ func (e whoEndpoint) Handle(ctx context.Context, _ whoReq) (whoResp, error) {
 type whoRawEndpoint struct{ level AuthLevel }
 
 func (e whoRawEndpoint) Method() string  { return "GET" }
-func (e whoRawEndpoint) Path() string    { return "/test/raw/" + e.level.String() }
+func (e whoRawEndpoint) Path() string    { return "/api/test/raw/" + e.level.String() }
 func (e whoRawEndpoint) Auth() AuthLevel { return e.level }
 func (e whoRawEndpoint) HandleRaw(w http.ResponseWriter, r *http.Request) error {
 	sub, ok := Subject(r.Context())
@@ -115,7 +115,7 @@ func TestAuthLevels(t *testing.T) {
 		},
 	}
 
-	for _, prefix := range []string{"/test/", "/test/raw/"} {
+	for _, prefix := range []string{"/api/test/", "/api/test/raw/"} {
 		for _, l := range allLevels {
 			for i, c := range creds {
 				w := wants[l][i]
@@ -144,18 +144,18 @@ func TestAuthOptionalRenewal(t *testing.T) {
 	e := newLevelEnv(t)
 	_, c := e.login("alice")
 
-	if resp := e.do("GET", "/test/AuthOptional", reqOpts{cookie: c.Value}); sessionCookie(resp) != nil {
+	if resp := e.do("GET", "/api/test/AuthOptional", reqOpts{cookie: c.Value}); sessionCookie(resp) != nil {
 		t.Error("cookie renewed before half-life")
 	}
 	e.clock = e.clock.Add(TokenLifetime/2 + time.Second)
-	resp := e.do("GET", "/test/AuthOptional", reqOpts{cookie: c.Value})
+	resp := e.do("GET", "/api/test/AuthOptional", reqOpts{cookie: c.Value})
 	nc := sessionCookie(resp)
 	if resp.StatusCode != 200 || nc == nil || nc.Value == "" || nc.Value == c.Value {
 		t.Fatalf("status %d, cookie not renewed past half-life", resp.StatusCode)
 	}
 	// Expired cookie token for a live session: still valid, renewed.
 	e.clock = e.clock.Add(time.Hour)
-	resp = e.do("GET", "/test/AuthOptional", reqOpts{cookie: c.Value})
+	resp = e.do("GET", "/api/test/AuthOptional", reqOpts{cookie: c.Value})
 	if resp.StatusCode != 200 || sessionCookie(resp) == nil || decodeWho(t, resp).Subject != "alice" {
 		t.Fatalf("expired cookie, live session: status %d", resp.StatusCode)
 	}
@@ -178,7 +178,7 @@ func TestAuthOptionalOriginCheck(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := e.do("POST", "/test/AuthOptional", tc.o)
+			resp := e.do("POST", "/api/test/AuthOptional", tc.o)
 			if resp.StatusCode != tc.status {
 				t.Fatalf("status %d, want %d", resp.StatusCode, tc.status)
 			}

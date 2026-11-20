@@ -23,7 +23,7 @@ import (
 type errEndpoint struct{ err error }
 
 func (e errEndpoint) Method() string  { return "GET" }
-func (e errEndpoint) Path() string    { return "/test/err" }
+func (e errEndpoint) Path() string    { return "/api/test/err" }
 func (e errEndpoint) Auth() AuthLevel { return AuthNone }
 func (e errEndpoint) Handle(context.Context, struct{}) (struct{}, error) {
 	return struct{}{}, e.err
@@ -33,7 +33,7 @@ func (e errEndpoint) Handle(context.Context, struct{}) (struct{}, error) {
 type errRawEndpoint struct{ err error }
 
 func (e errRawEndpoint) Method() string                                     { return "GET" }
-func (e errRawEndpoint) Path() string                                       { return "/test/raw/err" }
+func (e errRawEndpoint) Path() string                                       { return "/api/test/raw/err" }
 func (e errRawEndpoint) Auth() AuthLevel                                    { return AuthNone }
 func (e errRawEndpoint) HandleRaw(http.ResponseWriter, *http.Request) error { return e.err }
 
@@ -64,14 +64,14 @@ func serveErr(t *testing.T, err error, raw bool) (*http.Response, errBody) {
 	t.Helper()
 	Reset()
 	t.Cleanup(Reset)
-	path := "/test/err"
+	path := "/api/test/err"
 	if raw {
 		Register(NewRawRoute(errRawEndpoint{err}, "", ""))
-		path = "/test/raw/err"
+		path = "/api/test/raw/err"
 	} else {
 		Register(NewRoute[struct{}, struct{}](errEndpoint{err}, "", ""))
 	}
-	srv := httptest.NewServer(NewMux())
+	srv := httptest.NewServer(testMux(t))
 	t.Cleanup(srv.Close)
 	resp, gerr := http.Get(srv.URL + path)
 	if gerr != nil {
@@ -280,7 +280,7 @@ func TestServerErrorLog(t *testing.T) {
 	}
 	e := entries[0]
 	want := map[string]any{
-		"level": "ERROR", "id": body.ID, "method": "GET", "path": "/test/err",
+		"level": "ERROR", "id": body.ID, "method": "GET", "path": "/api/test/err",
 		"status": float64(500), "code": "internal", "error": "pq: connection refused",
 	}
 	for k, v := range want {
