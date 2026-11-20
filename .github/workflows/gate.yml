@@ -86,26 +86,39 @@ jobs:
       - name: Two real users (build, run)
         run: |
           set -euo pipefail
-          # The runner image writes XDG_CONFIG_HOME=$HOME/.config into
-          # /etc/environment, and its post-gen script expands $HOME to
-          # /home/runner. pam_env applies it to every user sudo switches to, so
-          # the created users would read podman's config from the runner's
-          # home. A real server has no such entry: remove it. (The runner's own
-          # job environment was set at startup and keeps its value.)
-          sudo sed -i '/^XDG_CONFIG_HOME=/d' /etc/environment
+          # /etc/environment on the runner holds two per-user entries of the
+          # runner itself: XDG_CONFIG_HOME=/home/runner/.config (runner-images'
+          # configure-environment.sh, $HOME expanded by its post-gen script)
+          # and XDG_RUNTIME_DIR=/run/user/1001 (added by the hosting platform).
+          # pam_env applies them to every user sudo switches to and to every
+          # user's systemd manager: the created users read podman's config from
+          # the runner's home, and their podman.service crash-looped on the
+          # runner's runtime dir. A real server has neither: remove both before
+          # any user or user manager exists. (The runner's own job environment
+          # was set at startup and keeps its values.)
+          sudo sed -i -E '/^XDG_(CONFIG_HOME|RUNTIME_DIR)=/d' /etc/environment
+          if grep -E '^XDG_(CONFIG_HOME|RUNTIME_DIR)=' /etc/environment; then
+            echo "::error::/etc/environment still sets XDG_CONFIG_HOME or XDG_RUNTIME_DIR (above) after removing them"; exit 1
+          fi
           for u in "$E2E_BUILD_USER" "$E2E_RUN_USER"; do
             sudo useradd --create-home --shell /bin/bash "$u"
             home=$(getent passwd "$u" | cut -d: -f6)
-            xdg=$(sudo -H -u "$u" env | sed -n 's/^XDG_CONFIG_HOME=//p')
+            uid=$(id -u "$u")
+            env_of_u=$(sudo -H -u "$u" env)
+            xdg=$(sed -n 's/^XDG_CONFIG_HOME=//p' <<<"$env_of_u")
             case "$xdg" in
               "" | "$home" | "$home"/*) ;;
               *) echo "::error::$u gets XDG_CONFIG_HOME=$xdg, outside its home $home (from /etc/environment?)"; exit 1 ;;
+            esac
+            rundir=$(sed -n 's/^XDG_RUNTIME_DIR=//p' <<<"$env_of_u")
+            case "$rundir" in
+              "" | "/run/user/$uid") ;;
+              *) echo "::error::$u gets XDG_RUNTIME_DIR=$rundir, not its own /run/user/$uid (from /etc/environment?)"; exit 1 ;;
             esac
             # rootless podman needs subordinate IDs and a runtime dir (lingering)
             grep -q "^$u:" /etc/subuid || { echo "::error::useradd gave $u no /etc/subuid range"; exit 1; }
             grep -q "^$u:" /etc/subgid || { echo "::error::useradd gave $u no /etc/subgid range"; exit 1; }
             sudo loginctl enable-linger "$u"
-            uid=$(id -u "$u")
             for _ in $(seq 1 30); do [ -d "/run/user/$uid" ] && break; sleep 1; done
             [ -d "/run/user/$uid" ] || { echo "::error::/run/user/$uid did not appear after enable-linger $u"; exit 1; }
             # under Docker both users share the machine's daemon
