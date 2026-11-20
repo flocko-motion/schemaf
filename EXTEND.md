@@ -8,6 +8,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 - [Frontend](#frontend)
   - [Runtime config: `PUBLIC_*`](#runtime-config-public_)
 - [Built-in Endpoints](#built-in-endpoints)
+- [Routing](#routing)
 - [Development mode](#development-mode)
 - [Endpoint Interface](#endpoint-interface)
   - [Auth levels](#auth-levels)
@@ -164,7 +165,7 @@ PUBLIC_SENTRY_DSN=https://abc123@o0.ingest.sentry.io/0
 
 - Open (no auth), sent with `Cache-Control: no-cache`.
 - A variable that is set but empty is included as `""`. A variable that isn't set is absent.
-- `/api/config` is not in `openapi.json` and not in the generated API clients. Read it through `config()`.
+- `/api/config` is in `openapi.json`, like every route under `/api/` (see [Routing](#routing)), so the generated API clients have it too. In the frontend, read it through `config()`.
 
 **Reading a value in the frontend:** import `config` from the generated `config.gen.ts`:
 
@@ -217,6 +218,8 @@ The framework provides these endpoints out of the box:
 - `/api/auth/{provider}/login`, `/api/auth/logout`, `/api/auth/refresh` — login and sessions (see [Authentication](#authentication))
 - `/openapi.json` — OpenAPI 3.0 spec: exactly `gen/openapi.json`, compiled into the binary by codegen (see [Code Generation](#code-generation))
 
+All of them except `/openapi.json` are part of `openapi.json` (`GET /api/health`, `GET /api/status`, `GET /api/config`, `GET /api/user/me` and the auth routes), so the generated TypeScript and Go clients can call them with types, and the [route gate](#routing) lets them through. `/openapi.json` is the one route outside `/api/`.
+
 ### Extending /api/health
 
 Register custom health checks that are evaluated on every `/api/health` request. If any checker returns an error, the overall status becomes `"error"` and the response code is 503:
@@ -263,6 +266,55 @@ The response will include your provider alongside the built-in fields:
   "s3": { "bucket": "my-bucket", "connected": true }
 }
 ```
+
+## Routing
+
+**`openapi.json` is the truth, and the server enforces it.** The server reads the spec it serves (`gen/openapi.json`, handed over by the generated `Provider()`) at startup. Every request to `/api` or under `/api/` is checked against the spec's paths and methods before any handler or auth runs:
+
+| Request | Response |
+|---|---|
+| The path isn't in the spec | `404` `{"error": "not found", "code": "not_found"}`, for every method |
+| The path is in the spec, the method isn't | `405` `{"error": "method not allowed", "code": "method_not_allowed"}`, with an `Allow` header listing the spec's methods for that path (`HEAD` is allowed wherever `GET` is) |
+| Path and method are in the spec | the endpoint's handler (auth, decoding, ...) |
+
+- A path matches a spec path when every segment matches; a `{param}` segment matches any non-empty segment. `/api/todos/42` matches `/api/todos/{id}`; `/api/todos/` and `/api/todos/42/` don't.
+- The check runs before auth, so an unknown path is a `404` even without credentials, never a `401`.
+- A client calling a route that doesn't exist (a typo, a renamed endpoint, a client generated against an older spec) gets a JSON error, never the frontend's HTML with `200`.
+
+**Endpoints live under `/api/`.** `Path()` must start with `/api/`. Codegen stops on any other path and names the endpoint:
+
+```
+endpoint StripeWebhookEndpoint: Path() "/webhooks/stripe" must be under /api/
+```
+
+An endpoint on one of schemaf's own routes (e.g. `GET /api/status`) is a codegen error too, as are two endpoints on the same method and path.
+
+**One `{param}` per segment.** Go's multi-segment wildcard `{name...}` and its end anchor `{$}` can't be expressed in OpenAPI, where a parameter is always exactly one segment, so the spec couldn't describe the route truthfully. Codegen rejects them in `Path()`, and the startup check rejects them in hand-registered routes:
+
+```
+endpoint BlobEndpoint: Path() "/api/blob/{path...}" uses {path...}, which OpenAPI can't express — use one {param} per segment
+```
+
+**The server checks the spec against the handlers at startup.** It refuses to start, with an error that names every mismatch, if:
+
+- a spec operation has no handler;
+- a handler (an endpoint, or one of schemaf's own routes) has no spec operation, so the gate would make it unreachable;
+- a handler is registered outside `/api/` (the only exception is schemaf's `GET /openapi.json`);
+- two handlers serve the same method and path;
+- a handler's path uses `{name...}` or `{$}`;
+- no spec is set at all: wire the generated provider in `go/main.go`, `app.AddApi(api.Provider)`;
+- a spec path item is a `$ref`, or declares no operation. Codegen never writes either, so the spec was edited by hand or is broken.
+
+Codegen builds the spec and the handler registration from the same endpoint structs, so these only fire when something was registered by hand or the generated files are out of date. `api.NewMux()` (for tests with `httptest`) panics with the same error, as `http.ServeMux` does on conflicting patterns; the server returns it from `app.Run`.
+
+**Frontend space is `GET` and `HEAD` only.** Every path outside `/api/` and `/openapi.json` belongs to the frontend: the dev server in [development mode](#development-mode), the embedded build with its SPA fallback (unknown paths get `index.html`) in production. Only `GET` and `HEAD` reach it; any other method gets `405` `{"error": "method not allowed", "code": "method_not_allowed"}` with `Allow: GET, HEAD`. The same goes for `POST /openapi.json`.
+
+#### Upgrading: route gate
+
+- Run `./schemaf.sh codegen` after upgrading. A `gen/openapi.json` from an older schemaf lacks `/api/health`, `/api/status`, `/api/config` and `/api/user/me`, so the server refuses to start with `GET /api/health: handler has no operation in the OpenAPI spec` and similar lines.
+- Move endpoints with a `Path()` outside `/api/` under `/api/`; codegen names each one.
+- A server without `app.AddApi(api.Provider)` no longer starts. Before, it started and only `/openapi.json` failed.
+- Clients relying on a wrong method or an unknown `/api/` path reaching the frontend (with `200` and HTML) now get `404` or `405` with a JSON error.
 
 ## Development mode
 
@@ -350,7 +402,7 @@ type GetUserResp struct {
 
 Each endpoint struct has four methods:
 - `Method()` — HTTP method (GET, POST, PUT, DELETE)
-- `Path()` — route with `{param}` placeholders
+- `Path()` — route with `{param}` placeholders; always under `/api/` (see [Routing](#routing))
 - `Auth()` — the endpoint's [auth level](#auth-levels)
 - `Handle(ctx, req) (resp, error)` — your business logic
 
@@ -501,7 +553,10 @@ The status comes from the sentinel error anywhere in the error chain (`errors.Is
 | `api.ErrUnauthorized` | 401 Unauthorized | `unauthorized` |
 | `api.ErrForbidden` | 403 Forbidden | `forbidden` |
 | `api.ErrNotFound` | 404 Not Found | `not_found` |
+| (none: written by schemaf's [route gate](#routing) for a wrong method, never by an endpoint) | 405 Method Not Allowed | `method_not_allowed` |
+| (none: written by schemaf when `Accept` matches none of `Produces()`, see [Content types](#content-types)) | 406 Not Acceptable | `not_acceptable` |
 | `api.ErrConflict` | 409 Conflict | `conflict` |
+| (none: written by schemaf when `Content-Type` is not in `Consumes()`, see [Content types](#content-types)) | 415 Unsupported Media Type | `unsupported_media_type` |
 | `api.ErrTooManyRequests` | 429 Too Many Requests | `too_many_requests` |
 | (no sentinel) | 500 Internal Server Error | `internal` |
 | `api.ErrUnavailable` | 503 Service Unavailable | `unavailable` |
@@ -603,7 +658,7 @@ Only on 429 and 503, with a duration > 0; anything else is [misuse](#misuse).
 
 #### OpenAPI
 
-`openapi.json` has one shared schema, `components.schemas.Error`: `error` (string, required), `code` (string, required) and `id` (string, 5xx only). Every operation, raw endpoints and schemaf's auth routes included, has a `default` response referencing it, so the generated TypeScript and Go clients type the error body.
+`openapi.json` has one shared schema, `components.schemas.Error`: `error` (string, required), `code` (string, required; its description lists every default code from the [status table](#status), schemaf's own `method_not_allowed`, `not_acceptable` and `unsupported_media_type` included) and `id` (string, 5xx only). Every operation, raw endpoints and schemaf's auth routes included, has a `default` response referencing it, so the generated TypeScript and Go clients type the error body.
 
 `Error` is a reserved schema name, like the `Schemaf…` schemas of the auth routes: a type in `go/api/` that would appear in the spec under one of these names is a codegen error, never a silent overwrite.
 

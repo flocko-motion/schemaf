@@ -103,7 +103,7 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, req any, consumes []s
 	}
 	c, err := requestCodec(r.Header.Get("Content-Type"), consumes)
 	if err != nil {
-		writeStatusError(w, http.StatusUnsupportedMediaType, "unsupported_media_type",
+		writeStatusError(w, statusUnsupportedMediaType,
 			fmt.Sprintf("Content-Type %q is not supported; send one of: %s", r.Header.Get("Content-Type"), strings.Join(consumes, ", ")))
 		return false
 	}
@@ -119,7 +119,7 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp], consumes, produces []
 		// Negotiate first: a request nothing can answer must not run Handle.
 		mt, ok := negotiate(r.Header.Get("Accept"), produces)
 		if !ok {
-			writeStatusError(w, http.StatusNotAcceptable, "not_acceptable",
+			writeStatusError(w, statusNotAcceptable,
 				fmt.Sprintf("Accept %q matches none of: %s", r.Header.Get("Accept"), strings.Join(produces, ", ")))
 			return
 		}

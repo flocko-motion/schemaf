@@ -22,7 +22,7 @@ func serve(t *testing.T, routes ...Route) *httptest.Server {
 	for _, r := range routes {
 		Register(r)
 	}
-	srv := httptest.NewServer(NewMux())
+	srv := httptest.NewServer(testMux(t))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -55,7 +55,7 @@ type langResp struct {
 type langEndpoint struct{}
 
 func (langEndpoint) Method() string  { return "GET" }
-func (langEndpoint) Path() string    { return "/test/lang" }
+func (langEndpoint) Path() string    { return "/api/test/lang" }
 func (langEndpoint) Auth() AuthLevel { return AuthNone }
 func (langEndpoint) Handle(ctx context.Context, _ struct{}) (langResp, error) {
 	return langResp{Lang: Header(ctx, "accept-language")}, nil
@@ -63,11 +63,11 @@ func (langEndpoint) Handle(ctx context.Context, _ struct{}) (langResp, error) {
 
 func TestHeaderReadsRequestHeaderInHandle(t *testing.T) {
 	srv := serve(t, NewRoute[struct{}, langResp](langEndpoint{}, "", ""))
-	_, body := do(t, "GET", srv.URL+"/test/lang", "", map[string]string{"Accept-Language": "de-DE"})
+	_, body := do(t, "GET", srv.URL+"/api/test/lang", "", map[string]string{"Accept-Language": "de-DE"})
 	if want := `{"lang":"de-DE"}` + "\n"; body != want {
 		t.Fatalf("body = %q, want %q", body, want)
 	}
-	_, body = do(t, "GET", srv.URL+"/test/lang", "", nil)
+	_, body = do(t, "GET", srv.URL+"/api/test/lang", "", nil)
 	if want := `{"lang":""}` + "\n"; body != want {
 		t.Fatalf("without header: body = %q, want %q", body, want)
 	}
@@ -93,7 +93,7 @@ type redeemResp struct {
 type redeemEndpoint struct{}
 
 func (redeemEndpoint) Method() string  { return "POST" }
-func (redeemEndpoint) Path() string    { return "/test/redeem" }
+func (redeemEndpoint) Path() string    { return "/api/test/redeem" }
 func (redeemEndpoint) Auth() AuthLevel { return AuthNone }
 func (redeemEndpoint) Handle(ctx context.Context, req redeemReq) (redeemResp, error) {
 	tok, err := StartSessionCtx(ctx, req.User)
@@ -112,7 +112,7 @@ func TestStartSessionCtxSetsCookieOnTypedResponse(t *testing.T) {
 	Register(NewRoute[redeemReq, redeemResp](redeemEndpoint{}, "", ""))
 	e := newAuthEnv(t)
 
-	resp := e.do("POST", "/test/redeem", reqOpts{body: `{"user":"guest-1"}`})
+	resp := e.do("POST", "/api/test/redeem", reqOpts{body: `{"user":"guest-1"}`})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -129,7 +129,7 @@ func TestStartSessionCtxSetsCookieOnTypedResponse(t *testing.T) {
 	}
 
 	// A handler error after StartSessionCtx still carries the cookie.
-	resp = e.do("POST", "/test/redeem", reqOpts{body: `{"user":"guest-2","fail":true}`})
+	resp = e.do("POST", "/api/test/redeem", reqOpts{body: `{"user":"guest-2","fail":true}`})
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status %d, want 409", resp.StatusCode)
 	}
@@ -165,7 +165,7 @@ type game struct {
 type getGameEndpoint struct{}
 
 func (getGameEndpoint) Method() string     { return "GET" }
-func (getGameEndpoint) Path() string       { return "/test/games/{id}" }
+func (getGameEndpoint) Path() string       { return "/api/test/games/{id}" }
 func (getGameEndpoint) Auth() AuthLevel    { return AuthNone }
 func (getGameEndpoint) Produces() []string { return []string{"application/x-yaml", "application/json"} }
 func (getGameEndpoint) Handle(_ context.Context, req gameReq) (game, error) {
@@ -179,7 +179,7 @@ func (getGameEndpoint) Handle(_ context.Context, req gameReq) (game, error) {
 type putGameEndpoint struct{}
 
 func (putGameEndpoint) Method() string     { return "PUT" }
-func (putGameEndpoint) Path() string       { return "/test/games" }
+func (putGameEndpoint) Path() string       { return "/api/test/games" }
 func (putGameEndpoint) Auth() AuthLevel    { return AuthNone }
 func (putGameEndpoint) Consumes() []string { return []string{"application/x-yaml", "application/json"} }
 func (putGameEndpoint) Handle(_ context.Context, req game) (game, error) {
@@ -212,7 +212,7 @@ func TestProducesNegotiatesByAccept(t *testing.T) {
 		if tc.accept != "" {
 			h["Accept"] = tc.accept
 		}
-		resp, body := do(t, "GET", srv.URL+"/test/games/7", "", h)
+		resp, body := do(t, "GET", srv.URL+"/api/test/games/7", "", h)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("Accept %q: status %d", tc.accept, resp.StatusCode)
 			continue
@@ -228,7 +228,7 @@ func TestProducesNegotiatesByAccept(t *testing.T) {
 
 func TestProducesNoMatchIs406(t *testing.T) {
 	srv := gameServer(t)
-	resp, body := do(t, "GET", srv.URL+"/test/games/7", "", map[string]string{"Accept": "text/html"})
+	resp, body := do(t, "GET", srv.URL+"/api/test/games/7", "", map[string]string{"Accept": "text/html"})
 	if resp.StatusCode != http.StatusNotAcceptable {
 		t.Fatalf("status %d, want 406", resp.StatusCode)
 	}
@@ -239,7 +239,7 @@ func TestProducesNoMatchIs406(t *testing.T) {
 
 func TestErrorsAreJSONWhateverAccept(t *testing.T) {
 	srv := gameServer(t)
-	resp, body := do(t, "GET", srv.URL+"/test/games/missing", "", map[string]string{"Accept": "application/x-yaml"})
+	resp, body := do(t, "GET", srv.URL+"/api/test/games/missing", "", map[string]string{"Accept": "application/x-yaml"})
 	if resp.StatusCode != http.StatusNotFound || resp.Header.Get("Content-Type") != "application/json" {
 		t.Fatalf("status %d, Content-Type %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
@@ -261,7 +261,7 @@ func TestConsumesDecodesByContentType(t *testing.T) {
 		if tc.contentType != "" {
 			h["Content-Type"] = tc.contentType
 		}
-		resp, body := do(t, "PUT", srv.URL+"/test/games", tc.body, h)
+		resp, body := do(t, "PUT", srv.URL+"/api/test/games", tc.body, h)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("%s: status %d, body %q", tc.name, resp.StatusCode, body)
 			continue
@@ -274,7 +274,7 @@ func TestConsumesDecodesByContentType(t *testing.T) {
 
 func TestConsumesUnlistedIs415(t *testing.T) {
 	srv := gameServer(t)
-	resp, body := do(t, "PUT", srv.URL+"/test/games", "<game/>", map[string]string{"Content-Type": "application/xml"})
+	resp, body := do(t, "PUT", srv.URL+"/api/test/games", "<game/>", map[string]string{"Content-Type": "application/xml"})
 	if resp.StatusCode != http.StatusUnsupportedMediaType {
 		t.Fatalf("status %d, want 415", resp.StatusCode)
 	}
@@ -285,7 +285,7 @@ func TestConsumesUnlistedIs415(t *testing.T) {
 
 func TestConsumesInvalidYAMLIs400(t *testing.T) {
 	srv := gameServer(t)
-	resp, body := do(t, "PUT", srv.URL+"/test/games", "title: [", map[string]string{"Content-Type": "application/x-yaml"})
+	resp, body := do(t, "PUT", srv.URL+"/api/test/games", "title: [", map[string]string{"Content-Type": "application/x-yaml"})
 	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, `"code":"bad_request"`) {
 		t.Fatalf("status %d, body %q", resp.StatusCode, body)
 	}
@@ -293,7 +293,7 @@ func TestConsumesInvalidYAMLIs400(t *testing.T) {
 
 func TestDefaultContentTypeIsJSONOnly(t *testing.T) {
 	srv := serve(t, NewRoute[struct{}, langResp](langEndpoint{}, "", ""))
-	resp, _ := do(t, "GET", srv.URL+"/test/lang", "", map[string]string{"Accept": "application/x-yaml"})
+	resp, _ := do(t, "GET", srv.URL+"/api/test/lang", "", map[string]string{"Accept": "application/x-yaml"})
 	if resp.StatusCode != http.StatusNotAcceptable {
 		t.Fatalf("status %d, want 406", resp.StatusCode)
 	}
@@ -346,7 +346,7 @@ type tick struct {
 type tickEndpoint struct{ done chan struct{} }
 
 func (tickEndpoint) Method() string  { return "GET" }
-func (tickEndpoint) Path() string    { return "/test/ticks" }
+func (tickEndpoint) Path() string    { return "/api/test/ticks" }
 func (tickEndpoint) Auth() AuthLevel { return AuthNone }
 func (e tickEndpoint) Stream(ctx context.Context, req tickReq) (<-chan tick, error) {
 	if req.Fail {
@@ -379,7 +379,7 @@ func (e tickEndpoint) Stream(ctx context.Context, req tickReq) (<-chan tick, err
 
 func TestStreamWritesEventsUntilChannelCloses(t *testing.T) {
 	srv := serve(t, NewStreamRoute[tickReq, tick](tickEndpoint{}, "", ""))
-	resp, body := do(t, "GET", srv.URL+"/test/ticks?n=2", "", map[string]string{"Accept-Language": "fr"})
+	resp, body := do(t, "GET", srv.URL+"/api/test/ticks?n=2", "", map[string]string{"Accept-Language": "fr"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -400,11 +400,11 @@ func TestStreamWritesEventsUntilChannelCloses(t *testing.T) {
 
 func TestStreamErrorAnswersLikeHandle(t *testing.T) {
 	srv := serve(t, NewStreamRoute[tickReq, tick](tickEndpoint{}, "", ""))
-	resp, body := do(t, "GET", srv.URL+"/test/ticks?fail=true", "", nil)
+	resp, body := do(t, "GET", srv.URL+"/api/test/ticks?fail=true", "", nil)
 	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"busy"`) {
 		t.Fatalf("status %d, body %q", resp.StatusCode, body)
 	}
-	resp, body = do(t, "GET", srv.URL+"/test/ticks?nil=true", "", nil)
+	resp, body = do(t, "GET", srv.URL+"/api/test/ticks?nil=true", "", nil)
 	if resp.StatusCode != http.StatusInternalServerError || !strings.Contains(body, `"code":"internal"`) {
 		t.Fatalf("nil channel: status %d, body %q", resp.StatusCode, body)
 	}
@@ -414,7 +414,7 @@ func TestStreamCancelsCtxWhenClientLeaves(t *testing.T) {
 	done := make(chan struct{})
 	srv := serve(t, NewStreamRoute[tickReq, tick](tickEndpoint{done: done}, "", ""))
 	ctx, cancel := context.WithCancel(context.Background())
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/test/ticks?hold=true", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/test/ticks?hold=true", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +437,7 @@ func TestStreamSendsKeepAlive(t *testing.T) {
 	streamKeepAlive = 20 * time.Millisecond
 	t.Cleanup(func() { streamKeepAlive = old })
 	srv := serve(t, NewStreamRoute[tickReq, tick](tickEndpoint{}, "", ""))
-	resp, err := http.Get(srv.URL + "/test/ticks?hold=true")
+	resp, err := http.Get(srv.URL + "/api/test/ticks?hold=true")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestStreamSendsKeepAlive(t *testing.T) {
 type lateSessionEndpoint struct{ err chan error }
 
 func (lateSessionEndpoint) Method() string  { return "GET" }
-func (lateSessionEndpoint) Path() string    { return "/test/late" }
+func (lateSessionEndpoint) Path() string    { return "/api/test/late" }
 func (lateSessionEndpoint) Auth() AuthLevel { return AuthNone }
 func (e lateSessionEndpoint) Stream(ctx context.Context, _ struct{}) (<-chan tick, error) {
 	ch := make(chan tick)
@@ -475,7 +475,7 @@ func TestStartSessionCtxAfterStreamStartedFails(t *testing.T) {
 	ep := lateSessionEndpoint{err: make(chan error, 1)}
 	Register(NewStreamRoute[struct{}, tick](ep, "", ""))
 	e := newAuthEnv(t)
-	resp := e.do("GET", "/test/late", reqOpts{})
+	resp := e.do("GET", "/api/test/late", reqOpts{})
 	io.ReadAll(resp.Body)
 	err := <-ep.err
 	if err == nil || !strings.Contains(err.Error(), "before Stream returns") {
@@ -506,12 +506,12 @@ func TestNegotiateEdgeCases(t *testing.T) {
 
 func TestVaryAcceptWhenSeveralFormats(t *testing.T) {
 	srv := gameServer(t)
-	resp, _ := do(t, "GET", srv.URL+"/test/games/7", "", nil)
+	resp, _ := do(t, "GET", srv.URL+"/api/test/games/7", "", nil)
 	if got := resp.Header.Get("Vary"); got != "Accept" {
 		t.Errorf("Vary = %q, want Accept", got)
 	}
 	srv = serve(t, NewRoute[struct{}, langResp](langEndpoint{}, "", ""))
-	resp, _ = do(t, "GET", srv.URL+"/test/lang", "", nil)
+	resp, _ = do(t, "GET", srv.URL+"/api/test/lang", "", nil)
 	if got := resp.Header.Get("Vary"); got != "" {
 		t.Errorf("single format: Vary = %q, want none", got)
 	}

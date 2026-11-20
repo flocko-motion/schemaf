@@ -149,6 +149,18 @@ func (e E) Path() string { return p }`,
 		{"HandleRaw wrong shape", okMethod + okPath + okAuth +
 			`func (e E) HandleRaw(r *http.Request) error { return nil }`,
 			"endpoint E: HandleRaw must have the signature"},
+		{"Path() outside /api/", okMethod + okAuth + okHandle +
+			`func (e E) Path() string { return "/webhooks/x" }`,
+			`endpoint E: Path() "/webhooks/x" must be under /api/`},
+		{"Path() is /api itself", okMethod + okAuth + okHandle +
+			`func (e E) Path() string { return "/api" }`,
+			`endpoint E: Path() "/api" must be under /api/`},
+		{"Path() with {name...}", okMethod + okAuth + okHandle +
+			`func (e E) Path() string { return "/api/blob/{path...}" }`,
+			`endpoint E: Path() "/api/blob/{path...}" uses {path...}, which OpenAPI can't express — use one {param} per segment`},
+		{"Path() with {$}", okMethod + okAuth + okHandle +
+			`func (e E) Path() string { return "/api/blob/{$}" }`,
+			`endpoint E: Path() "/api/blob/{$}" uses {$}, which OpenAPI can't express`},
 		{"missing Auth", okMethod + okPath + okHandle,
 			"endpoint E is missing Auth()"},
 		{"both handlers", okMethod + okPath + okAuth + okHandle +
@@ -173,13 +185,13 @@ func TestScanReportsAllErrors(t *testing.T) {
 	_, err := scanSource(t, scanHeader+`
 type A struct{}
 func (e A) Method() string { return "GET" }
-func (e A) Path() string { return "/a" }
+func (e A) Path() string { return "/api/a" }
 func (e A) Auth() bool { return false }
 func (e A) Handle(ctx context.Context, req Req) (Resp, error) { return Resp{}, nil }
 
 type B struct{}
 func (e B) Method() string { return "GET" }
-func (e B) Path() string { return "/b" }
+func (e B) Path() string { return "/api/b" }
 func (e B) Auth() bool { return true }
 func (e B) Handle(ctx context.Context, req Req) (Resp, error) { return Resp{}, nil }
 `)

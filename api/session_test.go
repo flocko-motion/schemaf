@@ -105,7 +105,7 @@ func newAuthEnv(t *testing.T) *authEnv {
 		SetIdentityProviders(nil)
 		SetOnLogin(nil)
 	})
-	e.srv = httptest.NewServer(NewMux())
+	e.srv = httptest.NewServer(testMux(t))
 	t.Cleanup(e.srv.Close)
 	return e
 }

@@ -238,7 +238,8 @@ func retryAfterSeconds(d time.Duration) string {
 }
 
 // writeError writes the error response for err. Every error response of the
-// API goes through it, except schemaf's own 406 and 415 (writeStatusError). 5xx get an id under which the full error is logged.
+// API goes through it, except the statuses schemaf answers itself
+// (writeStatusError). 5xx get an id under which the full error is logged.
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	res := resolveError(err)
 	body := errorResponse{Error: res.msg, Code: res.code}
@@ -268,12 +269,28 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	json.NewEncoder(w).Encode(body)
 }
 
+// frameworkStatus is a status schemaf answers itself, never an endpoint, so
+// there is no sentinel for it.
+type frameworkStatus struct {
+	status int
+	code   string
+}
+
+var (
+	statusMethodNotAllowed     = frameworkStatus{http.StatusMethodNotAllowed, "method_not_allowed"}         // route gate
+	statusNotAcceptable        = frameworkStatus{http.StatusNotAcceptable, "not_acceptable"}                // Accept vs Produces()
+	statusUnsupportedMediaType = frameworkStatus{http.StatusUnsupportedMediaType, "unsupported_media_type"} // Content-Type vs Consumes()
+)
+
+// frameworkStatuses lists every frameworkStatus, for the Error schema.
+var frameworkStatuses = []frameworkStatus{statusMethodNotAllowed, statusNotAcceptable, statusUnsupportedMediaType}
+
 // writeStatusError writes an error response for a status schemaf answers
-// itself, outside the sentinels (406, 415).
-func writeStatusError(w http.ResponseWriter, status int, code, msg string) {
+// itself (see frameworkStatuses). Never logged, no id.
+func writeStatusError(w http.ResponseWriter, s frameworkStatus, msg string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(errorResponse{Error: msg, Code: code})
+	w.WriteHeader(s.status)
+	json.NewEncoder(w).Encode(errorResponse{Error: msg, Code: s.code})
 }
 
 // newErrorID returns 16 random hex characters.
