@@ -131,13 +131,16 @@ func runEndpointsGen(_ *cli.Context) error {
 	return nil
 }
 
-// scanAPIDir parses all non-generated Go files in apiDir and extracts the
-// endpoint structs. The schemas of their types come from loadSchemas.
+// scanAPIDir parses the package's own sources in apiDir — every Go file
+// except *.gen.go and *_test.go — and extracts the endpoint structs. An
+// endpoint struct in a test file belongs to the test (package api or
+// api_test) and is never registered. The schemas of their types come from
+// loadSchemas.
 func scanAPIDir(dir string) ([]endpointInfo, error) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		// Skip generated files
-		return !strings.HasSuffix(fi.Name(), ".gen.go")
+		name := fi.Name()
+		return !strings.HasSuffix(name, ".gen.go") && !strings.HasSuffix(name, "_test.go")
 	}, parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", dir, err)
