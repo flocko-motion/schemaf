@@ -99,6 +99,7 @@ func (a *App) start(ctx context.Context, s *Server, opts ServerOptions) error {
 	}
 	api.SetIdentityProviders(providers)
 	api.SetOnLogin(a.onLogin)
+	api.SetCanSeeErrorDetails(a.canSeeErrorDetails)
 	if api.DevMode() {
 		slog.Info("server mode", "mode", "development")
 	} else {

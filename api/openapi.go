@@ -17,7 +17,7 @@ var errNoOpenAPISpec = errors.New("no OpenAPI spec registered — wire the gener
 func OpenAPIHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if openAPISpec == "" {
-			writeError(w, r, errNoOpenAPISpec)
+			WriteError(w, r, errNoOpenAPISpec)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

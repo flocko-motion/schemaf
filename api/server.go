@@ -30,6 +30,7 @@ func frameworkRoutes() []frameworkRoute {
 		{"POST /api/auth/{provider}/login", AuthNone, loginHandler()},
 		{"POST /api/auth/logout", AuthNone, logoutHandler()},
 		{"POST /api/auth/refresh", AuthRequired, refreshHandler()},
+		{"GET /api/errors/{id}", AuthOptional, errorDetailsHandler()},
 	}
 }
 

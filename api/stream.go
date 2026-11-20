@@ -57,12 +57,12 @@ func newStreamHandler[Req, Event any](e StreamEndpoint[Req, Event]) http.Handler
 		ctx, er := withEndpointRequest(w, r)
 		events, err := e.Stream(ctx, req)
 		if err != nil {
-			er.commit(func() { writeError(w, r, err) })
+			er.commit(func() { WriteError(w, r, err) })
 			return
 		}
 		if events == nil {
 			er.commit(func() {
-				writeError(w, r, fmt.Errorf("stream endpoint %T returned a nil channel and a nil error", e))
+				WriteError(w, r, fmt.Errorf("stream endpoint %T returned a nil channel and a nil error", e))
 			})
 			return
 		}

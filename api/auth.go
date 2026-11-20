@@ -133,7 +133,7 @@ type authError struct {
 func (e *authError) Error() string { return e.msg }
 
 // Unwrap returns the sentinel for the status, so the error answers through
-// writeError like any other. A 500 has no sentinel.
+// WriteError like any other. A 500 has no sentinel.
 func (e *authError) Unwrap() error {
 	switch e.status {
 	case http.StatusUnauthorized:
@@ -150,10 +150,10 @@ func writeAuthError(w http.ResponseWriter, r *http.Request, aerr *authError) {
 	if aerr.status == http.StatusUnauthorized {
 		log.WarnCtx(r.Context(), "api: unauthorized",
 			"method", r.Method, "path", r.URL.Path, "reason", aerr.msg)
-		writeError(w, r, Error(ErrUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized)))
+		WriteError(w, r, Error(ErrUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized)))
 		return
 	}
-	writeError(w, r, aerr)
+	WriteError(w, r, aerr)
 }
 
 func unauthorized(msg string) *authError {
@@ -292,7 +292,7 @@ func withAuth(level AuthLevel, next http.Handler) http.Handler {
 		}
 		if renew {
 			if _, err := issueSessionCookie(w, info.subject, info.sessionID, info.sessionExpires); err != nil {
-				writeError(w, r, err)
+				WriteError(w, r, err)
 				return
 			}
 		}

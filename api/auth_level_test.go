@@ -208,6 +208,7 @@ func TestFrameworkRouteLevels(t *testing.T) {
 		"POST /api/auth/{provider}/login": AuthNone,
 		"POST /api/auth/logout":           AuthNone,
 		"POST /api/auth/refresh":          AuthRequired,
+		"GET /api/errors/{id}":            AuthOptional,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("framework route levels:\n got %v\nwant %v", got, want)

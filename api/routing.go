@@ -147,7 +147,7 @@ func gate(table specTable, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		methods, found := table.allowed(requestSegments(r))
 		if !found {
-			writeError(w, r, Error(ErrNotFound, "not_found", "not found"))
+			WriteError(w, r, Error(ErrNotFound, "not_found", "not found"))
 			return
 		}
 		if !slices.Contains(methods, r.Method) {

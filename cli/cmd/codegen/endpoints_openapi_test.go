@@ -39,12 +39,12 @@ func TestOpenAPIIncludesFrameworkRoutes(t *testing.T) {
 			t.Errorf("missing POST %s", p)
 		}
 	}
-	for _, p := range []string{"/api/health", "/api/status", "/api/config", "/api/user/me"} {
+	for _, p := range []string{"/api/health", "/api/status", "/api/config", "/api/user/me", "/api/errors/{id}"} {
 		if _, ok := spec.Paths[p]["get"]; !ok {
 			t.Errorf("missing GET %s", p)
 		}
 	}
-	for _, s := range []string{"SchemafAuth0LoginRequest", "SchemafLoginResponse", "SchemafRefreshResponse", "SchemafUser"} {
+	for _, s := range []string{"SchemafAuth0LoginRequest", "SchemafLoginResponse", "SchemafRefreshResponse", "SchemafUser", "SchemafErrorDetails"} {
 		if _, ok := spec.Components.Schemas[s]; !ok {
 			t.Errorf("missing schema %s", s)
 		}
@@ -115,15 +115,17 @@ func TestOpenAPIErrorResponses(t *testing.T) {
 // TestOpenAPIReservedSchemaName: an endpoint type named like a framework
 // schema is a codegen error, never a silent overwrite.
 func TestOpenAPIReservedSchemaName(t *testing.T) {
-	schemas := map[string]any{
-		"Error": map[string]any{"type": "object", "properties": map[string]any{"msg": map[string]any{"type": "string"}}},
-	}
-	_, err := buildOpenAPISpec("myapp", []endpointInfo{
-		{StructName: "G", Method: "GET", Path: "/api/g", Auth: api.AuthNone, ReqType: "GetReq", RespType: "Error",
-			RespSchema: map[string]any{"$ref": "#/components/schemas/Error"}},
-	}, schemas)
-	if err == nil || !strings.Contains(err.Error(), `"Error"`) || !strings.Contains(err.Error(), "reserved") {
-		t.Fatalf("err = %v, want a reserved-name error naming Error", err)
+	for _, name := range []string{"Error", "SchemafErrorDetails"} {
+		schemas := map[string]any{
+			name: map[string]any{"type": "object", "properties": map[string]any{"msg": map[string]any{"type": "string"}}},
+		}
+		_, err := buildOpenAPISpec("myapp", []endpointInfo{
+			{StructName: "G", Method: "GET", Path: "/api/g", Auth: api.AuthNone, ReqType: "GetReq", RespType: name,
+				RespSchema: map[string]any{"$ref": "#/components/schemas/" + name}},
+		}, schemas)
+		if err == nil || !strings.Contains(err.Error(), `"`+name+`"`) || !strings.Contains(err.Error(), "reserved") {
+			t.Errorf("err = %v, want a reserved-name error naming %s", err, name)
+		}
 	}
 }
 
