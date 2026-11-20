@@ -10,6 +10,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 - [Built-in Endpoints](#built-in-endpoints)
 - [Endpoint Interface](#endpoint-interface)
   - [Auth levels](#auth-levels)
+  - [Error responses](#error-responses)
 - [Authentication](#authentication)
   - [Identity providers](#identity-providers)
   - [Activating Auth0](#activating-auth0)
@@ -307,7 +308,7 @@ Each endpoint struct has four methods:
 - Authenticates the caller according to `Auth()`
 - Calls `Handle(ctx, req)`
 - Encodes the response as JSON
-- On error: maps the error to an appropriate HTTP status (see below)
+- On error: answers with the status and error body derived from the error (see [Error responses](#error-responses))
 
 ### Auth levels
 
@@ -348,7 +349,7 @@ func (e GetShareEndpoint) Handle(ctx context.Context, req GetShareReq) (GetShare
 }
 ```
 
-In `openapi.json`, `AuthRequired` endpoints declare `security: [{bearerAuth: []}, {cookieAuth: []}]` and `AuthOptional` endpoints `security: [{}, {bearerAuth: []}, {cookieAuth: []}]` (anonymous allowed); both list a `401` response. `AuthNone` endpoints declare no security.
+In `openapi.json`, `AuthRequired` endpoints declare `security: [{bearerAuth: []}, {cookieAuth: []}]` and `AuthOptional` endpoints `security: [{}, {bearerAuth: []}, {cookieAuth: []}]` (anonymous allowed). `AuthNone` endpoints declare no security. Every operation's error responses, `401` included, are its `default` response (see [Error responses](#error-responses)).
 
 Codegen is strict: an endpoint whose `Auth()` does not return one of the three constants, whose `Method()` or `Path()` does not return a string literal, whose `Handle` does not have the `(ctx, Req) (Resp, error)` shape, or that has `Method()`, `Path()` and `Auth()` but no `Handle`/`HandleRaw` (e.g. a misnamed `Handler`) is a codegen error, never silently skipped.
 
@@ -359,26 +360,7 @@ Before v1.11.0, `Auth()` returned `bool`. Codegen rejects the old signature and 
 - `Auth() bool { return true }` → `Auth() api.AuthLevel { return api.AuthRequired }`
 - `Auth() bool { return false }` → `Auth() api.AuthLevel { return api.AuthNone }`
 
-**Error responses:** return one of the framework's sentinel errors (directly or wrapped with `%w`) to control the status code; any other error is `500`.
-
-| Return | Status |
-|---|---|
-| `api.ErrBadRequest` | 400 Bad Request |
-| `api.ErrForbidden` | 403 Forbidden |
-| `api.ErrNotFound` | 404 Not Found |
-| `api.ErrConflict` | 409 Conflict |
-| `api.ErrUnavailable` | 503 Service Unavailable |
-| any other `error` | 500 Internal Server Error |
-
-```go
-func (e GetOrderEndpoint) Handle(ctx context.Context, req GetOrderReq) (GetOrderResp, error) {
-    order, err := db.GetOrder(ctx, req.ID)
-    if errors.Is(err, sql.ErrNoRows) {
-        return GetOrderResp{}, fmt.Errorf("order %s: %w", req.ID, api.ErrNotFound) // → 404
-    }
-    return GetOrderResp{Order: order}, err
-}
-```
+**Error responses:** return an error to answer with an error status and the shared error body; see [Error responses](#error-responses).
 
 **Request type struct tags:**
 ```go
@@ -405,6 +387,146 @@ type CreateUserEndpoint struct{}
 
 You write the struct. Everything else is generated or framework-provided.
 
+### Error responses
+
+Every error response from the API has the same shape, whichever layer answered: a typed endpoint, a [raw endpoint](#raw-endpoints), an identity provider's `Exchange`, `OnLogin`, or schemaf itself (bad request body, auth middleware, login checks). A client never has to care where an error came from.
+
+```json
+{"error": "an organisation needs at least one head", "code": "last_head"}
+{"error": "Internal Server Error", "code": "internal", "id": "3f9a1c0be47d2a16"}
+```
+
+| Field | Present | Content |
+|---|---|---|
+| `error` | always | the message (see [Message](#message)) |
+| `code` | always | machine-readable; the client branches on it (see [Code](#code)) |
+| `id` | on 5xx only | 16 hex characters; the full error is logged under it |
+
+#### Status
+
+The status comes from the sentinel error anywhere in the error chain (`errors.Is`), returned directly or wrapped with `%w`. An error without a sentinel is a 500.
+
+| Sentinel | Status | Default code |
+|---|---|---|
+| `api.ErrBadRequest` | 400 Bad Request | `bad_request` |
+| `api.ErrUnauthorized` | 401 Unauthorized | `unauthorized` |
+| `api.ErrForbidden` | 403 Forbidden | `forbidden` |
+| `api.ErrNotFound` | 404 Not Found | `not_found` |
+| `api.ErrConflict` | 409 Conflict | `conflict` |
+| `api.ErrTooManyRequests` | 429 Too Many Requests | `too_many_requests` |
+| (no sentinel) | 500 Internal Server Error | `internal` |
+| `api.ErrUnavailable` | 503 Service Unavailable | `unavailable` |
+
+`api.ErrUnauthorized` sets the status and code only. It never touches the session cookie and sets no `WWW-Authenticate` header: cookies are the business of schemaf's [auth layer](#authentication), not of your endpoint.
+
+#### Custom message, custom code
+
+There are two ways to say more than the bare sentinel, one per intent:
+
+```go
+// Custom message, default code: wrap the sentinel with %w.
+return GetOrderResp{}, fmt.Errorf("order %s: %w", req.ID, api.ErrNotFound)
+// → 404 {"error": "order 42: not found", "code": "not_found"}
+
+// Custom message, your own code: api.Error(sentinel, code, msg).
+return Resp{}, api.Error(api.ErrConflict, "last_head", "an organisation needs at least one head")
+// → 409 {"error": "an organisation needs at least one head", "code": "last_head"}
+```
+
+```go
+func Error(sentinel error, code, msg string) error
+```
+
+The error `api.Error` returns has `Error()` = `msg` (no `": conflict"` suffix) and unwraps to the sentinel, so `errors.Is(err, api.ErrConflict)` holds.
+
+A full handler:
+
+```go
+func (e GetOrderEndpoint) Handle(ctx context.Context, req GetOrderReq) (GetOrderResp, error) {
+    order, err := db.GetOrder(ctx, req.ID)
+    if errors.Is(err, sql.ErrNoRows) {
+        return GetOrderResp{}, fmt.Errorf("order %s: %w", req.ID, api.ErrNotFound) // → 404
+    }
+    return GetOrderResp{Order: order}, err // any other error → 500
+}
+```
+
+#### Code
+
+1. **Your code**: from `api.Error`, or from any error in the chain implementing `Code() string`. Your own error types carry a code without wrapping:
+
+   ```go
+   type ProfaneNameError struct{ Name string }
+
+   func (e ProfaneNameError) Error() string { return "this name is not allowed" }
+   func (e ProfaneNameError) Code() string  { return "profane_name" }
+   func (e ProfaneNameError) Unwrap() error { return api.ErrBadRequest } // → 400
+   ```
+
+2. Otherwise the **default code** of the status (table above).
+
+Rules:
+
+- A code matches `^[a-z][a-z0-9_]*$`, whatever its source. A `Code()` that returns `""` is invalid, not "no code".
+- A default code is only valid with its own status. `api.Error(api.ErrNotFound, "not_found", …)` is valid (and redundant); `api.Error(api.ErrConflict, "not_found", …)` is [misuse](#misuse).
+- Status and code are independent. A coded error without a sentinel is a 500 that keeps its code. For a 4xx, your error type's `Unwrap()` returns a sentinel, as above.
+- Your codes are kept on 5xx too, e.g. 503 `maintenance`: a code is chosen deliberately and leaks nothing.
+
+#### Message
+
+- **4xx** are expected errors, meant for the user: the message is `err.Error()`. If that is empty, it is the status text (`http.StatusText`, e.g. `"Conflict"`).
+- **5xx** are the server's fault, and their message is withheld: it is always the status text (`"Internal Server Error"`, `"Service Unavailable"`), whatever the error says. The response carries an `id`, and the full error is logged under it. Messages tend to leak internals (driver errors, SQL, paths); codes don't.
+- **schemaf's own 401s** (auth middleware) say `"Unauthorized"` and nothing more. The reason (missing, expired, malformed, bad signature, revoked session) is logged, never sent to the client.
+
+#### Misuse
+
+Misusing the error API is a 500 with code `internal` and an `id`, never a panic (a panic drops the request without a response). The log entry names the problem and the fix. Misuse is:
+
+- `api.Error` with a `nil` sentinel, or with an error that is not one of the sentinels above
+- an empty or invalid code, from any source
+- a default code with the wrong status
+- `Retry-After` on a status other than 429 or 503, or with a duration ≤ 0
+
+An empty message is not misuse; it falls back to the status text.
+
+#### `Retry-After`
+
+Any error in the chain implementing `RetryAfter() time.Duration` sets the `Retry-After` header, in whole seconds rounded up (`90*time.Second` → `Retry-After: 90`). `api.RetryAfter` wraps any error with it:
+
+```go
+func RetryAfter(err error, d time.Duration) error
+```
+
+```go
+return Resp{}, api.RetryAfter(
+    api.Error(api.ErrTooManyRequests, "token_locked", "too many failed attempts, try again later"),
+    90*time.Second)
+// → 429, Retry-After: 90, {"error": "too many failed attempts, try again later", "code": "token_locked"}
+```
+
+Only on 429 and 503, with a duration > 0; anything else is [misuse](#misuse).
+
+#### Logging
+
+- Every 5xx is logged at error level under its `id`, with method, path, subject (if any), status, code and the full `err.Error()`.
+- The reasons for schemaf's own 401s are logged at warn level.
+- Other 4xx are not logged.
+
+#### OpenAPI
+
+`openapi.json` has one shared schema, `components.schemas.Error`: `error` (string, required), `code` (string, required) and `id` (string, 5xx only). Every operation, raw endpoints and schemaf's auth routes included, has a `default` response referencing it, so the generated TypeScript and Go clients type the error body.
+
+`Error` is a reserved schema name, like the `Schemaf…` schemas of the auth routes: a type in `go/api/` that would appear in the spec under one of these names is a codegen error, never a silent overwrite.
+
+#### Upgrading: error responses
+
+Before v1.13.0, an error response was `{"error": "<message>"}`. Now:
+
+- Every error response has a `code`; branch on it rather than on the message.
+- 5xx messages are withheld: the message is the status text, and the response carries an `id` to find the full error in the log.
+- schemaf's own 401s no longer say why; the reason is in the log.
+- `openapi.json` declares errors as one `default` response referencing `Error`, instead of description-only `400`/`401`/`500` responses.
+
 ## Authentication
 
 schemaf has built-in auth, fully managed by the framework:
@@ -426,8 +548,9 @@ An identity provider is a login plugin. It verifies a credential in the login re
 type IdentityProvider interface {
     Name() string // URL-safe, unique per app: "auth0", "passkey", ...
     // Exchange verifies the provider's credential in the login request and
-    // returns the identity it proves. Return api.ErrForbidden (or wrap it)
-    // to refuse with 403; api.ErrBadRequest gives 400; any other error is a 500.
+    // returns the identity it proves. Errors answer like endpoint errors:
+    // e.g. api.ErrForbidden (or wrap it) refuses with 403, any error without
+    // a sentinel is a 500. See "Error responses".
     Exchange(ctx context.Context, r *http.Request) (api.Identity, error)
 }
 
@@ -444,7 +567,7 @@ schemaf ships one built-in provider, [`auth0`](#activating-auth0), which is swit
 
 | Route | What it does |
 |---|---|
-| `POST /api/auth/{provider}/login` | Calls the provider's `Exchange`, then `OnLogin` (if set), then starts a session. Sets the cookie and responds `{"subject": "...", "token": "..."}`. The token is always returned, for Bearer clients. An unknown or unconfigured provider gives `404 provider not configured`. |
+| `POST /api/auth/{provider}/login` | Calls the provider's `Exchange`, then `OnLogin` (if set), then starts a session. Sets the cookie and responds `{"subject": "...", "token": "..."}`. The token is always returned, for Bearer clients. An unknown or unconfigured provider gives 404 with code `not_found` and the message `provider not configured`. |
 
 All auth routes are in `openapi.json`, so the generated TypeScript and Go clients have them. `POST /api/auth/auth0/login` is always in the spec, with the body `{"id_token": string}`, whether Auth0 is configured or not: the build output does not depend on deployment config. Your own providers are reached through the generic `POST /api/auth/{provider}/login`, whose body is a free-form JSON object.
 
@@ -469,6 +592,7 @@ app.OnLogin(func(ctx context.Context, id api.Identity) (string, error) {
 - **Claims are only available at login.** The session stores just the subject. If your app needs `email`, `name` or similar, capture them in `OnLogin`.
 - **Claim policy is yours.** Checks like `email_verified`, allowed domains or invite-only signup belong in `OnLogin`. Providers only prove identity.
 - `OnLogin` runs for every provider. `id.Provider` tells you which one proved the identity.
+- Errors from `Exchange` and `OnLogin` answer exactly like endpoint errors, with the same status, code and message rules: see [Error responses](#error-responses).
 
 #### Rules
 
@@ -752,7 +876,7 @@ Same struct pattern, same `Method()`, `Path()`, `Auth()`. The only difference is
 
 **Rules:**
 - Define exactly one of `Handle` or `HandleRaw` — codegen will error if both are present
-- If `HandleRaw` returns a non-nil error and you haven't written a response yet, the framework writes a JSON error response with the standard status code mapping (`ErrNotFound` → 404, etc.)
+- If `HandleRaw` returns a non-nil error and you haven't written a response yet, the framework writes the standard [error response](#error-responses), exactly as for `Handle` (`ErrNotFound` → 404 `not_found`, `api.Error` codes, `Retry-After`, etc.)
 - If you've already started writing a response (set headers, streamed bytes), return `nil` and handle errors yourself
 - Auth works identically, with the same [three levels](#auth-levels) — at `api.AuthRequired` the token and session are validated before `HandleRaw` is called, and `api.Subject(r.Context())` returns the authenticated user ID; at `api.AuthOptional` it returns `("", false)` for anonymous callers
 

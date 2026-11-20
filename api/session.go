@@ -164,8 +164,9 @@ func newSessionID() (string, error) {
 type IdentityProvider interface {
 	Name() string // URL-safe, unique per app
 	// Exchange verifies the provider's credential in the login request and
-	// returns the identity it proves. ErrForbidden (or wrapped) → 403,
-	// ErrBadRequest → 400, any other error → 500.
+	// returns the identity it proves. Errors answer like endpoint errors
+	// (see writeError): e.g. ErrForbidden (or wrapped) → 403, api.Error
+	// codes are kept, an error without a sentinel is a mute 500.
 	Exchange(ctx context.Context, r *http.Request) (Identity, error)
 }
 
@@ -177,7 +178,8 @@ type Identity struct {
 }
 
 // OnLoginFunc maps a proven identity to the app's subject. Returning
-// ErrForbidden refuses the login (403).
+// ErrForbidden refuses the login (403). Errors answer like endpoint errors
+// (see writeError).
 type OnLoginFunc func(ctx context.Context, id Identity) (subject string, err error)
 
 var (
@@ -228,41 +230,41 @@ func loginHandler() http.Handler {
 		// sends Origin on cross-site POSTs; requests without it (curl,
 		// server-to-server) can't be cross-site browser requests.
 		if r.Header.Get("Origin") != "" && !sameOrigin(r) {
-			writeJSONError(w, http.StatusForbidden, "cross-origin login rejected: Origin header not matching the host")
+			writeError(w, r, Error(ErrForbidden, "forbidden", "cross-origin login rejected: Origin header not matching the host"))
 			return
 		}
 		name := r.PathValue("provider")
 		p := findProvider(name)
 		if p == nil {
-			writeJSONError(w, http.StatusNotFound, "provider not configured")
+			writeError(w, r, Error(ErrNotFound, "not_found", "provider not configured"))
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
 		id, err := p.Exchange(r.Context(), r)
 		if err != nil {
-			writeJSONError(w, statusFor(err), err.Error())
+			writeError(w, r, err)
 			return
 		}
 		id.Provider = name
 		if id.Subject == "" {
-			writeJSONError(w, http.StatusInternalServerError, "identity provider "+name+" returned an empty subject")
+			writeError(w, r, fmt.Errorf("identity provider %s returned an empty subject", name))
 			return
 		}
 		subject := id.Subject
 		if onLogin != nil {
 			subject, err = onLogin(r.Context(), id)
 			if err != nil {
-				writeJSONError(w, statusFor(err), err.Error())
+				writeError(w, r, err)
 				return
 			}
 			if subject == "" {
-				writeJSONError(w, http.StatusInternalServerError, "OnLogin returned an empty subject")
+				writeError(w, r, errors.New("OnLogin returned an empty subject"))
 				return
 			}
 		}
 		token, err := startSession(r.Context(), w, subject, name)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, r, err)
 			return
 		}
 		writeJSON(w, LoginResponse{Subject: subject, Token: token})
@@ -276,12 +278,12 @@ func logoutHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info, _, aerr := authenticate(r)
 		if aerr != nil && aerr.status == http.StatusForbidden {
-			writeJSONError(w, aerr.status, aerr.msg)
+			writeAuthError(w, r, aerr)
 			return
 		}
 		if aerr == nil && info.sessionID != "" {
 			if err := sessionStore.RevokeSession(r.Context(), info.sessionID, now()); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, err.Error())
+				writeError(w, r, err)
 				return
 			}
 		}
@@ -296,7 +298,7 @@ func refreshHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info, _ := r.Context().Value(ctxKeyAuth{}).(authInfo)
 		if info.sessionID == "" {
-			writeJSONError(w, http.StatusBadRequest, "token is not tied to a session")
+			writeError(w, r, Error(ErrBadRequest, "bad_request", "token is not tied to a session"))
 			return
 		}
 		var token string
@@ -307,7 +309,7 @@ func refreshHandler() http.Handler {
 			token, err = sessionToken(info.subject, info.sessionID, info.sessionExpires)
 		}
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, r, err)
 			return
 		}
 		writeJSON(w, RefreshResponse{Token: token})

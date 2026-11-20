@@ -78,14 +78,17 @@ func BuildOpenAPI(title, version string) openAPISchema {
 			OperationID: operationID(route.Method, route.Path),
 			Responses: map[string]openAPIResponse{
 				"200": {Description: "OK"},
-				"400": {Description: "Bad Request"},
-				"500": {Description: "Internal Server Error"},
+				"default": {
+					Description: "Error",
+					Content: map[string]openAPIMediaType{
+						"application/json": {Schema: map[string]any{"$ref": "#/components/schemas/" + ErrorSchemaName}},
+					},
+				},
 			},
 		}
 
 		if route.Auth != AuthNone {
 			op.Security = OpenAPISecurity(route.Auth)
-			op.Responses["401"] = openAPIResponse{Description: "Unauthorized"}
 		}
 
 		if route.ReqType != nil {

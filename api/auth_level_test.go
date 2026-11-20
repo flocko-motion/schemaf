@@ -275,9 +275,15 @@ func checkOpenAPISecurity(t *testing.T, paths map[string]map[string]map[string]a
 		if string(sec) != wantSec[l] {
 			t.Errorf("%s %s security = %s, want %s", method, path, sec, wantSec[l])
 		}
-		_, has401 := op["responses"].(map[string]any)["401"]
-		if has401 != (l != AuthNone) {
-			t.Errorf("%s %s: 401 response present = %v", method, path, has401)
+		resps, _ := op["responses"].(map[string]any)
+		def, _ := json.Marshal(resps["default"])
+		if string(def) != `{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}},"description":"Error"}` {
+			t.Errorf("%s %s: default response = %s", method, path, def)
+		}
+		for code := range resps {
+			if code != "default" && code[0] != '2' {
+				t.Errorf("%s %s: has a %s response besides default", method, path, code)
+			}
 		}
 	}
 	for p, l := range levels {

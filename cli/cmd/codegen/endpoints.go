@@ -601,9 +601,8 @@ func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, structs map[
 		op := map[string]any{
 			"operationId": operationIDFromParts(ep.Method, ep.Path),
 			"responses": map[string]any{
-				"200": map[string]any{"description": "OK"},
-				"400": map[string]any{"description": "Bad Request"},
-				"500": map[string]any{"description": "Internal Server Error"},
+				"200":     map[string]any{"description": "OK"},
+				"default": api.OpenAPIErrorResponse(),
 			},
 		}
 		if ep.Summary != "" {
@@ -614,7 +613,6 @@ func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, structs map[
 		}
 		if ep.Auth != api.AuthNone {
 			op["security"] = api.OpenAPISecurity(ep.Auth)
-			op["responses"].(map[string]any)["401"] = map[string]any{"description": "Unauthorized"}
 		}
 
 		// Request body for non-GET methods with a non-empty Req type
@@ -659,6 +657,9 @@ func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, structs map[
 	// Build schemas for all structs referenced
 	schemas := buildSchemas(endpoints, structs)
 	for name, schema := range authSchemas {
+		if _, taken := schemas[name]; taken {
+			return fmt.Errorf("type %q in %s: the OpenAPI schema name %q is reserved by schemaf — rename the type", name, apiDir, name)
+		}
 		schemas[name] = schema
 	}
 

@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/flocko-motion/schemaf/log"
 )
 
 // ctxKeyAuth is the context key for the authenticated caller (authInfo).
@@ -129,6 +131,30 @@ type authError struct {
 }
 
 func (e *authError) Error() string { return e.msg }
+
+// Unwrap returns the sentinel for the status, so the error answers through
+// writeError like any other. A 500 has no sentinel.
+func (e *authError) Unwrap() error {
+	switch e.status {
+	case http.StatusUnauthorized:
+		return ErrUnauthorized
+	case http.StatusForbidden:
+		return ErrForbidden
+	}
+	return nil
+}
+
+// writeAuthError answers a failed authentication. A 401 says "Unauthorized"
+// only; its reason goes to the log at warn level, never to the client.
+func writeAuthError(w http.ResponseWriter, r *http.Request, aerr *authError) {
+	if aerr.status == http.StatusUnauthorized {
+		log.WarnCtx(r.Context(), "api: unauthorized",
+			"method", r.Method, "path", r.URL.Path, "reason", aerr.msg)
+		writeError(w, r, Error(ErrUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized)))
+		return
+	}
+	writeError(w, r, aerr)
+}
 
 func unauthorized(msg string) *authError {
 	return &authError{status: http.StatusUnauthorized, msg: msg}
@@ -261,12 +287,12 @@ func withAuth(level AuthLevel, next http.Handler) http.Handler {
 			if aerr.status == http.StatusUnauthorized && info.viaCookie {
 				clearSessionCookie(w)
 			}
-			writeJSONError(w, aerr.status, aerr.msg)
+			writeAuthError(w, r, aerr)
 			return
 		}
 		if renew {
 			if _, err := issueSessionCookie(w, info.subject, info.sessionID, info.sessionExpires); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, err.Error())
+				writeError(w, r, err)
 				return
 			}
 		}
