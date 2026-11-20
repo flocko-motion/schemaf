@@ -428,7 +428,7 @@ func (e GetUserEndpoint) Handle(ctx context.Context, req GetUserReq) (GetUserRes
 }
 
 type GetUserReq struct {
-    ID string `path:"id"`
+    ID int64 `path:"id"` // /api/users/42 → 42; /api/users/abc → 400
 }
 
 type GetUserResp struct {
@@ -443,7 +443,7 @@ Each endpoint struct has four methods:
 - `Handle(ctx, req) (resp, error)` — your business logic
 
 **What the framework does for you:**
-- Decodes the request (path params, query params, JSON body — or another [content type](#content-types)) into the request type
+- Decodes the request (JSON body — or another [content type](#content-types) — then [path and query params](#path-and-query-parameters)) into the request type
 - Authenticates the caller according to `Auth()`
 - Calls `Handle(ctx, req)`; `ctx` carries the caller ([`api.Subject`](#auth-levels)) and the [request headers](#request-headers), and can [start a session](#starting-sessions-from-your-own-code)
 - Encodes the response as JSON (or another [content type](#content-types))
@@ -504,10 +504,76 @@ Before v1.11.0, `Auth()` returned `bool`. Codegen rejects the old signature and 
 **Request type struct tags:**
 ```go
 type ExampleReq struct {
-    ID     string `path:"id"`      // from URL path: /api/things/{id}
-    Text   string `json:"text"`    // from JSON body
+    ID     int     `path:"id"`      // from URL path: /api/things/{id}
+    DryRun *bool   `query:"dryRun"` // from the query string: ?dryRun=true
+    Text   string  `json:"text"`    // from JSON body
 }
 ```
+
+### Path and query parameters
+
+A request field tagged `path:"name"` takes its value from the `{name}` segment of `Path()`; a field tagged `query:"name"` from the query string. Both are declared in `openapi.json` as typed operation parameters, so the generated Go and TypeScript clients take them as arguments.
+
+```go
+// ListGamesEndpoint lists a player's games.
+type ListGamesEndpoint struct{}
+
+func (e ListGamesEndpoint) Method() string { return "GET" }
+func (e ListGamesEndpoint) Path() string   { return "/api/players/{playerId}/games" }
+// Auth() and Handle(ctx, ListGamesReq) as usual
+
+type ListGamesReq struct {
+    PlayerID int      `path:"playerId"` // required, integer
+    Sort     string   `query:"sort"`    // required: ?sort=name
+    Search   *string  `query:"search"`  // optional: nil when not sent
+    Tags     []string `query:"tag"`     // optional, repeated: ?tag=a&tag=b
+}
+```
+
+**Supported types**
+
+| Field | Path | Query | OpenAPI parameter |
+|---|---|---|---|
+| `string`, any integer type, `bool` (or a named type over one, e.g. `type Role string`) | ✓ | ✓ | `string` / `integer` / `boolean`, `required: true` |
+| a pointer to one of those, e.g. `*string` | — | ✓ | the element's type, `required: false` |
+| a slice of one of those, e.g. `[]int` | — | ✓ | `array` of the element's type, `style: form`, `explode: true`, `required: false` |
+
+A path segment is always there and holds one value, so path fields are never pointers or slices.
+
+**Decoding**
+
+| Request | Result |
+|---|---|
+| a required (non-pointer) query param isn't sent | `400` `bad_request`, `query param "sort" is required` |
+| `?search=` (sent, empty) | `""` for a string; an integer or bool fails to parse → `400` |
+| a value that doesn't parse for its type (`?n=abc`, `/api/players/abc/games`) | `400` `bad_request` |
+| a pointer or scalar param sent more than once (`?sort=a&sort=b`) | `400` `bad_request`: ambiguous input is an error, not a guess |
+| a pointer param isn't sent | `nil` |
+| a slice param isn't sent / sent as `?tag=a&tag=b` | an empty slice / `["a", "b"]`; each value is parsed by the element type, a bad one → `400` |
+| a query param the type doesn't declare | ignored |
+
+To make a query param optional, declare it as a pointer.
+
+**No body.** Path and query fields are not part of the request body: they're left out of the body schema and the request's component schema, and a POST, PUT or PATCH request whose only fields are path and query fields has no `requestBody`. schemaf decodes the body first and applies the path and query values after it, so a body key can never overwrite a path or query field.
+
+**Codegen errors.** Each names the endpoint struct and the field, and says how to fix it:
+
+- a `path` or `query` field of an unsupported type (float, struct, map, pointer to a slice, a pointer or slice on a path field, …)
+- a `{name}` in `Path()` without a `path:"name"` field in the request type, or a `path:"name"` field without a `{name}` in `Path()`
+- a field tagged both `json` and `path`/`query`, or both `path` and `query`
+- two fields tagged with the same `path` name
+- an unexported field tagged `path` or `query`
+- a `path` or `query` tag on a field of an embedded struct: parameters are read only from the request type's own fields
+- a type with `path` or `query` fields used anywhere but as an endpoint's request type (a response, a stream event, a field or embedded struct of another type): its schema leaves those fields out, so it can't describe that JSON — declare a separate type
+- an exported field of a GET or DELETE request type with neither a `path` nor a `query` tag: these requests have no body, so the field could never be filled
+
+These rules apply to typed endpoints and [stream endpoints](#stream-endpoints). A [raw endpoint](#raw-endpoints) has no request type; its path parameters are declared as strings.
+
+#### Upgrading: path and query parameters
+
+- A request without a required (non-pointer) query param now gets `400` instead of the zero value. Declare the field as a pointer to keep it optional.
+- Codegen fails on untagged fields in GET and DELETE request types, on `path` tags that don't match `Path()`, and on fields tagged both `json` and `path`/`query`. Each error names the field.
+- Path fields can be integers and bools now; their spec parameters carry the field's type instead of `string`.
 
 **OpenAPI generation:**
 The Go doc comment on the endpoint struct becomes the OpenAPI summary. The first line is the summary, subsequent lines become the description:
@@ -546,7 +612,7 @@ Codegen type-checks `go/api/` (its `*.gen.go` and `*_test.go` files ignored) and
 | type implementing `encoding.TextMarshaler`; field with `json:",string"` | `string` |
 | `any`, interface, `json.RawMessage` | any JSON value |
 
-A POST, PUT or PATCH request has a body when its type has at least one JSON field; GET and DELETE requests never have one. A response whose type is a struct without JSON fields has no content.
+A POST, PUT or PATCH request has a body when its type has at least one JSON field ([path and query fields](#path-and-query-parameters) don't count); GET and DELETE requests never have one. A response whose type is a struct without JSON fields has no content.
 
 Codegen is strict, and each of these is a codegen error that names the type:
 

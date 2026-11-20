@@ -158,7 +158,7 @@ func (GetGameEndpoint) Handle(ctx context.Context, req GameReq) (Game, error) { 
 type UserEventsEndpoint struct{}
 
 func (UserEventsEndpoint) Method() string             { return "GET" }
-func (UserEventsEndpoint) Path() string               { return "/api/users/events" }
+func (UserEventsEndpoint) Path() string               { return "/api/users/{id}/events" }
 func (UserEventsEndpoint) Auth() schemafapi.AuthLevel { return schemafapi.AuthNone }
 func (UserEventsEndpoint) Stream(ctx context.Context, req GameReq) (<-chan obj.User, error) {
 	return nil, nil
@@ -200,10 +200,10 @@ func (UserEventsEndpoint) Stream(ctx context.Context, req GameReq) (<-chan obj.U
 	if got := keys(content("/api/games/{id}", "get", false)); got != "application/json,application/x-yaml" {
 		t.Errorf("GET response content: %s", got)
 	}
-	if _, ok := spec.Paths["/api/users/events"]["get"]["requestBody"]; ok {
+	if _, ok := spec.Paths["/api/users/{id}/events"]["get"]["requestBody"]; ok {
 		t.Error("stream has a request body")
 	}
-	ev := content("/api/users/events", "get", false)
+	ev := content("/api/users/{id}/events", "get", false)
 	if got := keys(ev); got != "text/event-stream" {
 		t.Fatalf("stream response content: %s", got)
 	}
