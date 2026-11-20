@@ -14,6 +14,7 @@ type stub struct {
 	compose    string // output of `<rt> compose version`
 	composeErr bool   // `<rt> compose version` exits non-zero
 	volume     bool   // `<rt> volume inspect <name>` succeeds
+	volumeName string // if set, volume inspect succeeds only for this name (needs volume)
 	machines   string // output of `podman machine list --format {{.Name}}`
 }
 
@@ -33,11 +34,11 @@ func writeStub(t *testing.T, dir string, name Runtime, s stub) {
 case "$1 $2" in
   "info "*) echo "info output"; exit %d ;;
   "compose version") echo %q; exit %d ;;
-  "volume inspect") exit %d ;;
+  "volume inspect") [ -z %q ] || [ "$3" = %q ] || exit 1; exit %d ;;
   "machine list") printf '%%s' %q; exit 0 ;;
 esac
 exit 0
-`, rc(s.infoFails), s.compose, rc(s.composeErr), rc(!s.volume), s.machines)
+`, rc(s.infoFails), s.compose, rc(s.composeErr), s.volumeName, s.volumeName, rc(!s.volume), s.machines)
 	if err := os.WriteFile(filepath.Join(dir, string(name)), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +185,7 @@ func TestMissingToolMessages(t *testing.T) {
 			if tc.goos != "" {
 				goos = tc.goos
 			}
-			err := CheckRuntime("myapp")
+			err := CheckRuntime("myapp", 0)
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
@@ -220,7 +221,7 @@ func TestVolumeCheck(t *testing.T) {
 		} {
 			t.Run(fmt.Sprintf("%s selected/%s", sel, tc.name), func(t *testing.T) {
 				fakeRuntimes(t, string(sel), tc.stubs)
-				err := CheckRuntime("myapp")
+				err := CheckRuntime("myapp", 0)
 				if !tc.refuse {
 					if err != nil {
 						t.Fatalf("want start, got: %v", err)
@@ -245,6 +246,46 @@ func TestVolumeCheck(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestPostgresVolume(t *testing.T) {
+	if got := PostgresVolume("myapp", 0); got != "myapp-postgres-data" {
+		t.Errorf("default: %q", got)
+	}
+	if got := PostgresVolume("myapp", 349); got != "myapp-349-postgres-data" {
+		t.Errorf("instance 349: %q", got)
+	}
+}
+
+// An instance checks its own volume: the default volume in the other runtime
+// doesn't stop it, its own volume there does.
+func TestVolumeCheckPerInstance(t *testing.T) {
+	defaultVol := healthy
+	defaultVol.volume, defaultVol.volumeName = true, "myapp-postgres-data"
+	instanceVol := healthy
+	instanceVol.volume, instanceVol.volumeName = true, "myapp-349-postgres-data"
+
+	fakeRuntimes(t, "podman", map[Runtime]stub{Podman: healthy, Docker: defaultVol})
+	if err := CheckRuntime("myapp", 349); err != nil {
+		t.Fatalf("instance 349 with only the default volume in docker: want start, got %v", err)
+	}
+	if err := CheckRuntime("myapp", 0); err == nil {
+		t.Fatal("default instance with its volume in docker: want refusal")
+	}
+
+	fakeRuntimes(t, "podman", map[Runtime]stub{Podman: healthy, Docker: instanceVol})
+	if err := CheckRuntime("myapp", 0); err != nil {
+		t.Fatalf("default instance with only instance 349's volume in docker: want start, got %v", err)
+	}
+	err := CheckRuntime("myapp", 349)
+	if err == nil {
+		t.Fatal("instance 349 with its volume in docker: want refusal")
+	}
+	for _, s := range []string{"refusing to start", "myapp-349-postgres-data", "docker volume rm myapp-349-postgres-data", "instances rm 349", "SCHEMAF_RUNTIME"} {
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("refusal should mention %q:\n%s", s, err)
 		}
 	}
 }

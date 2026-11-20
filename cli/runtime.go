@@ -101,9 +101,10 @@ func (r Runtime) env() []string {
 }
 
 // CheckRuntime verifies that the selected runtime and its compose are usable,
-// and that the project's Postgres volume exists only in the selected runtime.
-// Called at dev / run / test startup, before any container is touched.
-func CheckRuntime(project string) error {
+// and that the Postgres volume of the project's dev instance (0 = default)
+// exists only in the selected runtime. Called at dev / run / test startup,
+// before any container is touched.
+func CheckRuntime(project string, instance int) error {
 	rt, err := SelectedRuntime()
 	if err != nil {
 		return err
@@ -114,7 +115,7 @@ func CheckRuntime(project string) error {
 	if err := rt.checkCompose(); err != nil {
 		return err
 	}
-	return checkVolume(rt, project)
+	return checkVolume(rt, project, instance)
 }
 
 func (r Runtime) notInstalledError() error {
@@ -189,18 +190,25 @@ podman compose version said:
 %s`, indent(strings.TrimSpace(text)))
 }
 
-// PostgresVolume is the fixed name of a project's Postgres data volume
-// (compose.gen.yml.tmpl).
-func PostgresVolume(project string) string { return project + "-postgres-data" }
+// PostgresVolume is the fixed name of the Postgres data volume of a project's
+// dev instance (compose.gen.yml.tmpl): "<project>-postgres-data" for the
+// default instance (0, also production), "<project>-<n>-postgres-data" for
+// instance n (INSTALL.md › Parallel dev instances).
+func PostgresVolume(project string, instance int) string {
+	if instance == 0 {
+		return project + "-postgres-data"
+	}
+	return fmt.Sprintf("%s-%d-postgres-data", project, instance)
+}
 
 func (r Runtime) hasVolume(name string) bool {
 	return r.command("volume", "inspect", name).Run() == nil
 }
 
-// checkVolume refuses to start when the other runtime has the project's
-// Postgres volume. If the other runtime isn't installed or usable, it is
-// skipped. schemaf never migrates or deletes anything itself.
-func checkVolume(rt Runtime, project string) error {
+// checkVolume refuses to start when the other runtime has the Postgres volume
+// of the project's instance. If the other runtime isn't installed or usable,
+// it is skipped. schemaf never migrates or deletes anything itself.
+func checkVolume(rt Runtime, project string, instance int) error {
 	other := rt.Other()
 	if !other.installed() {
 		return nil
@@ -208,11 +216,32 @@ func checkVolume(rt Runtime, project string) error {
 	if ok, _ := other.usable(); !ok {
 		return nil
 	}
-	vol := PostgresVolume(project)
+	vol := PostgresVolume(project, instance)
 	if !other.hasVolume(vol) {
 		return nil
 	}
+	if instance != 0 {
+		return errors.New(instanceVolumeConflictMessage(rt, project, instance))
+	}
 	return errors.New(VolumeConflictMessage(rt, project, rt.hasVolume(vol)))
+}
+
+// instanceVolumeConflictMessage is the refusal for a parallel dev instance.
+// An instance's data is a working copy, so the way out is to remove it or to
+// switch runtimes; the migration recipe of VolumeConflictMessage is for the
+// default instance's (and production's) data.
+func instanceVolumeConflictMessage(rt Runtime, project string, instance int) string {
+	other := rt.Other()
+	vol := PostgresVolume(project, instance)
+	return fmt.Sprintf(`refusing to start: the Postgres volume %[3]s of instance %[4]d exists in %[2]s, but the selected container runtime is %[1]s.
+An instance's data volume may exist only in the selected runtime. Choose one:
+
+  1. Delete it from %[2]s (switch runtimes first: %[5]s, then ./schemaf.sh instances rm %[4]d),
+     or directly:
+       %[2]s volume rm %[3]s
+
+  2. Or keep using %[2]s for this project: %[5]s
+     (in your shell profile, or in ~/.%[6]s/dev/etc/env).`, rt, other, vol, instance, VolumeConflictSwitchHint(other), project)
 }
 
 // VolumeConflictMessage is the refusal printed when the runtime that is not
@@ -232,7 +261,7 @@ func VolumeConflictMessage(rt Runtime, project string, selectedHasIt bool) strin
 // VolumeConflictBoth is the extra sentence of VolumeConflictMessage when the
 // selected runtime rt has the volume as well. It starts with a newline.
 func VolumeConflictBoth(rt, project string) string {
-	return fmt.Sprintf("\n%s has its own %s as well, so it is unclear which holds the real data.", rt, PostgresVolume(project))
+	return fmt.Sprintf("\n%s has its own %s as well, so it is unclear which holds the real data.", rt, PostgresVolume(project, 0))
 }
 
 // VolumeConflictSwitchHint says how to select other, the runtime that holds the data.
@@ -268,7 +297,7 @@ The project's data volume may exist only in the selected runtime. Choose one:
      (in your shell profile, or in ~/.%[4]s/etc/env and ~/.%[4]s/dev/etc/env).
 
   3. Or, if the data is throwaway, delete it:
-       %[2]s volume rm %[3]s`, rt, other, PostgresVolume(project), project, both, switchHint)
+       %[2]s volume rm %[3]s`, rt, other, PostgresVolume(project, 0), project, both, switchHint)
 }
 
 func indent(s string) string {

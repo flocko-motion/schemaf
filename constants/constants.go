@@ -33,11 +33,15 @@ func SetPort(p int) {
 	port = p
 }
 
-// Port returns the base port (backend server).
-func Port() int { return port }
+// ConfigPort returns the base port from schemaf.toml, without the instance offset.
+func ConfigPort() int { return port }
+
+// Port returns the base port of the current instance (backend server):
+// port + 10 × instance, i.e. the configured port for the default instance.
+func Port() int { return port + InstancePortStep*instance }
 
 // FrontendPort returns the frontend dev server port (base + 2).
-func FrontendPort() int { return port + 2 }
+func FrontendPort() int { return Port() + 2 }
 
 // PostgresPort returns the Postgres host port (base + 3).
-func PostgresPort() int { return port + 3 }
+func PostgresPort() int { return Port() + 3 }

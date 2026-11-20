@@ -22,6 +22,7 @@ import (
 	"github.com/flocko-motion/schemaf/cli"
 	"github.com/flocko-motion/schemaf/constants"
 	"github.com/flocko-motion/schemaf/db"
+	"github.com/flocko-motion/schemaf/files"
 	slog "github.com/flocko-motion/schemaf/log"
 )
 
@@ -35,6 +36,12 @@ type App struct {
 
 	identityProviders []api.IdentityProvider
 	onLogin           api.OnLoginFunc
+
+	// projectRoot is the checkout (where schemaf.toml is), found before
+	// SCHEMAF_CWD moves the working directory; "" if there is none.
+	projectRoot string
+	// instanceFlag is the --instance value ("" when not given).
+	instanceFlag string
 }
 
 // New creates a new App using the project name registered via constants.SetProjectName.
@@ -105,6 +112,12 @@ func (a *App) Run() error {
 		return fmt.Errorf("SCHEMAF_DEV=%q is not a valid value: use \"1\" for development mode, or leave it unset or empty for production", v)
 	}
 
+	// The checkout holds .schemaf/instance. schemaf.sh starts the binary in
+	// the project root, so find it before moving to the caller's directory.
+	if root, err := files.ProjectRoot(); err == nil {
+		a.projectRoot = root
+	}
+
 	// Restore the caller's working directory if schemaf.sh passed it.
 	if cwd := os.Getenv("SCHEMAF_CWD"); cwd != "" {
 		if err := os.Chdir(cwd); err != nil {
@@ -123,9 +136,12 @@ func (a *App) Run() error {
 		return fmt.Errorf("init cli: %w", err)
 	}
 
+	a.addInstanceFlag(c.Root())
+
 	// Mount built-in commands.
 	c.AddSubcommands(a.serverProvider)
 	c.AddSubcommands(a.devProvider)
+	c.AddSubcommands(a.instancesProvider)
 
 	// Mount stub commands for schemaf.sh-handled operations so they
 	// appear in --help output. Running them directly tells the user
@@ -141,7 +157,74 @@ func (a *App) Run() error {
 	// Mount user-registered subcommands.
 	c.AddSubcommands(a.subcommands...)
 
+	// Every command runs on its dev instance (INSTALL.md › Parallel dev
+	// instances): it moves the ports, the DSN, the data directory and the
+	// session cookie. Resolved before cobra runs any hook, so no command,
+	// app subcommands with their own PersistentPreRun included, can miss it.
+	if err := a.resolveInstanceFor(c.Root(), os.Args[1:]); err != nil {
+		return err
+	}
+
 	return c.Execute()
+}
+
+// addInstanceFlag adds the persistent --instance flag to the root command.
+func (a *App) addInstanceFlag(root *cobra.Command) {
+	root.PersistentFlags().StringVar(&a.instanceFlag, "instance", "",
+		"dev instance: a number ≥ 1, or \"default\" (dev only; sticks to the checkout via dev)")
+}
+
+// resolveInstanceFor finds the command args name and parses its flags the way
+// Execute will, then resolves its instance (resolveInstance). A command line
+// cobra can't parse resolves nothing: Execute then reports the same error and
+// runs no command.
+func (a *App) resolveInstanceFor(root *cobra.Command, args []string) error {
+	cmd, rest, err := root.Find(args)
+	if err != nil {
+		return nil
+	}
+	if err := cmd.ParseFlags(rest); err != nil {
+		return nil
+	}
+	return a.resolveInstance(cmd)
+}
+
+// resolveInstance selects the command's dev instance from --instance and the
+// checkout's .schemaf/instance, then points the DSN at it. Outside
+// development mode (production, the server in its container) instances don't
+// exist: the file is ignored and the flag refused.
+func (a *App) resolveInstance(cmd *cobra.Command) error {
+	if !api.DevMode() {
+		if a.instanceFlag != "" {
+			return fmt.Errorf("--instance is dev-only: production (build, run, the server in its container) always runs the one production stack")
+		}
+		return nil
+	}
+	n := 0
+	if a.projectRoot != "" {
+		var err error
+		if n, err = files.ResolveInstance(a.projectRoot, a.instanceFlag, isDevCommand(cmd)); err != nil {
+			return err
+		}
+	} else if a.instanceFlag != "" {
+		return fmt.Errorf("--instance needs a checkout: no schemaf.toml found here or in any parent directory")
+	}
+	if err := constants.SetInstance(n); err != nil {
+		return err
+	}
+	if n != 0 {
+		fmt.Fprintf(os.Stderr, "instance %d\n", n)
+	}
+	if a.hasDB {
+		db.SetDSN(a.dsn())
+	}
+	return nil
+}
+
+// isDevCommand reports whether cmd is the built-in dev command, the only one
+// that may switch a checkout's instance.
+func isDevCommand(cmd *cobra.Command) bool {
+	return cmd.Name() == "dev" && cmd.Parent() != nil && !cmd.Parent().HasParent()
 }
 
 // initDB connects to the database and runs migrations.
@@ -234,8 +317,10 @@ func (a *App) serve() error {
 		go svc(a.ctx)
 	}
 
+	// A parallel dev instance always listens on its own base port; PORT (e.g.
+	// from the shared dev env file) would collide with the default instance.
 	port := os.Getenv("PORT")
-	if port == "" {
+	if port == "" || constants.Instance() != 0 {
 		port = strconv.Itoa(constants.Port())
 	}
 

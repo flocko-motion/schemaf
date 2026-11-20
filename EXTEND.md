@@ -132,7 +132,10 @@ Each service is started explicitly. Combine with commas:
 ./schemaf.sh dev db,backend               # postgres + Go server
 ./schemaf.sh dev db,backend,frontend      # postgres + Go server + Vite
 ./schemaf.sh dev all                      # everything
+./schemaf.sh dev all --instance 349       # everything, as a second stack next to the default one
 ```
+
+`--instance` runs a separate dev stack with its own ports, database and session cookie, e.g. in a git worktree; see [Parallel dev instances](INSTALL.md#parallel-dev-instances).
 
 In [development mode](#development-mode), the Go server reverse-proxies all non-API requests to the Vite dev server.
 
@@ -348,7 +351,7 @@ Gate dev-only behaviour on `DevMode()` — endpoints that create accounts withou
 schemaf's own dev behaviour follows the same mode:
 
 - **Frontend**: proxied to the Vite dev server in development, served from the embedded build otherwise (see [Frontend](#frontend)).
-- **Directories**: config and data live in `~/.<name>/dev/etc/` and `~/.<name>/dev/var/` in development, `~/.<name>/etc/` and `~/.<name>/var/` otherwise.
+- **Directories**: config and data live in `~/.<name>/dev/etc/` and `~/.<name>/dev/var/` in development, `~/.<name>/etc/` and `~/.<name>/var/` otherwise. A [parallel dev instance](INSTALL.md#parallel-dev-instances) `n` keeps its data in `~/.<name>/dev/instances/<n>/var/` and shares `~/.<name>/dev/etc/`.
 - **Session cookie**: `Secure` everywhere except development (see [Sessions](#sessions)).
 - **`auth token`**: refuses to run outside development (see [Getting a token in development](#getting-a-token-in-development)).
 
@@ -966,7 +969,7 @@ A session is what a successful login creates. schemaf stores it in Postgres (`_s
 - **Token lifetime**: 15 minutes. **Session lifetime**: 30 days from login. Both are framework constants.
 - **Every authenticated request checks the session**: not revoked, not expired, and not ended by a subject-wide revocation. Revocation is immediate.
 - **Renewal**: when a cookie-authenticated request carries a token past half its lifetime, schemaf sets a fresh cookie for the same session. An expired token in the cookie is renewed the same way, as long as its session is still live, so a browser stays signed in for the whole session even after idling. Bearer tokens are not renewed automatically: Bearer clients call `POST /api/auth/refresh` before their token expires; an expired Bearer token gives 401.
-- **The cookie**: named `<name>_session` after your project (`myapp_session`), so apps on different localhost ports don't overwrite each other's cookie. Host-only (no `Domain`), `HttpOnly`, `SameSite=Lax`, `Path=/`, lasting until the session expires, and `Secure` outside [development mode](#development-mode). `Lax` rather than `Strict` so the cookie is sent when another site redirects the browser to you, as in an OIDC `/authorize` redirect.
+- **The cookie**: named `<name>_session` after your project (`myapp_session`), so apps on different localhost ports don't overwrite each other's cookie. A [parallel dev instance](INSTALL.md#parallel-dev-instances) `n` uses `<name>-<n>_session` (`myapp-349_session`), so two instances of one app don't sign each other out; the OpenAPI spec documents the default name. Host-only (no `Domain`), `HttpOnly`, `SameSite=Lax`, `Path=/`, lasting until the session expires, and `Secure` outside [development mode](#development-mode). `Lax` rather than `Strict` so the cookie is sent when another site redirects the browser to you, as in an OIDC `/authorize` redirect.
 - **CSRF protection**: a cookie-authenticated request with any method other than `GET` or `HEAD` must carry an `Origin` header matching the request's host (`Host`, or `X-Forwarded-Host` behind a proxy). A mismatched **or missing** `Origin` is rejected with 403. Browsers send `Origin` on every such request; non-browser clients should use Bearer, which is exempt.
 - **Login CSRF protection**: `POST /api/auth/{provider}/login` (every provider, built-in and custom) is rejected with 403, and no cookie is set, when it carries an `Origin` header that doesn't match the request's host (same rule as above). Otherwise a malicious site could post the attacker's own credential and sign the visitor in as the attacker. A login without `Origin` (curl, server-to-server) is allowed, since it can't be a cross-site browser request.
 - **Cleanup**: the server (not CLI commands) deletes sessions that expired or were revoked more than 7 days ago, at start and then daily. Both values are framework constants. Subject-wide revocations (`_schemaf_revocations`) are kept.

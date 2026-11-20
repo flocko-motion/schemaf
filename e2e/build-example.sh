@@ -87,6 +87,9 @@ step "compile"
 step "run the test stack under ${RUNTIME} (ephemeral postgres + tests)"
 ./schemaf.sh test
 
+step "parallel dev instances: the default and instance 1 side by side"
+"$SCRIPT_DIR/instances.sh" "$DIR"
+
 step "deploy as two users: build an artifact, load it as a second user, run, upgrade, roll back"
 "$SCRIPT_DIR/deploy.sh" "$DIR"
 
