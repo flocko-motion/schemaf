@@ -380,6 +380,42 @@ The Go doc comment on the endpoint struct becomes the OpenAPI summary. The first
 type CreateUserEndpoint struct{}
 ```
 
+**Request and response types** can be declared anywhere: in `go/api/`, in another package of your module, or in a dependency, directly or through an alias. Keep your domain types in their own package and share them between the API, the database layer and CLIs:
+
+```go
+// go/api/users.go
+type UserResp = obj.User // alias to a type in your obj package
+
+type ListUsersResp struct {
+    Users []obj.User `json:"users"`
+}
+```
+
+Codegen type-checks `go/api/` (its `*.gen.go` files ignored) and builds each schema from the type's JSON encoding, as `encoding/json` produces it:
+
+| Go | OpenAPI |
+|---|---|
+| named struct | `$ref` to a schema named after the type, e.g. `obj.User` → `User` |
+| field | property named by its `json` tag, or by the Go field name without one; `json:"-"` and unexported fields are left out |
+| `omitempty`/`omitzero` or pointer field | optional; every other field is required |
+| embedded struct without a `json` name | its fields are flattened into the outer object |
+| `string`, `bool`, integers, floats | `string`, `boolean`, `integer`, `number` |
+| `time.Time`, `uuid.UUID` (`github.com/google/uuid`) | `string` with format `date-time`, `uuid` |
+| `[]byte` | `string` with format `byte` (base64) |
+| slice, array / `map[K]V` | `array` / `object` with `additionalProperties` |
+| named non-struct type, e.g. `type Role string` | the underlying type |
+| type implementing `encoding.TextMarshaler`; field with `json:",string"` | `string` |
+| `any`, interface, `json.RawMessage` | any JSON value |
+
+A request has a body (POST, PUT, PATCH) when its type has at least one JSON field. A response whose type is a struct without JSON fields has no content.
+
+Codegen is strict, and each of these is a codegen error that names the type:
+
+- two types with the same name from different packages, e.g. `api.Address` and `obj.Address`: rename one
+- a type implementing `json.Marshaler` (other than the ones in the table): codegen can't know its JSON shape
+- a type without a JSON shape (channel, function) or a generic type
+- a type error in `go/api/` or a package it imports
+
 **What codegen does:**
 - Scans all structs in `go/api/` that implement the endpoint interface
 - Generates `go/api/endpoints.gen.go` with `api.Provider` (handler registration)

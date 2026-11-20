@@ -20,7 +20,7 @@ type staticSpec struct {
 func writeAndReadSpec(t *testing.T, endpoints []endpointInfo) staticSpec {
 	t.Helper()
 	t.Chdir(t.TempDir())
-	if err := writeOpenAPIJSON("myapp", endpoints, map[string]structInfo{}); err != nil {
+	if err := writeOpenAPIJSON("myapp", endpoints, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(openapiJSONOut)
@@ -115,13 +115,13 @@ func TestOpenAPIErrorResponses(t *testing.T) {
 // schema is a codegen error, never a silent overwrite.
 func TestOpenAPIReservedSchemaName(t *testing.T) {
 	t.Chdir(t.TempDir())
-	structs := map[string]structInfo{
-		"Error":  {Name: "Error", Fields: []fieldInfo{{JSONName: "msg", GoType: "string", TSType: "string"}}},
-		"GetReq": {Name: "GetReq"},
+	schemas := map[string]any{
+		"Error": map[string]any{"type": "object", "properties": map[string]any{"msg": map[string]any{"type": "string"}}},
 	}
 	err := writeOpenAPIJSON("myapp", []endpointInfo{
-		{StructName: "G", Method: "GET", Path: "/api/g", Auth: api.AuthNone, ReqType: "GetReq", RespType: "Error"},
-	}, structs)
+		{StructName: "G", Method: "GET", Path: "/api/g", Auth: api.AuthNone, ReqType: "GetReq", RespType: "Error",
+			RespSchema: map[string]any{"$ref": "#/components/schemas/Error"}},
+	}, schemas)
 	if err == nil || !strings.Contains(err.Error(), `"Error"`) || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("err = %v, want a reserved-name error naming Error", err)
 	}

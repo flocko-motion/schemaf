@@ -57,10 +57,21 @@ func TestEmptyInputsEmptyProject(t *testing.T) {
 }
 
 func TestEmptyInputsFullProject(t *testing.T) {
+	// Codegen type-checks go/api, so the module must resolve: schemaf comes
+	// from this checkout, offline.
+	checkout, err := filepath.Abs(schemafCheckout(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOFLAGS", "-mod=mod")
+	t.Setenv("GOPROXY", "off")
+	t.Setenv("GOWORK", "off")
 	t.Chdir(t.TempDir())
 	writeFiles(t, map[string]string{
-		"schemaf.toml":                   "title = \"My App\"\nname = \"myapp\"\n",
-		"go/go.mod":                      "module myapp\n\ngo 1.24\n\nrequire github.com/flocko-motion/schemaf v1.11.0\n",
+		"schemaf.toml": "title = \"My App\"\nname = \"myapp\"\n",
+		"go/go.mod": "module myapp\n\ngo 1.25.0\n\nrequire github.com/flocko-motion/schemaf v1.11.0\n\n" +
+			"replace github.com/flocko-motion/schemaf => " + checkout + "\n",
+		"go/go.sum":                      readFile(t, filepath.Join(checkout, "go.sum")),
 		"go/db/migrations/0001_init.sql": "CREATE TABLE t (id int);\n",
 		"go/db/queries/t.sql":            "-- name: ListT :many\nSELECT * FROM t;\n",
 		"go/api/ping.go": `package api
