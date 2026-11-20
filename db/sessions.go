@@ -9,6 +9,17 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	slog "github.com/flocko-motion/schemaf/log"
+)
+
+// Framework constants for session cleanup. Not configurable.
+const (
+	// SessionCleanupGrace is how long an expired or revoked session is kept
+	// before the cleanup deletes it.
+	SessionCleanupGrace = 7 * 24 * time.Hour
+	// SessionCleanupInterval is how often the server runs the cleanup.
+	SessionCleanupInterval = 24 * time.Hour
 )
 
 // Session is a row of _schemaf_sessions, joined with the subject's
@@ -125,4 +136,33 @@ func (s *SessionStore) RevokeSubject(ctx context.Context, subject string, at tim
 		return fmt.Errorf("revoking subject: %w", err)
 	}
 	return nil
+}
+
+// DeleteStaleSessions deletes sessions that expired or were revoked before
+// cutoff and returns how many it deleted. _schemaf_revocations is untouched.
+func (s *SessionStore) DeleteStaleSessions(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM _schemaf_sessions WHERE expires_at < $1 OR revoked_at < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("deleting stale sessions: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// RunSessionCleanup deletes stale sessions once at start and then every
+// SessionCleanupInterval, until ctx is done. Run by the server only.
+func (s *SessionStore) RunSessionCleanup(ctx context.Context) {
+	for {
+		n, err := s.DeleteStaleSessions(ctx, time.Now().Add(-SessionCleanupGrace))
+		if err != nil && ctx.Err() == nil {
+			slog.Error("session cleanup failed", "error", err)
+		} else if n > 0 {
+			slog.Info("session cleanup", "deleted", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(SessionCleanupInterval):
+		}
+	}
 }

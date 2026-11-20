@@ -199,7 +199,9 @@ func (a *App) serve() error {
 		if err := a.initAuth(); err != nil {
 			return fmt.Errorf("auth init: %w", err)
 		}
-		api.InitSessions(db.NewSessionStore(db.DB()))
+		sessions := db.NewSessionStore(db.DB())
+		api.InitSessions(sessions)
+		go sessions.RunSessionCleanup(a.ctx)
 	}
 	api.SetIdentityProviders(providers)
 	api.SetOnLogin(a.onLogin)

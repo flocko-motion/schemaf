@@ -202,7 +202,7 @@ func TestFromEnv(t *testing.T) {
 	}
 
 	t.Run("both set: active", func(t *testing.T) {
-		ps, err := FromEnv(env(map[string]string{"PUBLIC_AUTH0_DOMAIN": "https://x.eu.auth0.com/", "PUBLIC_AUTH0_CLIENT_ID": "abc"}))
+		ps, err := FromEnv(env(map[string]string{"PUBLIC_AUTH0_DOMAIN": "x.eu.auth0.com", "PUBLIC_AUTH0_CLIENT_ID": "abc"}))
 		if err != nil || len(ps) != 1 {
 			t.Fatalf("got %v, %v", ps, err)
 		}
@@ -211,4 +211,21 @@ func TestFromEnv(t *testing.T) {
 			t.Errorf("provider = %+v", p)
 		}
 	})
+
+	for _, domain := range []string{
+		"https://x.eu.auth0.com/",
+		"https://x.eu.auth0.com",
+		"http://x.eu.auth0.com",
+		"x.eu.auth0.com/",
+		"x.eu.auth0.com/path",
+		"x.eu.auth0.com?x=1",
+		"x.eu.auth0.com#frag",
+	} {
+		t.Run("domain not bare: error "+domain, func(t *testing.T) {
+			_, err := FromEnv(env(map[string]string{"PUBLIC_AUTH0_DOMAIN": domain, "PUBLIC_AUTH0_CLIENT_ID": "abc"}))
+			if err == nil || !strings.Contains(err.Error(), "use PUBLIC_AUTH0_DOMAIN=x.eu.auth0.com") {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
 }

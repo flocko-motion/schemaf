@@ -306,6 +306,30 @@ func TestOriginCheck(t *testing.T) {
 	})
 }
 
+func TestLoginOriginCheck(t *testing.T) {
+	e := newAuthEnv(t)
+	cases := []struct {
+		name   string
+		origin string
+		want   int
+	}{
+		{"cross origin", "https://evil.example", http.StatusForbidden},
+		{"same origin", e.srv.URL, http.StatusOK},
+		{"no origin", "", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := e.do("POST", "/api/auth/fake/login", reqOpts{origin: tc.origin, body: `{"user":"alice"}`})
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status %d, want %d", resp.StatusCode, tc.want)
+			}
+			if got := sessionCookie(resp) != nil; got != (tc.want == http.StatusOK) {
+				t.Errorf("session cookie set = %v", got)
+			}
+		})
+	}
+}
+
 func TestRenewal(t *testing.T) {
 	e := newAuthEnv(t)
 	lr, c := e.login("alice")

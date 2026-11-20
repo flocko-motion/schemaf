@@ -223,6 +223,14 @@ const maxLoginBody = 1 << 20
 // loginHandler serves POST /api/auth/{provider}/login.
 func loginHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Login CSRF: a cross-site page could post the attacker's own
+		// credential and sign the visitor in as the attacker. A browser always
+		// sends Origin on cross-site POSTs; requests without it (curl,
+		// server-to-server) can't be cross-site browser requests.
+		if r.Header.Get("Origin") != "" && !sameOrigin(r) {
+			writeJSONError(w, http.StatusForbidden, "cross-origin login rejected: Origin header not matching the host")
+			return
+		}
 		name := r.PathValue("provider")
 		p := findProvider(name)
 		if p == nil {

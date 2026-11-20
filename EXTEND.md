@@ -517,7 +517,7 @@ PUBLIC_AUTH0_DOMAIN=myapp-dev.eu.auth0.com
 PUBLIC_AUTH0_CLIENT_ID=Xb4tq0LgYxZ1Ux8Gm3aP7cVh2nKw9sRd
 ```
 
-- `PUBLIC_AUTH0_DOMAIN` is the bare domain (the server strips a leading `https://` or trailing `/`; the frontend gets the value as written). If you use an Auth0 custom domain, use that.
+- `PUBLIC_AUTH0_DOMAIN` is the bare domain: no scheme, no path, no trailing slash (`myapp.eu.auth0.com`, not `https://myapp.eu.auth0.com/`). The Auth0 SPA SDK adds `https://` itself, so the server refuses to start on any other form. If you use an Auth0 custom domain, use that.
 - The values are **per instance**: each deployment reads its own env file, so two deployments can use two Auth0 applications (or tenants), or one can leave Auth0 off.
 - Both values are public: they ship in every Auth0 SPA anyway. `/api/config` sends them to the browser.
 - `schemaf.sh` loads the env file (`dev` → `dev/etc/env`, `run` → `etc/env`), and the generated `compose.gen.yml` passes the production env file to the backend container.
@@ -608,6 +608,7 @@ await auth0.logout({ logoutParams: { returnTo: window.location.origin } });
 | `403 auth0: oidc: expected audience "…" got ["…"]` | The frontend signed in with a different application than `PUBLIC_AUTH0_CLIENT_ID`. Use the same Client ID in both. |
 | `503 auth0: OIDC discovery for https://…/ failed` | The server can't reach `https://<PUBLIC_AUTH0_DOMAIN>/.well-known/openid-configuration`: a typo in the domain, or no outbound network. Discovery runs on the first login and is retried on the next one, so a temporary outage does not stop the server from starting. |
 | Server won't start: `auth0: PUBLIC_AUTH0_DOMAIN is set but PUBLIC_AUTH0_CLIENT_ID is not` | Only one of the two variables is set. Set both, or neither. |
+| Server won't start: `auth0: PUBLIC_AUTH0_DOMAIN must be the bare domain … use PUBLIC_AUTH0_DOMAIN=myapp.eu.auth0.com` | The value has a scheme, a path or a trailing slash. Use the form the message shows. |
 
 ### Writing your own provider
 
@@ -644,6 +645,8 @@ A session is what a successful login creates. schemaf stores it in Postgres (`_s
 - **Renewal**: when a cookie-authenticated request carries a token past half its lifetime, schemaf sets a fresh cookie for the same session. An expired token in the cookie is renewed the same way, as long as its session is still live, so a browser stays signed in for the whole session even after idling. Bearer tokens are not renewed automatically: Bearer clients call `POST /api/auth/refresh` before their token expires; an expired Bearer token gives 401.
 - **The cookie**: named `<name>_session` after your project (`myapp_session`), so apps on different localhost ports don't overwrite each other's cookie. Host-only (no `Domain`), `HttpOnly`, `SameSite=Lax`, `Path=/`, lasting until the session expires, and `Secure` in production (`SCHEMAF_ENV=docker`). `Lax` rather than `Strict` so the cookie is sent when another site redirects the browser to you, as in an OIDC `/authorize` redirect.
 - **CSRF protection**: a cookie-authenticated request with any method other than `GET` or `HEAD` must carry an `Origin` header matching the request's host (`Host`, or `X-Forwarded-Host` behind a proxy). A mismatched **or missing** `Origin` is rejected with 403. Browsers send `Origin` on every such request; non-browser clients should use Bearer, which is exempt.
+- **Login CSRF protection**: `POST /api/auth/{provider}/login` (every provider, built-in and custom) is rejected with 403, and no cookie is set, when it carries an `Origin` header that doesn't match the request's host (same rule as above). Otherwise a malicious site could post the attacker's own credential and sign the visitor in as the attacker. A login without `Origin` (curl, server-to-server) is allowed, since it can't be a cross-site browser request.
+- **Cleanup**: the server (not CLI commands) deletes sessions that expired or were revoked more than 7 days ago, at start and then daily. Both values are framework constants. Subject-wide revocations (`_schemaf_revocations`) are kept.
 
 Built-in routes:
 
