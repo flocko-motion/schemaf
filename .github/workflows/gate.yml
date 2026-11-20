@@ -1,0 +1,116 @@
+# The CI gate — the reference environment for schemaf (EXTEND.md › Testing the
+# framework: the CI gate). Two parallel jobs, one per container runtime, each
+# running the full suite (`make test all`) against the PR's head commit. The
+# check `gate` is green only if both are; branch protection on main requires it.
+#
+# The e2e scripts are the single source of truth: this workflow only provisions
+# the runner (compose provider, two real Unix users) and calls them.
+name: gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: # gh workflow run gate --ref <branch>
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: ${{ matrix.runtime }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [podman, docker]
+    env:
+      # What CI tests: the PR's head commit (manual run: the dispatched ref's
+      # head), never refs/pull/<n>/merge, which the Go module proxy can't fetch.
+      GATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SCHEMAF_RUNTIME: ${{ matrix.runtime }}
+      E2E_REFERENCE: "1"
+      E2E_BUILD_USER: schemaf-build
+      E2E_RUN_USER: schemaf-run
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.GATE_SHA }}
+          persist-credentials: false
+
+      # Caches: downloads only. Never container storage, images, volumes or
+      # database state — every run starts from a clean slate.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      # No package-lock.json in this repo: what a new project installs is
+      # decided by the scaffold's package.json template.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('cli/cmd/codegen/scaffold/package.json.tmpl') }}
+
+      - name: Container runtimes
+        run: |
+          set -euo pipefail
+          # podman compose must hand off to docker-compose (Compose v2). The
+          # image ships it as Docker's CLI plugin; put it on PATH for podman.
+          plugin=/usr/libexec/docker/cli-plugins/docker-compose
+          if ! command -v docker-compose >/dev/null; then
+            [ -x "$plugin" ] || { echo "::error::docker-compose is neither on PATH nor at $plugin"; exit 1; }
+            sudo ln -s "$plugin" /usr/local/bin/docker-compose
+          fi
+          podman version
+          docker version
+          for rt in podman docker; do
+            out=$($rt compose version 2>&1) || true
+            case "$out" in
+              *"Docker Compose version"*) echo "$rt compose: $out" ;;
+              *) echo "::error::$rt compose is not docker-compose: $out"; exit 1 ;;
+            esac
+          done
+
+      - name: Two real users (build, run)
+        run: |
+          set -euo pipefail
+          for u in "$E2E_BUILD_USER" "$E2E_RUN_USER"; do
+            sudo useradd --create-home --shell /bin/bash "$u"
+            # rootless podman needs subordinate IDs and a runtime dir (lingering)
+            grep -q "^$u:" /etc/subuid || { echo "::error::useradd gave $u no /etc/subuid range"; exit 1; }
+            grep -q "^$u:" /etc/subgid || { echo "::error::useradd gave $u no /etc/subgid range"; exit 1; }
+            sudo loginctl enable-linger "$u"
+            uid=$(id -u "$u")
+            for _ in $(seq 1 30); do [ -d "/run/user/$uid" ] && break; sleep 1; done
+            [ -d "/run/user/$uid" ] || { echo "::error::/run/user/$uid did not appear after enable-linger $u"; exit 1; }
+            # under Docker both users share the machine's daemon
+            if [ "$SCHEMAF_RUNTIME" = docker ]; then sudo usermod -aG docker "$u"; fi
+          done
+
+      - name: make test all (unit, db, onboarding e2e with two-user deploy and data-volume check)
+        run: make test all REF="$GATE_SHA"
+
+  gate:
+    name: gate
+    needs: e2e
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: both runtimes green
+        env:
+          RESULT: ${{ needs.e2e.result }}
+        run: |
+          if [ "$RESULT" != success ]; then
+            echo "::error::the podman and docker jobs must both pass (result: $RESULT)"
+            exit 1
+          fi
+          echo "podman and docker jobs passed"

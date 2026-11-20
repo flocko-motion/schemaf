@@ -1681,25 +1681,82 @@ export async function testClockTime(baseUrl: string) { ... }
 
 The generated subtest calls `t.Skip(...)` with that message. A file whose tests are all skipped starts no instance.
 
-### Testing the framework under both runtimes
+### Testing the framework: the CI gate
 
-For work on schemaf itself (`make test <unit|db|e2e|all>`): `e2e/db-test.sh` and `e2e/build-example.sh` follow `SCHEMAF_RUNTIME` like everything else (default podman), and the release gate (`make release`) runs under podman only. Nothing beyond `make release` is required. `schemaftest`'s own tests start containers, so they skip unless `SCHEMAF_CONTAINER_TESTS=1`; `e2e/db-test.sh` (`make test db`) sets it and runs them, and a project's `./schemaf.sh test`, which also runs the framework's tests, stays fast. To try the Docker path anyway:
+For work on schemaf itself. `make test <unit|db|e2e|all>` runs the test layers locally; `e2e/db-test.sh` and `e2e/build-example.sh` follow `SCHEMAF_RUNTIME` like everything else (default podman). The reference, though, is the **CI gate**: the GitHub Actions workflow `.github/workflows/gate.yml`, whose check is named `gate`. `schemaftest`'s own tests start containers, so they skip unless `SCHEMAF_CONTAINER_TESTS=1`; `e2e/db-test.sh` (`make test db`) sets it and runs them, and a project's `./schemaf.sh test`, which also runs the framework's tests, stays fast.
+
+**Where**: the pinned Linux amd64 runner image `ubuntu-24.04`, the kind of machine schemaf apps run on: rootless podman runs natively, not in a VM, and nothing is left over from earlier runs.
+
+**What**: two parallel jobs, `podman` and `docker`. Each sets `SCHEMAF_RUNTIME` to its runtime and runs the full sequence (`make test all`):
+
+1. unit tests (`go test ./...`) and the DB integration tests (`e2e/db-test.sh`), which start their containers through the selected runtime too;
+2. the onboarding e2e (`e2e/build-example.sh <head sha>`), which also runs
+   - the two-user deployment (`e2e/deploy.sh`) with **two real Unix users** the workflow creates (`useradd`): the build user clones the project and builds the artifact, the run user loads, runs, upgrades and rolls back. Under podman each has its own rootless store, so the image really crosses over as a file; under Docker both use the machine's one daemon, so the builder's image is removed before each load;
+   - the data-volume check (`e2e/volumes.sh`) with real volumes: the other runtime holds `<name>-postgres-data` → `test` and `run` refuse; both runtimes hold it → they refuse; only the selected one → `test` starts. The `podman` job covers "Docker has it", the `docker` job "podman has it".
+
+`gate` is green only if both jobs are.
+
+**When**: on pull requests (opened, synchronized, reopened) and manually, for any pushed branch:
 
 ```bash
-SCHEMAF_RUNTIME=docker make test e2e
+gh workflow run gate --ref <branch>
+gh run watch                      # follow it
 ```
 
-### The release gate and e2e refs
+It doesn't run on plain pushes to branches.
 
-For work on schemaf itself: `make release` gates every release with the from-scratch onboarding e2e (`e2e/build-example.sh <ref>`), which creates a project with a single `go run github.com/flocko-motion/schemaf/cmd/schemaf@<ref> init <name>` and builds, tests and deploys it. The gate runs it against the commit it is about to release, by its full hash (`"$(git rev-parse HEAD)"`), after pushing that commit. It creates no prerelease tags, so a failed gate leaves nothing behind; the only tag a release creates is `vX.Y.Z`.
+**Which commit**: the PR's head commit (for a manual run, the head of the dispatched branch), passed to `build-example.sh` by its full hash. GitHub's `refs/pull/<n>/merge` commit is never tested: the Go module proxy can't fetch it. Because `main` only accepts up-to-date branches (below), the head commit is exactly what lands on `main`.
 
-Which refs `build-example.sh` accepts, and how Go fetches them:
+**Caches**: downloads only — the Go module and build caches (keyed by `go.sum`) and the npm cache (keyed by `cli/cmd/codegen/scaffold/package.json.tmpl`, which decides what a new project installs; the repository has no `package-lock.json`). Never container volumes, the project's images, podman/Docker storage, database state, or anything else from a previous run.
+
+**The scripts are the single source of truth.** The workflow only provisions the runner (the two users, the compose provider) and calls `make test all`. It sets:
+
+| Variable | Effect |
+|---|---|
+| `E2E_REFERENCE=1` | this is the reference environment: a check that can't run fails instead of being skipped (e.g. `volumes.sh` without the other runtime, `deploy.sh` without two real users) |
+| `E2E_BUILD_USER`, `E2E_RUN_USER` | `deploy.sh` builds as the one and runs as the other, through `sudo`, instead of simulating the second user with its own `HOME` |
+
+Without them (a local run), `deploy.sh` simulates the second user — under podman on Linux with its own rootless store under that `HOME` — and `volumes.sh` skips loudly when the other runtime isn't usable. A local `make test all` is for debugging, e.g. on macOS; Docker locally is optional: `SCHEMAF_RUNTIME=docker make test e2e`.
+
+**One-time repository setting (maintainer).** In the repository settings, a branch protection rule for `main` (Settings › Branches › Add rule, pattern `main`) with:
+
+- **Require status checks to pass before merging** → required check: `gate` (source: GitHub Actions);
+- **Require branches to be up to date before merging**.
+
+Then nothing — not `gh pr merge` from a script, not a click in the web UI — merges around the gate, and every gate run tests exactly what lands on `main`. In practice: after each merge, the other open branches must merge `origin/main` (and pass the gate again) before they can merge.
+
+### Merging and releasing the framework
+
+Not every merge is a release: a PR another branch needs can be merged without releasing. So there are two commands.
+
+**`make merge`** — per PR, from the feature branch:
+
+1. Refuses on `main`, with a dirty working tree, with no commits beyond `main`, or when the branch doesn't contain `origin/main` (`branch is behind main — run: git merge origin/main, then make merge again`).
+2. Fast local checks: `go build ./...`, `go vet ./...`, `go test ./...`. A failure stops it before anything is pushed.
+3. Pushes the branch and opens the PR, or reuses the open one. This starts the CI gate.
+4. Waits for the `gate` run of the PR's head commit, found by workflow and head SHA. No run, or more than one, is a loud error. The wait is limited to 45 minutes; a timeout counts as a failure.
+5. Green → merges the PR with a merge commit (`gh pr merge --merge`, honoring the required check, and only if the PR's head is still the commit that passed). Red or timeout → merges nothing and prints the CI run URL. The PR stays open with its red check; push a fix to the branch and run `make merge` again.
+
+No local onboarding e2e, no tag. Issues named in `Closes #<n>` trailers go into the PR body and are checked to be closed after the merge.
+
+**`make release <major|minor|patch>`** — per batch, releases what is on `main`:
+
+1. Refuses unless HEAD equals `origin/main` (after a fetch), and when nothing landed since the last release tag.
+2. Fast local checks (as above).
+3. **On macOS**, the full local gate against that commit, by its full hash: `make test all` under podman (unit, `e2e/db-test.sh`, the onboarding e2e). It's the layer CI doesn't give: CI doesn't cover macOS. On Linux, step 2 is enough locally: the commit already passed CI as part of its up-to-date PR.
+4. Green → tags `vX.Y.Z`, pushes the tag, creates the GitHub release, and closes the issues of the released range that are still open (`Released in vX.Y.Z.`). Red → tags nothing; a macOS-only break is fixed by a PR (`make merge`), then `make release` again.
+
+No PR and no merge in `make release`, and no prerelease tags: the only tag a release creates is `vX.Y.Z`.
+
+### e2e refs
+
+The onboarding e2e (`e2e/build-example.sh <ref>`) creates a project with a single `go run github.com/flocko-motion/schemaf/cmd/schemaf@<ref> init <name>` and builds, tests and deploys it. The gates run it against a pushed commit, by its full hash. Which refs it accepts, and how Go fetches them:
 
 | `<ref>` | Example | Go module proxy |
 |---|---|---|
 | release tag (default: the latest) | `v1.16.0` | used for everything, no override |
 | full 40-character commit hash | `e74a68e984ad6e9f58efe3340aec25f1a7ddb5a0` | used for everything, no override: Go resolves the hash to a pseudo-version, and a commit is immutable, so the proxy can't serve a stale one |
-| moving ref: a branch, the `e2e` tag | `main`, `e2e` | `GOPRIVATE=github.com/flocko-motion/schemaf`: only schemaf bypasses the proxy and sumdb; all other dependencies still come through the proxy |
+| moving ref: a branch or tag | `main` | `GOPRIVATE=github.com/flocko-motion/schemaf`: only schemaf bypasses the proxy and sumdb; all other dependencies still come through the proxy |
 
 Anything else (an abbreviated hash, a name that is no branch or tag on the remote, a name that is both) is refused. The script prints the mode it uses (`ref '<ref>' is …`).
 

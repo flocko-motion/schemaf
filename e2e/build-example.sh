@@ -12,11 +12,14 @@
 #   e2e/build-example.sh v1.8.1         # a specific release tag
 #   e2e/build-example.sh "$(git rev-parse HEAD)"
 #                                       # a pushed commit, by its full 40-char hash
-#                                       #   (what the release gate runs)
-#   e2e/build-example.sh e2e            # a moving ref: the non-semver 'e2e' tag
-#   e2e/build-example.sh main           #   or a branch
-#                                       #   (Go pins either to a commit pseudo-version)
+#                                       #   (what the CI gate and make release run)
+#   e2e/build-example.sh main           # a moving ref: a branch or tag
+#                                       #   (Go pins it to a commit pseudo-version)
 #   KEEP=1 e2e/build-example.sh ...     # keep the /tmp project on success
+#
+# In the CI gate (EXTEND.md › Testing the framework: the CI gate):
+#   E2E_REFERENCE=1                     # a check that can't run fails, never skips
+#   E2E_BUILD_USER=… E2E_RUN_USER=…     # deploy.sh uses two real Unix users
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,7 +60,7 @@ fi
 # How Go may fetch schemaf@<ref>:
 #   - release tag (vX.Y.Z) or full 40-char commit hash: immutable, so the module
 #     proxy can't serve a stale version — no override, everything via the proxy.
-#   - moving ref (a branch, the 'e2e' tag): the proxy may serve what it resolved
+#   - moving ref (a branch or tag): the proxy may serve what it resolved
 #     earlier, so schemaf — and ONLY schemaf — bypasses proxy+sumdb via GOPRIVATE.
 #     All other dependencies still come through the proxy.
 # Anything else is refused: an abbreviated hash, an unknown name, or a name that
@@ -166,6 +169,9 @@ step "parallel dev instances: the default and instance 1 side by side"
 
 step "deploy as two users: build an artifact, load it as a second user, run, upgrade, roll back"
 "$SCRIPT_DIR/deploy.sh" "$DIR"
+
+step "data volume: refused while the other runtime holds it, starts when only ${RUNTIME} does"
+"$SCRIPT_DIR/volumes.sh" "$DIR"
 
 say "✓ SUCCESS — onboarded '${NAME}' from ${SCHEMAF_CMD}@${REF} with a single command"
 if [ "${KEEP:-0}" = 1 ]; then
