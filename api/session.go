@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/flocko-motion/schemaf/constants"
@@ -163,7 +162,8 @@ func cookieName() string {
 	return SessionCookieName("schemaf")
 }
 
-func secureCookies() bool { return os.Getenv("SCHEMAF_ENV") == "docker" }
+// secureCookies: session cookies carry Secure everywhere except development mode.
+func secureCookies() bool { return !DevMode() }
 
 func newSessionID() (string, error) {
 	b := make([]byte, 16)

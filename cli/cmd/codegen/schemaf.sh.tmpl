@@ -58,9 +58,22 @@ _die() {
 }
 
 # Load env vars from a file. Only sets variables not already in the environment.
+# Development mode belongs to schemaf.sh (EXTEND.md › Development mode): an env
+# file that sets SCHEMAF_DEV, to any value, stops schemaf.sh before it starts
+# anything, rather than being silently overridden.
+_schemaf_refuse_dev_mode_in() {
+  local envfile="$1" key val
+  [ -f "$envfile" ] || return 0
+  while IFS='=' read -r key val; do
+    key=$(echo "$key" | xargs)
+    [ "$key" != SCHEMAF_DEV ] || _die "$envfile sets SCHEMAF_DEV, but development mode is not configured in env files: schemaf.sh sets SCHEMAF_DEV=1 for every command except build and run (EXTEND.md › Development mode). Remove the SCHEMAF_DEV line from $envfile."
+  done < "$envfile"
+}
+
 _schemaf_load_env() {
   local envfile="$1" key val
   [ -f "$envfile" ] || return 0
+  _schemaf_refuse_dev_mode_in "$envfile"
   while IFS='=' read -r key val; do
     key=$(echo "$key" | xargs)
     [ -z "$key" ] || [[ "$key" == \#* ]] && continue
@@ -76,6 +89,7 @@ _schemaf_load_env() {
 # (npm install) and must never see the other variables (INSTALL.md › Secrets).
 _schemaf_env_runtime() {
   local envfile="$1" key val
+  _schemaf_refuse_dev_mode_in "$envfile"
   [ -z "${SCHEMAF_RUNTIME:-}" ] || return 0
   [ -f "$envfile" ] || return 0
   while IFS='=' read -r key val; do
@@ -662,6 +676,7 @@ _schemaf_runside() {
   local cmd="$1" b tty
   shift
   _schemaf_load_env "$USER_DIR/etc/env"
+  unset SCHEMAF_DEV # the run side is production, even if the caller's shell exports it
   case "$cmd" in
     run)
       [ "${1:-}" = --image ] && [ $# -ge 2 ] || _die "on the run side, run needs a tag: schemaf.sh run --image <tag> (loaded tags: schemaf.sh image ls)"
@@ -742,9 +757,15 @@ echo "schemaf ${SCHEMAF_VER} — ${PROJECT_NAME}" >&2
 
 # Env files: build reads only SCHEMAF_RUNTIME (see _schemaf_env_runtime), run
 # loads the production env after building, everything else the dev env.
+# Development mode goes with the dev env file (EXTEND.md › Development mode):
+# SCHEMAF_DEV=1 for every command that loads it, never for build or run, whatever
+# the caller's shell exports. Env files may not set it (_schemaf_refuse_dev_mode_in).
 case "$CMD" in
-  build|run) ;;
-  *) _schemaf_load_env "$USER_DIR/dev/etc/env" ;;
+  build|run) unset SCHEMAF_DEV ;;
+  *)
+    _schemaf_load_env "$USER_DIR/dev/etc/env"
+    export SCHEMAF_DEV=1
+    ;;
 esac
 
 case "$CMD" in

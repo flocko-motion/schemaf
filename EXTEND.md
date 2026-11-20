@@ -8,6 +8,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 - [Frontend](#frontend)
   - [Runtime config: `PUBLIC_*`](#runtime-config-public_)
 - [Built-in Endpoints](#built-in-endpoints)
+- [Development mode](#development-mode)
 - [Endpoint Interface](#endpoint-interface)
   - [Auth levels](#auth-levels)
   - [Error responses](#error-responses)
@@ -132,7 +133,7 @@ Each service is started explicitly. Combine with commas:
 ./schemaf.sh dev all                      # everything
 ```
 
-In dev mode, the Go server reverse-proxies all non-API requests to the Vite dev server.
+In [development mode](#development-mode), the Go server reverse-proxies all non-API requests to the Vite dev server.
 
 ### Production
 
@@ -210,7 +211,7 @@ const dsn = config("PUBLIC_SENTRY_DSN"); // string | undefined
 The framework provides these endpoints out of the box:
 
 - `/api/health` — health check (returns `{"status": "ok", "db": "ok", ...}`)
-- `/api/status` — service status (uptime, backup status, active [identity providers](#active-providers-apistatus), custom providers)
+- `/api/status` — service status ([mode](#development-mode), uptime, backup status, active [identity providers](#active-providers-apistatus), custom providers)
 - `/api/config` — the instance's public frontend config (see [Runtime config](#runtime-config-public_))
 - `/api/user/me` — current user info (requires auth)
 - `/api/auth/{provider}/login`, `/api/auth/logout`, `/api/auth/refresh` — login and sessions (see [Authentication](#authentication))
@@ -255,12 +256,58 @@ The response will include your provider alongside the built-in fields:
 ```json
 {
   "status": "ok",
+  "mode": "production",
   "uptime": "2h30m",
   "backup": { "last": "...", "ago": "..." },
   "auth": { "providers": [] },
   "s3": { "bucket": "my-bucket", "connected": true }
 }
 ```
+
+## Development mode
+
+schemaf tells your app whether the server runs in development. Development mode is opt-in: only the commands that use the dev env file turn it on, and every other way of starting the server runs in production.
+
+```go
+import schemafapi "github.com/flocko-motion/schemaf/api"
+
+if schemafapi.DevMode() {
+    // dev-only endpoints, mock services, preseed
+}
+```
+
+Gate dev-only behaviour on `DevMode()` — endpoints that create accounts without sign-in, mock AI platforms, database preseeds — instead of inferring the mode from what is at hand.
+
+| Started by | Mode |
+|---|---|
+| `./schemaf.sh dev` | development |
+| `./schemaf.sh auth token`, your own subcommands through `./schemaf.sh` | development |
+| `./schemaf.sh run`, the run side (`~/.<name>/bin/schemaf.sh run --image <tag>`) | production |
+| the generated `compose.gen.yml`, a built image | production |
+| a bare `./myapp …` | production |
+
+- **One rule**: development mode and the dev env file go together. `schemaf.sh` sets `SCHEMAF_DEV=1` for every command that loads `~/.<name>/dev/etc/env` — everything except `build` and `run` (see [Secrets](INSTALL.md#secrets)).
+- **Read-only**: `DevMode()` only reads `SCHEMAF_DEV`; there is no setter.
+- **Strict values**: `SCHEMAF_DEV=1` is development; unset or empty is production. Any other value (`true`, `yes`, `0`, …) stops the app at startup with an error naming the variable and the accepted values.
+- **Not in env files**: an env file that sets `SCHEMAF_DEV`, to any value, makes `schemaf.sh` stop with an error naming the file, before it starts anything — for every command that reads that file, `build` included. Remove the line; the mode is never silently overridden.
+- **Production stays production**: `schemaf.sh build`, `run` and the run side unset a `SCHEMAF_DEV` exported by your shell, and the generated `compose.gen.yml` pins `SCHEMAF_DEV: ""` on the backend, which beats its `env_file`.
+- **Reported**: `/api/status` reports `"mode": "development"` or `"mode": "production"`, and the server logs `"msg":"server mode","mode":"…"` at startup.
+
+schemaf's own dev behaviour follows the same mode:
+
+- **Frontend**: proxied to the Vite dev server in development, served from the embedded build otherwise (see [Frontend](#frontend)).
+- **Directories**: config and data live in `~/.<name>/dev/etc/` and `~/.<name>/dev/var/` in development, `~/.<name>/etc/` and `~/.<name>/var/` otherwise.
+- **Session cookie**: `Secure` everywhere except development (see [Sessions](#sessions)).
+- **`auth token`**: refuses to run outside development (see [Getting a token in development](#getting-a-token-in-development)).
+
+`SCHEMAF_ENV=docker`, set by the generated compose, means only "running inside the generated compose". schemaf uses it for one thing: the database host (`postgres` inside compose, `127.0.0.1:<port+3>` natively). It says nothing about the mode.
+
+#### Upgrading: development mode
+
+Before v1.15.0, schemaf treated every process outside the generated compose (`SCHEMAF_ENV` not `docker`) as development. Now:
+
+- Replace app checks such as `os.Getenv("SCHEMAF_ENV") != "docker"` or your own `DEV_MODE` variable with `api.DevMode()`.
+- A bare native `./myapp server` now runs in production: it serves the embedded frontend instead of proxying to Vite, uses `~/.<name>/etc/` and `~/.<name>/var/`, sets `Secure` on the session cookie, and `./myapp auth token` refuses. Start it through `./schemaf.sh` to develop.
 
 ## Endpoint Interface
 
@@ -864,7 +911,7 @@ A session is what a successful login creates. schemaf stores it in Postgres (`_s
 - **Token lifetime**: 15 minutes. **Session lifetime**: 30 days from login. Both are framework constants.
 - **Every authenticated request checks the session**: not revoked, not expired, and not ended by a subject-wide revocation. Revocation is immediate.
 - **Renewal**: when a cookie-authenticated request carries a token past half its lifetime, schemaf sets a fresh cookie for the same session. An expired token in the cookie is renewed the same way, as long as its session is still live, so a browser stays signed in for the whole session even after idling. Bearer tokens are not renewed automatically: Bearer clients call `POST /api/auth/refresh` before their token expires; an expired Bearer token gives 401.
-- **The cookie**: named `<name>_session` after your project (`myapp_session`), so apps on different localhost ports don't overwrite each other's cookie. Host-only (no `Domain`), `HttpOnly`, `SameSite=Lax`, `Path=/`, lasting until the session expires, and `Secure` in production (`SCHEMAF_ENV=docker`). `Lax` rather than `Strict` so the cookie is sent when another site redirects the browser to you, as in an OIDC `/authorize` redirect.
+- **The cookie**: named `<name>_session` after your project (`myapp_session`), so apps on different localhost ports don't overwrite each other's cookie. Host-only (no `Domain`), `HttpOnly`, `SameSite=Lax`, `Path=/`, lasting until the session expires, and `Secure` outside [development mode](#development-mode). `Lax` rather than `Strict` so the cookie is sent when another site redirects the browser to you, as in an OIDC `/authorize` redirect.
 - **CSRF protection**: a cookie-authenticated request with any method other than `GET` or `HEAD` must carry an `Origin` header matching the request's host (`Host`, or `X-Forwarded-Host` behind a proxy). A mismatched **or missing** `Origin` is rejected with 403. Browsers send `Origin` on every such request; non-browser clients should use Bearer, which is exempt.
 - **Login CSRF protection**: `POST /api/auth/{provider}/login` (every provider, built-in and custom) is rejected with 403, and no cookie is set, when it carries an `Origin` header that doesn't match the request's host (same rule as above). Otherwise a malicious site could post the attacker's own credential and sign the visitor in as the attacker. A login without `Origin` (curl, server-to-server) is allowed, since it can't be a cross-site browser request.
 - **Cleanup**: the server (not CLI commands) deletes sessions that expired or were revoked more than 7 days ago, at start and then daily. Both values are framework constants. Subject-wide revocations (`_schemaf_revocations`) are kept.
@@ -947,7 +994,7 @@ curl -H "Authorization: Bearer $TOKEN" localhost:8000/api/user/me
 
 - `auth token <subject>` prints a signed [stateless token](#issuing-stateless-tokens) for that subject, so you can call authenticated endpoints as any user.
 - `--ttl <duration>` sets an expiry (e.g. `--ttl 24h`); without it, the token never expires.
-- **Dev-only**: the command refuses to run in production (`SCHEMAF_ENV=docker`).
+- **Dev-only**: the command refuses to run outside [development mode](#development-mode). `./schemaf.sh auth token` runs in development mode; a bare `./myapp auth token` does not.
 
 ### Issuing stateless tokens
 

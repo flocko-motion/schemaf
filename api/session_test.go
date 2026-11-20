@@ -171,6 +171,7 @@ func meSubject(t *testing.T, resp *http.Response) string {
 }
 
 func TestLogin(t *testing.T) {
+	t.Setenv("SCHEMAF_DEV", "")
 	e := newAuthEnv(t)
 
 	lr, c := e.login("alice")
@@ -180,7 +181,8 @@ func TestLogin(t *testing.T) {
 	if c == nil {
 		t.Fatal("no session cookie set")
 	}
-	if !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" || c.Secure {
+	// Production (SCHEMAF_DEV unset): Secure. Development: see TestSecureCookiesOutsideDevMode.
+	if !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" || !c.Secure {
 		t.Errorf("cookie attributes: %+v", c)
 	}
 	if c.MaxAge < int(SessionLifetime.Seconds())-5 {

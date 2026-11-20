@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/flocko-motion/schemaf/constants"
@@ -18,7 +17,7 @@ import (
 var frontendFS fs.FS
 
 // SetFrontend registers the embedded frontend filesystem for production serving.
-// In dev mode (SCHEMAF_ENV != "docker"), the server proxies to the frontend dev server instead.
+// In development mode (see DevMode), the server proxies to the frontend dev server instead.
 func SetFrontend(fsys fs.FS) {
 	frontendFS = fsys
 }
@@ -27,7 +26,7 @@ func SetFrontend(fsys fs.FS) {
 //   - Dev: reverse proxy to the frontend dev server
 //   - Prod: serve embedded static files with SPA fallback
 func frontendHandler() http.Handler {
-	if os.Getenv("SCHEMAF_ENV") != "docker" {
+	if DevMode() {
 		return devProxy()
 	}
 	return prodFileServer()

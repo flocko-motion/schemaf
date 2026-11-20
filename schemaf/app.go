@@ -89,7 +89,7 @@ func (a *App) OnLogin(fn func(ctx context.Context, id api.Identity) (subject str
 }
 
 // SetFrontend registers an embedded frontend filesystem for production serving.
-// In dev mode, the server proxies to the frontend dev server instead.
+// In development mode (api.DevMode), the server proxies to the frontend dev server instead.
 // Wire up in go/main.go: app.SetFrontend(FrontendFS())
 func (a *App) SetFrontend(fsys fs.FS) {
 	api.SetFrontend(fsys)
@@ -99,6 +99,12 @@ func (a *App) SetFrontend(fsys fs.FS) {
 // when no subcommand is given) starts the HTTP server. Custom subcommands
 // registered via AddSubcommand are mounted alongside it.
 func (a *App) Run() error {
+	// Refuse an ambiguous SCHEMAF_DEV before any command runs, so api.DevMode
+	// only ever sees "1" (development) or unset/empty (production).
+	if v := os.Getenv("SCHEMAF_DEV"); v != "" && v != "1" {
+		return fmt.Errorf("SCHEMAF_DEV=%q is not a valid value: use \"1\" for development mode, or leave it unset or empty for production", v)
+	}
+
 	// Restore the caller's working directory if schemaf.sh passed it.
 	if cwd := os.Getenv("SCHEMAF_CWD"); cwd != "" {
 		if err := os.Chdir(cwd); err != nil {
@@ -205,6 +211,11 @@ func (a *App) serve() error {
 	}
 	api.SetIdentityProviders(providers)
 	api.SetOnLogin(a.onLogin)
+	if api.DevMode() {
+		slog.Info("server mode", "mode", "development")
+	} else {
+		slog.Info("server mode", "mode", "production")
+	}
 	if len(providers) > 0 {
 		names := make([]string, len(providers))
 		for i, p := range providers {

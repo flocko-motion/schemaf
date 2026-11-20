@@ -40,6 +40,7 @@ services:
         required: false
     environment:
       SCHEMAF_ENV: docker
+      SCHEMAF_DEV: "" # production; beats a SCHEMAF_DEV in env_file
       DB_PASS: ${DB_PASS:-dev}
       PORT: "{{.Port}}"
       BACKUP_SSH_HOST: ${BACKUP_SSH_HOST:-}

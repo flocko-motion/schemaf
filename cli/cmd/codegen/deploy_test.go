@@ -55,7 +55,7 @@ case "${1:-}" in
   --help|info) exit 0 ;;
   compose)
     case "$*" in *" version"*) echo "Docker Compose version v2.30.0" ;; esac
-    exit 0 ;;
+    env > "$S/compose_env"; exit 0 ;;
   build)
     shift; img=""; labels=""
     while [ $# -gt 1 ]; do
