@@ -199,3 +199,61 @@ func (e B) Handle(ctx context.Context, req Req) (Resp, error) { return Resp{}, n
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// TestScanSkipsTestFiles: endpoint structs declared in *_test.go files —
+// in package api or in the external api_test package — belong to the test
+// and are never registered (#61).
+func TestScanSkipsTestFiles(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"ep.go": scanHeader + `
+type RealEndpoint struct{}
+func (e RealEndpoint) Method() string { return "GET" }
+func (e RealEndpoint) Path() string { return "/api/real" }
+func (e RealEndpoint) Auth() schemafapi.AuthLevel { return schemafapi.AuthNone }
+func (e RealEndpoint) Handle(ctx context.Context, req Req) (Resp, error) { return Resp{}, nil }
+`,
+		"errors_test.go": `package api
+
+import (
+	"net/http"
+
+	schemafapi "github.com/flocko-motion/schemaf/api"
+)
+
+type errorEndpoint struct{}
+
+func (errorEndpoint) Method() string                                       { return "GET" }
+func (errorEndpoint) Path() string                                         { return "/api/test/error" }
+func (errorEndpoint) Auth() schemafapi.AuthLevel                           { return schemafapi.AuthNone }
+func (errorEndpoint) HandleRaw(w http.ResponseWriter, r *http.Request) error { return nil }
+`,
+		"external_test.go": `package api_test
+
+import (
+	"net/http"
+
+	schemafapi "github.com/flocko-motion/schemaf/api"
+)
+
+type ExternalEndpoint struct{}
+
+func (ExternalEndpoint) Method() string                                       { return "GET" }
+func (ExternalEndpoint) Path() string                                         { return "/api/test/external" }
+func (ExternalEndpoint) Auth() schemafapi.AuthLevel                           { return schemafapi.AuthNone }
+func (ExternalEndpoint) HandleRaw(w http.ResponseWriter, r *http.Request) error { return nil }
+`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eps, err := scanAPIDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 1 || eps[0].StructName != "RealEndpoint" {
+		t.Fatalf("endpoints = %+v, want only RealEndpoint", eps)
+	}
+}

@@ -496,7 +496,7 @@ type ListUsersResp struct {
 }
 ```
 
-Codegen type-checks `go/api/` (its `*.gen.go` files ignored) and builds each schema from the type's JSON encoding, as `encoding/json` produces it:
+Codegen type-checks `go/api/` (its `*.gen.go` and `*_test.go` files ignored) and builds each schema from the type's JSON encoding, as `encoding/json` produces it:
 
 | Go | OpenAPI |
 |---|---|
@@ -1386,7 +1386,7 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
    - Provider returns embedded migrations to framework
 
 3. **Endpoint structs → api.Provider + OpenAPI spec**
-   - Auto-discovers endpoint structs in `go/api/*.go`
+   - Auto-discovers endpoint structs in `go/api/*.go` (without `*.gen.go` and `*_test.go`)
    - Generates `go/api/endpoints.gen.go` with `api.Provider` (handler registration). It also carries the spec: `Provider()` hands it to schemaf, and the server answers `GET /openapi.json` with it byte for byte. There is no second spec built at runtime
    - Generates `gen/openapi.json` — OpenAPI 3.0 spec
    - Generates `gen/schema-sources` — the packages outside `go/api/` that declare a type the spec's schemas are built from, one glob per line (e.g. `go/obj/*.go`), plus `go/go.mod` when a schema type comes from a dependency. Empty when every type is declared in `go/api/`
@@ -1455,6 +1455,8 @@ The tests run against an ephemeral stack (`compose.test.gen.yml`: Postgres witho
 ### Go tests
 
 Standard Go test files in `go/api/*_test.go` using `httptest`.
+
+Codegen does not read test files: an endpoint struct declared in a `*_test.go` file (in package `api` or `api_test`) belongs to the test, e.g. to serve a route through `api.NewRawRoute`, and is never registered in `endpoints.gen.go` or listed in `gen/openapi.json`.
 
 ### TypeScript tests
 
