@@ -37,8 +37,9 @@ Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
   # Linux: podman from your distribution, docker-compose v2 from its release page
   sudo apt install podman                     # or dnf, pacman, ...
   # docker-compose: https://github.com/docker/compose/releases → ~/.local/bin/docker-compose
+  systemctl --user enable --now podman.socket   # once: podman's API socket, which docker-compose talks to
   ```
-  `podman compose` hands off to an external compose provider. schemaf requires it to be **docker-compose**, not `podman-compose`; podman picks docker-compose automatically when it is on your `PATH` (check with `podman compose version` — it must print `Docker Compose version …`).
+  `podman compose` hands off to an external compose provider. schemaf requires it to be **docker-compose**, not `podman-compose`; podman picks docker-compose automatically when it is on your `PATH` (check with `podman compose version` — it must print `Docker Compose version …`). docker-compose talks to podman through podman's API socket (`DOCKER_HOST` if set, otherwise podman's own). On macOS the podman machine provides it; on Linux it is the user's `podman.socket`, which has to be enabled once, as above, by every user that runs compose (`dev`, `test`, `run`); `build` and `load` don't need it.
 - Or Docker with the Compose plugin, if you set `SCHEMAF_RUNTIME=docker` (see [Container runtime](#container-runtime))
 - Node.js (for TypeScript codegen and frontend)
 - `gotestsum` for pretty test output (recommended):
@@ -462,6 +463,8 @@ echo "SCHEMAF_RUNTIME=docker" >> ~/.myapp/etc/env
 |---|---|
 | podman not installed | install podman, or set `SCHEMAF_RUNTIME=docker` |
 | `podman compose` uses `podman-compose`, or no provider at all | install docker-compose |
+| Linux: podman's API socket isn't running (docker-compose can't reach podman) | `systemctl --user enable --now podman.socket`, or point `DOCKER_HOST` at podman's socket |
+| `DOCKER_HOST` is set but empty (podman compose passes it on, so docker-compose would use Docker's default socket) | unset it, or point it at podman's socket |
 | macOS: podman machine not running | `podman machine start` (and `podman machine init` first if no machine exists) |
 | Docker selected but not installed | install Docker, or unset `SCHEMAF_RUNTIME` to use podman |
 | Docker selected but the daemon is not running | start Docker (Docker Desktop, or `sudo systemctl start docker`) |

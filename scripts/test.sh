@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run framework tests: scripts/test.sh <unit|db|e2e|all>   (normally via `make test <kind>`)
-# REF=<tag> selects the online tag for the onboarding e2e.
+# REF=<ref> selects the online ref (release tag, full commit hash, branch) for the onboarding e2e.
 set -euo pipefail
 
 case "${1:-}" in
@@ -16,7 +16,7 @@ case "${1:-}" in
 		echo "Usage: make test <unit|db|e2e|all>"
 		echo "  unit  fast Go unit tests (real-Postgres tests auto-skip)"
 		echo "  db    DB integration tests on an ephemeral Postgres, and the test harness (schemaftest)"
-		echo "  e2e   from-scratch onboarding e2e (online tag; REF=<tag>)"
+		echo "  e2e   from-scratch onboarding e2e (online ref; REF=<ref>, default: latest release)"
 		echo "  all   unit + db + e2e"
 		;;
 	*) echo "unknown test kind '$1' — use unit|db|e2e|all" >&2; exit 1 ;;

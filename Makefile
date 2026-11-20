@@ -14,10 +14,10 @@ build: ## Compile the framework
 test: ## Run tests: make test <unit|db|e2e|all>  (no arg lists the options)
 	@REF="$(REF)" ./scripts/test.sh $(firstword $(filter-out test,$(MAKECMDGOALS)))
 
-merge: ## Merge the current branch into main via PR, without releasing (gate: build, vet, unit tests)
+merge: ## Merge the current branch into main via PR once the CI gate is green, without releasing
 	@./scripts/merge.sh
 
-release: ## Release current main, tagging <major|minor|patch> (aliases: breaking|feature|fix); from a branch it merges first
+release: ## Tag main (HEAD = origin/main) as <major|minor|patch> (aliases: breaking|feature|fix); macOS: full local gate first
 	@./scripts/release.sh $(firstword $(filter-out release,$(MAKECMDGOALS)))
 
 # No-op targets that absorb the positional word in `make test <kind>` and

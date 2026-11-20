@@ -71,7 +71,7 @@ You focus on:
 - Your API endpoints
 - Your frontend UI
 
-This repository is the framework itself — it contains no committed example project. Instead, `e2e/build-example.sh` builds a fresh project from scratch against an online ref — by default the latest release tag (the real onboarding lifecycle). It doubles as the framework's end-to-end test: the release gate runs it against the pushed commit's full hash.
+This repository is the framework itself — it contains no committed example project. Instead, `e2e/build-example.sh` builds a fresh project from scratch against an online ref — by default the latest release tag (the real onboarding lifecycle). It doubles as the framework's end-to-end test: the CI gate runs it against every pull request's head commit, by its full hash, under podman and Docker (see [EXTEND.md › Testing the framework](EXTEND.md#testing-the-framework-the-ci-gate)).
 
 ## What schemaf Provides
 

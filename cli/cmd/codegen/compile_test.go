@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/flocko-motion/schemaf/internal/gotest"
 )
 
 // compileModule is the module path of the temporary module; generated files
@@ -39,6 +41,7 @@ func schemafCheckout(t *testing.T) string {
 func compileGenerated(t *testing.T, files map[string]string) {
 	t.Helper()
 	checkout := schemafCheckout(t)
+	gotest.RequireModuleCache(t)
 	dir := t.TempDir()
 
 	goVersion := ""
@@ -78,7 +81,7 @@ func compileGenerated(t *testing.T, files map[string]string) {
 		cmd.Dir = dir
 		// -mod=mod lets go add schemaf's indirect requirements to the
 		// temporary go.mod; GOPROXY=off keeps the check offline (everything
-		// is in the module cache because schemaf itself builds).
+		// is in the module cache: gotest.RequireModuleCache downloaded it).
 		cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off", "GOWORK=off")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			var srcs strings.Builder

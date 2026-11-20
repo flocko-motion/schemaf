@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/flocko-motion/schemaf/internal/gotest"
 )
 
 // The scaffolded wiring compiles: go/main.go (three lines), go/app/app.go
@@ -50,6 +52,7 @@ func TestScaffoldedWiringCompiles(t *testing.T) {
 	if main, _ := os.ReadFile(filepath.Join(dir, "main.go")); strings.Contains(string(main), "AddDb") {
 		t.Error("main.go still wires providers; they belong in app.Wire")
 	}
+	gotest.RequireModuleCache(t) // the go tool runs offline below
 	for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}} {
 		cmd := exec.Command("go", args...)
 		cmd.Dir = dir

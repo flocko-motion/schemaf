@@ -155,6 +155,9 @@ func schemafShData(base map[string]any) (map[string]any, error) {
 	for k, v := range volumeConflictShell(name) {
 		d[k] = v
 	}
+	for k, v := range podmanSocketShell() {
+		d[k] = v
+	}
 	return d, nil
 }
 
@@ -177,6 +180,28 @@ func volumeConflictShell(project string) map[string]string {
 		"VolumeConflictBoth": vars.Replace(dquote.Replace(strings.TrimPrefix(cli.VolumeConflictBoth(rt, project), "\n"))),
 		"VolumeHintPodman":   dquote.Replace(cli.VolumeConflictSwitchHint(cli.Podman)),
 		"VolumeHintDocker":   dquote.Replace(cli.VolumeConflictSwitchHint(cli.Docker)),
+	}
+}
+
+// podmanSocketShell renders the Go refusal for a podman API socket that
+// doesn't answer (cli.PodmanSocketText) for _schemaf_check_podman_socket, so
+// shell and Go print the same text. The parts become the shell variables
+// ${sock}, ${fix} and ${said}:
+//
+//	PodmanSocket               the message, for an unquoted heredoc
+//	PodmanSocketFixDefault     the value of fix for podman's own socket, for double quotes
+//	PodmanSocketFixDockerHost  … when the address comes from DOCKER_HOST
+//	PodmanSocketEmptyDockerHost  the refusal for a set but empty DOCKER_HOST, for double quotes
+func podmanSocketShell() map[string]string {
+	const sock, fix, said = "\x00sock\x00", "\x00fix\x00", "\x00said\x00"
+	vars := strings.NewReplacer(sock, "${sock}", fix, "${fix}", said, "${said}")
+	heredoc := strings.NewReplacer(`\`, `\\`, "$", `\$`, "`", "\\`")
+	dquote := strings.NewReplacer(`\`, `\\`, "$", `\$`, "`", "\\`", `"`, `\"`)
+	return map[string]string{
+		"PodmanSocket":                vars.Replace(heredoc.Replace(cli.PodmanSocketText(sock, fix, said))),
+		"PodmanSocketFixDefault":      dquote.Replace(cli.PodmanSocketFixDefault),
+		"PodmanSocketFixDockerHost":   dquote.Replace(cli.PodmanSocketFixDockerHost),
+		"PodmanSocketEmptyDockerHost": dquote.Replace(cli.PodmanSocketEmptyDockerHost),
 	}
 }
 

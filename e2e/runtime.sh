@@ -16,3 +16,9 @@ command -v "$RUNTIME" >/dev/null || {
 }
 export PODMAN_COMPOSE_WARNING_LOGS="${PODMAN_COMPOSE_WARNING_LOGS:-false}"
 rt() { "$RUNTIME" "$@"; }
+
+# The runtime that is not selected, for checks that need both (volumes.sh).
+# It may be missing: callers check rt_other_usable first.
+if [ "$RUNTIME" = podman ]; then OTHER_RUNTIME=docker; else OTHER_RUNTIME=podman; fi
+rt_other() { "$OTHER_RUNTIME" "$@"; }
+rt_other_usable() { command -v "$OTHER_RUNTIME" >/dev/null && rt_other info >/dev/null 2>&1; }
