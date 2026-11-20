@@ -163,7 +163,7 @@ func IsReserved(name string) bool {
 func FromEnv(getenv func(string) string) ([]api.IdentityProvider, error) {
 	var out []api.IdentityProvider
 	for _, b := range Builtins {
-		domain := normalizeDomain(getenv(b.DomainEnv))
+		domain := strings.TrimSpace(getenv(b.DomainEnv))
 		clientID := strings.TrimSpace(getenv(b.ClientIDEnv))
 		switch {
 		case domain == "" && clientID == "":
@@ -175,15 +175,24 @@ func FromEnv(getenv func(string) string) ([]api.IdentityProvider, error) {
 			return nil, fmt.Errorf("%s: %s is set but %s is not; set both to enable %s, or neither to disable it",
 				b.Name, b.DomainEnv, b.ClientIDEnv, b.Title)
 		}
+		if bare := bareDomain(domain); bare != domain {
+			return nil, fmt.Errorf("%s: %s must be the bare domain, without scheme, path or trailing slash (the frontend SDK adds https:// itself); use %s=%s",
+				b.Name, b.DomainEnv, b.DomainEnv, bare)
+		}
 		out = append(out, New(b.Name, b.Issuer(domain), clientID))
 	}
 	return out, nil
 }
 
-// normalizeDomain strips a scheme and trailing slashes: "https://x.auth0.com/" → "x.auth0.com".
-func normalizeDomain(d string) string {
-	d = strings.TrimSpace(d)
-	d = strings.TrimPrefix(d, "https://")
-	d = strings.TrimPrefix(d, "http://")
-	return strings.TrimRight(d, "/")
+// bareDomain strips a scheme and anything from the first "/", "?" or "#" on:
+// "https://x.auth0.com/" → "x.auth0.com". Used only to suggest the correct
+// value in the error message; the configured value is never rewritten.
+func bareDomain(d string) string {
+	if _, rest, ok := strings.Cut(d, "://"); ok {
+		d = rest
+	}
+	if i := strings.IndexAny(d, "/?#"); i >= 0 {
+		d = d[:i]
+	}
+	return d
 }

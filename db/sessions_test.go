@@ -95,3 +95,62 @@ func TestSessionStore(t *testing.T) {
 		}
 	})
 }
+
+func TestDeleteStaleSessions(t *testing.T) {
+	d := openIntegrationDB(t)
+	ctx := context.Background()
+	resetSchema(t, ctx, d)
+	if err := RunSet(ctx, d, MigrationSet{Prefix: "schemaf", Files: frameworkMigrations}); err != nil {
+		t.Fatalf("framework migrations: %v", err)
+	}
+	s := NewSessionStore(d)
+	now := time.Now().Truncate(time.Microsecond)
+	day := 24 * time.Hour
+
+	mk := func(id string, expires time.Time) Session {
+		return Session{ID: id, Subject: "alice", CreatedAt: now.Add(-40 * day), ExpiresAt: expires}
+	}
+	for _, sess := range []Session{
+		mk("live", now.Add(day)),
+		mk("expired-recently", now.Add(-day)),
+		mk("expired-long-ago", now.Add(-10*day)),
+		mk("revoked-recently", now.Add(day)),
+		mk("revoked-long-ago", now.Add(day)),
+	} {
+		if err := s.CreateSession(ctx, sess); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id, at := range map[string]time.Time{"revoked-recently": now.Add(-day), "revoked-long-ago": now.Add(-10 * day)} {
+		if err := s.RevokeSession(ctx, id, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.RevokeSubject(ctx, "bob", now.Add(-10*day)); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.DeleteStaleSessions(ctx, now.Add(-SessionCleanupGrace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("deleted %d sessions, want 2", n)
+	}
+	for id, want := range map[string]bool{
+		"live": true, "expired-recently": true, "revoked-recently": true,
+		"expired-long-ago": false, "revoked-long-ago": false,
+	} {
+		_, ok, err := s.GetSession(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok != want {
+			t.Errorf("session %s present = %v, want %v", id, ok, want)
+		}
+	}
+	// Revocations are untouched.
+	if rb, err := s.RevokedBefore(ctx, "bob"); err != nil || !rb.Equal(now.Add(-10*day)) {
+		t.Errorf("RevokedBefore(bob) = %v, %v after cleanup", rb, err)
+	}
+}
