@@ -22,6 +22,7 @@ Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
 - [Container runtime](#container-runtime) — podman by default, Docker on request
 - [Migrating from Docker to podman](#migrating-from-docker-to-podman)
 - [Compose](#compose)
+- [Parallel dev instances](#parallel-dev-instances) — several dev stacks at once, e.g. one per git worktree
 
 ## Prerequisites
 
@@ -215,11 +216,13 @@ Codegen produces:
 ./schemaf.sh build           # Build the production image (see Deployment)
 ./schemaf.sh build --output myapp-3f9a2c1.run   # ...and write a deployment artifact
 ./schemaf.sh run             # Build, then start the production compose stack
-./schemaf.sh dev             # Start dev compose stack (exposes service ports)
-./schemaf.sh dev postgres    # Start only specific services
+./schemaf.sh dev all         # Start the dev stack: Postgres + project services, backend, Vite
+./schemaf.sh dev db,backend  # Start only some of it: db | infrastructure | backend | frontend | all
+./schemaf.sh dev all --instance 349   # A second dev stack next to the default one
+./schemaf.sh instances       # List the project's dev instances on this machine
 ```
 
-`run` and `dev` start the stack with `<runtime> compose` (`podman compose` by default, see [Container runtime](#container-runtime)) — the actual server runs inside the container. `build` and `run` need only the container runtime, git and the repository; they never call Go or Node on the host (both run inside the image build).
+`run` starts the production stack with `<runtime> compose` (`podman compose` by default, see [Container runtime](#container-runtime)); the server runs inside the backend container. `dev` starts only Postgres and the project's compose services in containers. The backend runs natively on the host (`go run`), and Vite runs with `npm run dev`. Ctrl-C stops the backend and Vite; the containers keep running. `--instance` runs a separate dev stack, see [Parallel dev instances](#parallel-dev-instances). `build` and `run` need only the container runtime, git and the repository; they never call Go or Node on the host (both run inside the image build).
 
 To add custom commands, use `app.AddSubcommand()` in your Go code — see [CLI Subcommands](EXTEND.md#cli-subcommands).
 
@@ -233,7 +236,7 @@ name = "myapp"
 port = 8000    # optional, default 8000
 ```
 
-The `name` field determines the database name, container name prefixes, the Postgres volume name (`<name>-postgres-data`), and config directory. The optional `port` field sets the base port — all service ports are derived from it (backend = port, frontend dev = port+2, postgres = port+3). Default is 8000.
+The `name` field determines the database name, container name prefixes, the Postgres volume name (`<name>-postgres-data`), and config directory. The optional `port` field sets the base port — all service ports are derived from it (backend = port, frontend dev = port+2, postgres = port+3). Default is 8000. A [parallel dev instance](#parallel-dev-instances) `n` shifts all three by `10 × n` and adds `-<n>` to the container, volume and network names.
 
 ## Secrets
 
@@ -523,8 +526,85 @@ Codegen merges the framework's built-in compose with your extensions and produce
 
 ```bash
 ./schemaf.sh run              # Build, then full stack, production mode (see Deployment)
-./schemaf.sh dev              # Full stack, dev mode (exposes service ports)
-./schemaf.sh dev postgres     # Only specific services (useful during development)
+./schemaf.sh dev all          # Dev: Postgres + project services in containers, backend and Vite on the host
+./schemaf.sh dev infrastructure   # Only the containers (Postgres + project services)
 ```
 
-`./schemaf.sh dev <args>` passes extra args through to `<runtime> compose up` — useful for starting only a subset of services while running the Go server directly on the host (e.g. with a debugger).
+`dev` takes one comma-separated list of targets: `db` (Postgres), `infrastructure` (Postgres and the project's compose services), `backend` (the Go server, run natively; implies `infrastructure`), `frontend` (Vite) and `all`. The backend never runs in a container in dev. To run the Go server yourself (e.g. under a debugger), start `./schemaf.sh dev infrastructure` and launch the server from your IDE.
+
+## Parallel dev instances
+
+The dev stack's ports are fixed, so only one checkout of a project can run `./schemaf.sh dev` at a time. An **instance** is a second dev stack with its own ports, database and session cookie. Several checkouts of the same project, e.g. one git worktree per issue, run their dev stacks side by side:
+
+```bash
+# the main checkout: the default instance, as always
+./schemaf.sh dev all
+
+# a worktree for issue 349, at the same time
+cd ../myapp-349
+./schemaf.sh dev all --instance 349
+```
+
+**Names.** An instance is named with a whole number ≥ 1, usually the issue number. Without a number, commands use the `default` instance, which is exactly the dev stack described everywhere else. schemaf never picks a name for you.
+
+**The name sticks to the checkout.** `dev --instance 349` writes `349` to `.schemaf/instance` in the checkout (`.schemaf/` carries its own `.gitignore`, so you don't edit yours). From then on every command in that checkout — `dev`, `db …`, `auth token`, `instances` and your own subcommands — uses instance 349 without the flag, and prints `instance 349` as the first line after the `schemaf.sh` banner.
+
+- An explicit `--instance` that differs from `.schemaf/instance` fails. schemaf never guesses which one you meant.
+- `dev --instance default` switches the checkout back to the default instance and removes the file.
+- Only `dev` writes or removes the file. Other commands accept `--instance` for that one call, in a checkout without the file, e.g. `db restore --instance 349` from the main checkout.
+- `--instance` is dev-only. Production (`build`, `run`, the run side, the server in its container) ignores `.schemaf/instance` and rejects the flag.
+
+**Ports.** Instance `n` gets the base port `port + 10 × n`, with the usual offsets:
+
+| | default (`port = 7100`) | instance 349 |
+|---|---|---|
+| backend | 7100 | 10590 |
+| Vite | 7102 | 10592 |
+| Postgres | 7103 | 10593 |
+
+`dev` prints the ports when it starts, and `instances` shows them. An instance's backend always listens on its base port, even when `PORT` is set (e.g. in the shared `~/.<name>/dev/etc/env`). A number whose base port would exceed 65525 is refused, and a port that is already taken stops `dev` as it always does. Vite gets its port on the command line (`npm run dev -- --port <base+2> --strictPort`), which overrides the port in `vite.config.ts`. Project services from `compose/*.yml` keep their ports in every instance; if one collides with another instance, `dev` stops with the usual "port in use" error. Please report it if that happens to you.
+
+**What is separate, and what is shared.** For a project named `myapp`:
+
+| | default | instance 349 |
+|---|---|---|
+| compose project | `myapp` | `myapp-349` |
+| containers | `myapp-postgres`, `myapp-backend` | `myapp-349-postgres`, `myapp-349-backend` |
+| network | `myapp-net` | `myapp-349-net` |
+| Postgres volume | `myapp-postgres-data` | `myapp-349-postgres-data` |
+| data directory | `~/.myapp/dev/var/` | `~/.myapp/dev/instances/349/var/` |
+| session cookie | `myapp_session` | `myapp-349_session` |
+
+Every instance shares the secrets in `~/.myapp/dev/etc/env`. The database inside each volume is named `myapp` in every instance. Only the default instance stops a running production stack when `dev` starts, because only it shares a volume and ports with production; instances leave production alone.
+
+`dev` records each instance in `~/.myapp/dev/instances/<n>/instance.toml`: its ports and the absolute path of its checkout. An instance belongs to one checkout: `dev --instance 349` fails while the recorded checkout still claims 349 in its `.schemaf/instance` (pick another number, or remove it with `instances rm 349`). If the recorded checkout is gone (e.g. after `git worktree move`) or has switched to another instance, `dev` takes the instance over, says so, and updates the record.
+
+**`instances`** lists every instance of the project on this machine, `default` included:
+
+```
+$ ./schemaf.sh instances
+INSTANCE  RUNNING  BACKEND  VITE   POSTGRES  CHECKOUT
+default   yes      7100     7102   7103      -
+349       yes      10590    10592  10593     /home/me/myapp-349
+```
+
+The ports are calculated from the current `port` in `schemaf.toml`. If it changed since an instance last ran, the row also shows the recorded ports, and the instance's next `dev` updates the record. `RUNNING` says whether the instance's containers are up; for the default instance it says `production` when the production stack runs instead (they share the compose project). The default instance has no recorded checkout, since any checkout without `.schemaf/instance` uses it.
+
+**`instances rm <n>`** stops the instance's containers and deletes its Postgres volume, its data directory and its record. It asks for confirmation unless you pass `-y`, and refuses `default`. There is no `instances stop`: as always, Ctrl-C stops a dev stack's backend and Vite. It doesn't touch the checkout, so a checkout whose `.schemaf/instance` still names the removed instance gets a fresh one on its next `dev`.
+
+**A new instance starts with an empty database**, and its backend runs migrations as usual. To start from the default instance's data, restore a backup into it before its backend first starts:
+
+```bash
+# in the worktree: create instance 349 with Postgres only, so its database stays empty
+./schemaf.sh dev db --instance 349
+
+# in the main checkout: copy the default instance's data into instance 349
+./schemaf.sh db backup --local /tmp/myapp.sql.gz
+./schemaf.sh db restore --local /tmp/myapp.sql.gz --instance 349
+rm /tmp/myapp.sql.gz
+
+# in the worktree: start the rest; the backend applies only the branch's new migrations
+./schemaf.sh dev all
+```
+
+**Auth0.** The browser reaches an instance at `http://localhost:<base>`, so each instance's origin must be in the Auth0 application's **Allowed Callback URLs**, **Allowed Logout URLs** and **Allowed Web Origins** (see [Activating Auth0](EXTEND.md#activating-auth0)), e.g. `http://localhost:10590` for instance 349 with `port = 7100`. Add it once: an instance's ports never change.

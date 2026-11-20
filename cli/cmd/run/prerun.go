@@ -28,7 +28,7 @@ refuses to start if the other runtime holds the project's Postgres volume.
 			if mode != "test" {
 				return fmt.Errorf("prerun: unknown mode %q (want test)", mode)
 			}
-			return cli.CheckRuntime(project)
+			return cli.CheckRuntime(project, 0)
 		},
 	}
 }

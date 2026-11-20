@@ -60,7 +60,7 @@ Never invent other names or bases; deviate only if the maintainer says so.
 - Do all work for the issue inside its worktree: edits, tests, docs. `.worktrees/` is gitignored.
 - Work that isn't tied to an issue still gets a worktree (proposed the same way); use a descriptive slug without a number (e.g. `.worktrees/release-gate-docs/`, branch `docs/release-gate-docs`).
 - The usual git rules still apply inside the worktree: don't stage, don't commit, don't push unless the maintainer asks. Tell the maintainer the worktree path when the work is ready for review.
-- Ports: the dev stack uses the fixed ports from `schemaf.toml`, so don't run `./schemaf.sh dev` in two worktrees at once. The test layers (`go test`, `e2e/db-test.sh`, the onboarding e2e) use their own ports and project names and can run in parallel.
+- Ports: to run a project's dev stack in a worktree while another checkout runs one, use `./schemaf.sh dev all --instance <issue>` (see INSTALL.md › Parallel dev instances). The test layers (`go test`, `e2e/db-test.sh`, the onboarding e2e) use their own ports and project names and can run in parallel.
 - Clean-up after the branch is merged: `git worktree remove .worktrees/<name>` and `git branch -d <branch>`. Only the maintainer (or an agent the maintainer asks) removes worktrees.
 
 ## Repository Structure

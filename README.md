@@ -36,6 +36,7 @@ Common tasks and where they're documented (jump straight to the section):
 | Container runtime (podman / Docker) | [INSTALL › Container runtime](INSTALL.md#container-runtime) |
 | Move data from Docker to podman | [INSTALL › Migrating from Docker to podman](INSTALL.md#migrating-from-docker-to-podman) |
 | Compose & extra services | [INSTALL › Compose](INSTALL.md#compose) |
+| Run several dev stacks at once (worktrees) | [INSTALL › Parallel dev instances](INSTALL.md#parallel-dev-instances) |
 | Ports, layout, config conventions | [Port Convention](#port-convention) · [Project Structure](#project-structure-normative) |
 
 ## Contents
@@ -107,7 +108,8 @@ schemaf is **batteries-included**. These are built-in, not optional:
 - **Compose**: Built-in compose for backend and Postgres — merged with `compose/` in your project
 - **Code generation**: One command generates all glue code — see [Code Generation](EXTEND.md#code-generation)
 - **Ports**: Fixed allocation (see below)
-- **Project entrypoint**: `schemaf.sh codegen`, `schemaf.sh test`, `schemaf.sh build`, `schemaf.sh run`, `schemaf.sh dev`
+- **Project entrypoint**: `schemaf.sh codegen`, `schemaf.sh test`, `schemaf.sh build`, `schemaf.sh run`, `schemaf.sh dev`, `schemaf.sh instances`
+- **Parallel dev instances**: `dev --instance <n>` runs a second, fully separate dev stack (own ports, database, session cookie) next to the default one — see [Parallel dev instances](INSTALL.md#parallel-dev-instances)
 - **Deployment**: `build` turns a commit into an image, optionally packed with its compose files into one self-extracting `<name>-<tag>.run` file; `run` starts an image. Build and run can be different users on the same host, so the user that runs third-party build code never reaches the database — see [Deployment](INSTALL.md#deployment)
 
 ## What You Add
@@ -209,6 +211,17 @@ Configure the base port in `schemaf.toml`:
 ```toml
 port = 6000    # optional, default 8000
 ```
+
+**Parallel dev instances.** Several checkouts of a project (e.g. git worktrees) can each run a dev stack at the same time. `./schemaf.sh dev all --instance <n>` starts instance `n` (a whole number ≥ 1, usually the issue number), whose ports are shifted by `10 × n`:
+
+```
+instance base  = port + 10 × n      e.g. port = 7100, instance 349:
+backend        = instance base      10590
+Vite           = instance base + 2  10592
+Postgres       = instance base + 3  10593
+```
+
+Without `--instance`, `dev` runs the `default` instance on `port` itself, as always. Each instance has its own database, data directory and session cookie; `./schemaf.sh instances` lists them and `./schemaf.sh instances rm <n>` removes one. Project services from `compose/` keep their ports. See [Parallel dev instances](INSTALL.md#parallel-dev-instances).
 
 **Why a single port with offsets?**
 - One number to change, all services follow

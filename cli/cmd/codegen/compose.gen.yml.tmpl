@@ -3,8 +3,10 @@
 # Run via: ./schemaf.sh run   (or dev)
 # The backend image is never built here: schemaf.sh builds it (./schemaf.sh build)
 # and sets SCHEMAF_IMAGE when it starts the stack.
+# SCHEMAF_INSTANCE_SUFFIX names a parallel dev instance (set by ./schemaf.sh dev
+# --instance); unset, every name is the default stack's.
 
-name: {{.Name}}
+name: {{.Name}}${SCHEMAF_INSTANCE_SUFFIX:-}
 {{if .Extensions}}
 include:
 {{- range .Extensions}}
@@ -14,7 +16,7 @@ include:
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: {{.Name}}-postgres
+    container_name: {{.Name}}${SCHEMAF_INSTANCE_SUFFIX:-}-postgres
     environment:
       POSTGRES_USER: schemaf
       POSTGRES_PASSWORD: ${DB_PASS:-dev}
@@ -34,7 +36,7 @@ services:
   backend:
     image: "${SCHEMAF_IMAGE:?set by schemaf.sh — use ./schemaf.sh run}"
     pull_policy: never
-    container_name: {{.Name}}-backend
+    container_name: {{.Name}}${SCHEMAF_INSTANCE_SUFFIX:-}-backend
     env_file:
       - path: ${HOME}/.{{.Name}}/etc/env
         required: false
@@ -68,8 +70,8 @@ secrets:
 networks:
   net:
     driver: bridge
-    name: {{.Name}}-net
+    name: {{.Name}}${SCHEMAF_INSTANCE_SUFFIX:-}-net
 
 volumes:
   postgres-data:
-    name: {{.Name}}-postgres-data
+    name: {{.Name}}${SCHEMAF_INSTANCE_SUFFIX:-}-postgres-data

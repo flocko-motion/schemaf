@@ -20,6 +20,7 @@ import (
 	"github.com/flocko-motion/schemaf/cli"
 	"github.com/flocko-motion/schemaf/constants"
 	"github.com/flocko-motion/schemaf/db"
+	"github.com/flocko-motion/schemaf/files"
 )
 
 // devProvider returns the built-in "dev" command for starting development services.
@@ -37,10 +38,15 @@ func (a *App) devProvider(_ *cli.Context) []*cobra.Command {
   frontend        Vite dev server on :%d
   all             All of the above
 
+Ports are those of the default instance; --instance <n> runs a separate dev
+stack with all ports shifted by 10 × n, and sticks to the checkout
+(INSTALL.md › Parallel dev instances). --instance default switches back.
+
 Examples:
   ./schemaf.sh dev db,backend
   ./schemaf.sh dev all
-  ./schemaf.sh dev all --reset-db`, constants.Port(), constants.FrontendPort()),
+  ./schemaf.sh dev all --reset-db
+  ./schemaf.sh dev all --instance 349`, constants.Port(), constants.FrontendPort()),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -91,6 +97,11 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		return err
 	}
 
+	if err := a.setUpInstance(); err != nil {
+		return err
+	}
+	instance := constants.Instance()
+
 	// Fail fast on auth misconfiguration, before starting any containers.
 	if svc.backend {
 		if _, err := a.identityProvidersFor(os.Getenv); err != nil {
@@ -107,8 +118,16 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 	}
 
 	// Check the container runtime before touching any container.
-	if err := cli.CheckRuntime(constants.ProjectName()); err != nil {
+	if err := cli.CheckRuntime(constants.ProjectName(), instance); err != nil {
 		return err
+	}
+
+	// The generated compose files take the instance's names and Postgres port
+	// from the environment (cli.InstanceComposeEnv); set them for every
+	// instance, so nothing from the caller's shell leaks in.
+	for _, kv := range cli.InstanceComposeEnv(instance, constants.PostgresPort()) {
+		k, v, _ := strings.Cut(kv, "=")
+		os.Setenv(k, v)
 	}
 
 	// compose.gen.yml requires SCHEMAF_IMAGE for the backend service. Dev never
@@ -118,9 +137,13 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		os.Setenv("SCHEMAF_IMAGE", constants.ProjectName()+":dev-runs-natively")
 	}
 
-	// Stop production compose if running — dev and prod can't coexist.
-	if err := stopProdIfRunning(); err != nil {
-		return err
+	// Stop production compose if running — dev and prod can't coexist. Only
+	// the default instance shares a volume and ports with production;
+	// instances leave it alone.
+	if instance == 0 {
+		if err := stopProdIfRunning(); err != nil {
+			return err
+		}
 	}
 
 	// Backend needs all infrastructure, not just postgres.
@@ -211,7 +234,12 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 
 	// Start frontend dev server.
 	if svc.frontend {
-		cmd := exec.Command("npm", "run", "dev")
+		npmArgs := []string{"run", "dev"}
+		if instance != 0 {
+			// Overrides the port in the project's vite.config.ts.
+			npmArgs = append(npmArgs, "--", "--port", strconv.Itoa(constants.FrontendPort()), "--strictPort")
+		}
+		cmd := exec.Command("npm", npmArgs...)
 		cmd.Dir = "frontend"
 		cmd.Env = append(os.Environ(), "NODE_OPTIONS=--max-http-header-size=32768")
 		cmd.Stdout = os.Stdout
@@ -241,6 +269,42 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		return err
 	}
 
+	return nil
+}
+
+// setUpInstance applies dev's --instance to the checkout (.schemaf/instance),
+// records the instance in ~/.<name>/dev/instances/<n>/instance.toml and prints
+// its ports. The instance itself was resolved before the command ran
+// (App.resolveInstanceFor). An instance belongs to one checkout.
+func (a *App) setUpInstance() error {
+	n := constants.Instance()
+	if n != 0 {
+		took, err := files.ClaimInstance(n, a.projectRoot)
+		if err != nil {
+			return err
+		}
+		if took != "" {
+			fmt.Fprintf(os.Stderr, "taking over instance %d from %s, which no longer claims it\n", n, took)
+		}
+	}
+	if a.projectRoot != "" {
+		if err := files.PersistInstance(a.projectRoot, a.instanceFlag); err != nil {
+			return err
+		}
+	}
+	if n != 0 {
+		if err := files.WriteInstanceRecord(files.InstanceRecord{
+			Instance:     n,
+			BackendPort:  constants.Port(),
+			VitePort:     constants.FrontendPort(),
+			PostgresPort: constants.PostgresPort(),
+			Checkout:     a.projectRoot,
+		}); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(os.Stderr, "ports: backend :%d, Vite :%d, Postgres :%d\n",
+		constants.Port(), constants.FrontendPort(), constants.PostgresPort())
 	return nil
 }
 

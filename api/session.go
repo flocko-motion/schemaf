@@ -154,10 +154,11 @@ func clearSessionCookie(w http.ResponseWriter) {
 }
 
 // cookieName is "<project name>_session", so apps on different localhost
-// ports don't overwrite each other's cookie.
+// ports don't overwrite each other's cookie; a parallel dev instance n uses
+// "<project name>-<n>_session", so two instances don't sign each other out.
 func cookieName() string {
 	if constants.IsProjectNameSet() {
-		return SessionCookieName(constants.ProjectName())
+		return SessionCookieName(constants.StackName())
 	}
 	return SessionCookieName("schemaf")
 }

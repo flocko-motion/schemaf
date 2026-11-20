@@ -34,6 +34,11 @@ USER_DIR="$HOME/.${PROJECT_NAME}"
 DEPLOY_DIR="$USER_DIR/deploy"
 NO_CHECKOUT="this host has no checkout; that command runs on a dev or build host"
 
+# A parallel dev instance's compose names and Postgres port (cli.InstanceComposeEnv).
+# Only `dev` sets them, in Go; everything schemaf.sh starts is the default stack,
+# so they are dropped here and never loaded from an env file.
+unset SCHEMAF_INSTANCE_SUFFIX SCHEMAF_POSTGRES_PORT
+
 # Go template delimiters for --format arguments of the container CLI.
 _O='{{"{{"}}' _C='{{"}}"}}'
 
@@ -77,6 +82,7 @@ _schemaf_load_env() {
   while IFS='=' read -r key val; do
     key=$(echo "$key" | xargs)
     [ -z "$key" ] || [[ "$key" == \#* ]] && continue
+    case "$key" in SCHEMAF_INSTANCE_SUFFIX|SCHEMAF_POSTGRES_PORT) continue ;; esac
     val=$(echo "$val" | xargs)
     if [ -z "${!key:-}" ]; then
       export "$key=$val"
@@ -672,6 +678,18 @@ _schemaf_image_rm() {
   echo "Removed $tag" >&2
 }
 
+# --instance is dev-only (INSTALL.md › Parallel dev instances): production
+# always runs the one production stack. _schemaf_refuse_instance <cmd> <args...>
+_schemaf_refuse_instance() {
+  local cmd="$1" a
+  shift
+  for a in "$@"; do
+    case "$a" in
+      --instance|--instance=*) _die "--instance is dev-only: $cmd always uses the one production stack (a parallel dev stack: ./schemaf.sh dev all --instance <n>)" ;;
+    esac
+  done
+}
+
 _schemaf_runside() {
   local cmd="$1" b tty
   shift
@@ -679,6 +697,7 @@ _schemaf_runside() {
   unset SCHEMAF_DEV # the run side is production, even if the caller's shell exports it
   case "$cmd" in
     run)
+      _schemaf_refuse_instance run "$@"
       [ "${1:-}" = --image ] && [ $# -ge 2 ] || _die "on the run side, run needs a tag: schemaf.sh run --image <tag> (loaded tags: schemaf.sh image ls)"
       local tag="$2"
       shift 2
@@ -761,7 +780,7 @@ echo "schemaf ${SCHEMAF_VER} — ${PROJECT_NAME}" >&2
 # SCHEMAF_DEV=1 for every command that loads it, never for build or run, whatever
 # the caller's shell exports. Env files may not set it (_schemaf_refuse_dev_mode_in).
 case "$CMD" in
-  build|run) unset SCHEMAF_DEV ;;
+  build|run) _schemaf_refuse_instance "$CMD" "$@"; unset SCHEMAF_DEV ;;
   *)
     _schemaf_load_env "$USER_DIR/dev/etc/env"
     export SCHEMAF_DEV=1

@@ -45,6 +45,19 @@ func EnsureProjectConfigured() error {
 	return nil
 }
 
+// ProjectRoot returns the absolute path of the project root: the nearest
+// directory, from the current one upwards, that holds schemaf.toml.
+func ProjectRoot() (string, error) {
+	root, err := findProjectRoot()
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	return root, nil
+}
+
 // findProjectRoot walks up from the current directory looking for schemaf.toml.
 func findProjectRoot() (string, error) {
 	dir, err := os.Getwd()
@@ -141,7 +154,11 @@ func DockerDir() string {
 
 // VarDir returns the runtime data directory.
 // Dev: ~/.{project}/dev/var/   Prod: ~/.{project}/var/
+// A parallel dev instance n: ~/.{project}/dev/instances/{n}/var/
 func VarDir() string {
+	if api.DevMode() && constants.Instance() != 0 {
+		return filepath.Join(InstanceDir(constants.Instance()), "var")
+	}
 	if api.DevMode() {
 		return filepath.Join(ProjectHome(), "dev", "var")
 	}
