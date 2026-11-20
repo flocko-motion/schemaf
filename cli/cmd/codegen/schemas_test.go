@@ -8,16 +8,18 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/flocko-motion/schemaf/internal/gotest"
 )
 
 // offlineGoMod returns go.mod and go.sum content for a module that requires
 // schemaf at schemafVersion, served from this checkout, plus each module in
 // deps (path → directory, relative to the go.mod), and makes the go tool run
 // offline for the rest of the test (schemaf's modules come from the module
-// cache, filled by requireModuleCache).
+// cache, filled by gotest.RequireModuleCache).
 func offlineGoMod(t *testing.T, module, schemafVersion string, deps map[string]string) (gomod, gosum string) {
 	t.Helper()
-	requireModuleCache(t)
+	gotest.RequireModuleCache(t)
 	checkout, err := filepath.Abs(schemafCheckout(t))
 	if err != nil {
 		t.Fatal(err)

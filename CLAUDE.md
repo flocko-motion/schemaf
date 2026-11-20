@@ -69,7 +69,7 @@ Never invent other names or bases; deviate only if the maintainer says so.
 api/             - API registry + OpenAPI generation
 schemaf/         - App lifecycle (schemaf.New, app.Run)
 schemaftest/     - Test harness: start the app in-process on its own database (schemaftest.Start)
-internal/        - Framework-only hooks between packages; apps can't import them (e.g. internal/isolation: schemaftest's isolated server start)
+internal/        - Framework-only hooks between packages; apps can't import them (e.g. internal/isolation: schemaftest's isolated server start; internal/gotest: test support for tests that run the go tool offline)
 cli/             - CLI framework (subcommands, config/state)
 compose/         - Compose dependency resolver (x-schemaf metadata)
 db/              - Database helpers + migrations
