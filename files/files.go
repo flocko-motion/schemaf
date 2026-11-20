@@ -11,14 +11,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/flocko-motion/schemaf/api"
 	"github.com/flocko-motion/schemaf/constants"
 	slog "github.com/flocko-motion/schemaf/log"
 )
-
-// isDev returns true when not running inside Docker.
-func isDev() bool {
-	return os.Getenv("SCHEMAF_ENV") != "docker"
-}
 
 // EnsureProjectConfigured makes sure the project name is registered. If it was
 // not compiled in via constants.gen.go (the usual case when the framework CLI
@@ -133,7 +129,7 @@ func DataDir() string {
 // ConfigDir returns the project's config/secrets directory.
 // Dev: ~/.{project}/dev/etc/   Prod: ~/.{project}/etc/
 func ConfigDir() string {
-	if isDev() {
+	if api.DevMode() {
 		return filepath.Join(ProjectHome(), "dev", "etc")
 	}
 	return filepath.Join(ProjectHome(), "etc")
@@ -146,7 +142,7 @@ func DockerDir() string {
 // VarDir returns the runtime data directory.
 // Dev: ~/.{project}/dev/var/   Prod: ~/.{project}/var/
 func VarDir() string {
-	if isDev() {
+	if api.DevMode() {
 		return filepath.Join(ProjectHome(), "dev", "var")
 	}
 	return filepath.Join(ProjectHome(), "var")
