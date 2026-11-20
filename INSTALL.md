@@ -197,7 +197,7 @@ go run github.com/flocko-motion/schemaf/cmd/schemaf codegen all
 Codegen produces:
 - `schemaf.sh` → project CLI entrypoint (auto-updated on every codegen)
 - `go/db/migrations.gen.go` → `db.Provider` (embedded SQL)
-- `go/db/queries.gen.go` → type-safe query functions (sqlc)
+- `go/db/db.gen.go`, `go/db/models.gen.go`, `go/db/users.sql.gen.go` → type-safe query functions (sqlc, one `.sql.gen.go` per query file)
 - `go/api/endpoints.gen.go` → `api.Provider` (handler registration, and the OpenAPI spec the server serves)
 - `gen/openapi.json` → OpenAPI spec
 - `gen/schema-sources` → the packages declaring the API's types (input to the freshness check)

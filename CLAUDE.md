@@ -87,7 +87,7 @@ These are framework-wide conventions. Do not deviate.
 - `db/migrations/` → input migrations
 - `db/queries/` → sqlc input
 - `db/migrations.gen.go` → generated `db.Provider`
-- `db/queries.gen.go` → generated sqlc query functions
+- `db/db.gen.go`, `db/models.gen.go`, `db/<file>.sql.gen.go` → generated sqlc query code (removed and regenerated on every codegen)
 - `api/*.go` → endpoint struct implementations
 - `api/endpoints.gen.go` → generated `api.Provider`
 - `frontend/src/api/generated/api.gen.ts` → generated TypeScript client
