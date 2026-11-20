@@ -114,7 +114,7 @@ Projects built with schemaf **add only creative logic**:
 - **Database schema**: Write SQL migrations in `go/db/migrations/`
 - **Database queries**: Write SQL queries in `go/db/queries/`
 - **API handlers**: Write Go handlers in `go/api/`
-- **Frontend**: Any static site framework in `frontend/` (React, Vue, Svelte, etc.)
+- **Frontend**: A Vite + TypeScript app in `frontend/`, built with npm, with any UI framework (React — the scaffold default —, Vue, Svelte, etc.)
 - **Optional services**: Additional containers if needed (Redis, workers, etc.)
 - **Optional CLI commands**: Custom subcommands via `app.AddSubcommand()`
 - **Tests**: Go tests and TypeScript integration tests
