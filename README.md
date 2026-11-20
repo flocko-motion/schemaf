@@ -145,7 +145,9 @@ myapp/
 │   │   │   └── 002_posts.sql
 │   │   ├── queries/               # Your SQL queries (sqlc input)
 │   │   │   └── users.sql
-│   │   ├── queries.gen.go         # Generated: sqlc query functions
+│   │   ├── db.gen.go              # Generated: sqlc Queries type
+│   │   ├── models.gen.go          # Generated: sqlc model structs
+│   │   ├── users.sql.gen.go       # Generated: sqlc, one per query file
 │   │   └── migrations.gen.go      # Generated: db.Provider
 │   ├── api/                       # Your API handlers (normative!)
 │   │   ├── users.go              # Your handler implementations

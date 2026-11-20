@@ -46,7 +46,7 @@ func TestEmptyInputsEmptyProject(t *testing.T) {
 	runEmptyInputSteps(t)
 
 	want := "no migrations in go/db/migrations — db.Provider() is empty\n" +
-		"no queries in go/db/queries — sqlc generates no query code\n" +
+		"no queries in go/db/queries — no query code generated\n" +
 		"no endpoints in go/api — Provider() registers nothing\n"
 	if got := readFile(t, emptyInputsFile); got != want {
 		t.Errorf("%s =\n%s\nwant\n%s", emptyInputsFile, got, want)
