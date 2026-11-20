@@ -3,7 +3,7 @@
 # Recipes stay one-liners (logic lives in scripts/) so this works with macOS's GNU Make 3.81.
 SHELL := bash
 .DEFAULT_GOAL := help
-.PHONY: help build test release unit db e2e all major minor patch breaking feature fix
+.PHONY: help build test merge release unit db e2e all major minor patch breaking feature fix
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-9s %s\n", $$1, $$2}'
@@ -13,6 +13,9 @@ build: ## Compile the framework
 
 test: ## Run tests: make test <unit|db|e2e|all>  (no arg lists the options)
 	@REF="$(REF)" ./scripts/test.sh $(firstword $(filter-out test,$(MAKECMDGOALS)))
+
+merge: ## Merge the current branch into main via PR, without releasing (gate: build, vet, unit tests)
+	@./scripts/merge.sh
 
 release: ## Release current main, tagging <major|minor|patch> (aliases: breaking|feature|fix); from a branch it merges first
 	@./scripts/release.sh $(firstword $(filter-out release,$(MAKECMDGOALS)))
