@@ -6,7 +6,7 @@ set -euo pipefail
 source "$(dirname "$0")/issues.sh"
 
 git fetch -q --tags origin
-# Latest RELEASE version — ignore -pre prereleases when picking what to bump.
+# Latest RELEASE version (vX.Y.Z only) — the base for the bump.
 latest=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
 [[ -n "$latest" ]] || latest="v0.0.0"
 IFS='.' read -r major minor patch <<< "${latest#v}"
@@ -24,20 +24,14 @@ if [[ -n "$(git status --porcelain)" ]]; then
 	exit 1
 fi
 
-# gate the current HEAD: publish a unique, immutable prerelease tag and run
-# the full onboarding e2e against it. cleanup_pre removes it afterward.
-PRE=""
+# gate the current HEAD: run the full onboarding e2e against the pushed commit,
+# by its full hash. A commit is immutable, so Go fetches it through the module
+# proxy as a pseudo-version; no tag is created, so a failed gate leaves nothing.
 gate() {
-	PRE="$new-pre.$(date -u +%Y%m%d%H%M%S).g$(git rev-parse --short HEAD)"
-	echo "▶ gate: onboarding e2e against $PRE"
-	git tag "$PRE"
-	git push origin "$PRE"
-	./e2e/build-example.sh "$PRE"
-}
-cleanup_pre() {
-	[[ -n "$PRE" ]] || return 0
-	git push origin ":refs/tags/$PRE" >/dev/null 2>&1 || true
-	git tag -d "$PRE" >/dev/null 2>&1 || true
+	local head
+	head=$(git rev-parse HEAD)
+	echo "▶ gate: onboarding e2e against $head"
+	./e2e/build-example.sh "$head"
 }
 
 git fetch -q origin main
@@ -99,6 +93,5 @@ echo "  $latest → $new"
 git tag "$new" "$release_ref"
 git push origin "$new"
 gh release create "$new" --title "$new" --generate-notes || echo "  (gh release create failed; tag $new is pushed — create the GitHub release manually if needed)"
-cleanup_pre
 close_issues
 echo "  released $new on main; now on '$branch'"

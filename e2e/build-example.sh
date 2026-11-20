@@ -4,14 +4,18 @@
 # This is both a TEST and executable DOCUMENTATION. It assumes a bare machine:
 # nothing schemaf-related is installed. The entire project is created by ONE
 # command — `go run …/cmd/schemaf@<ref> init <name>` — which fetches schemaf
-# from an ONLINE tag and scaffolds a complete, working project (the create-
+# from an ONLINE ref and scaffolds a complete, working project (the create-
 # react-app experience). The script then builds and tests it.
 #
 # Usage:
 #   e2e/build-example.sh                # use the latest online v* release tag
 #   e2e/build-example.sh v1.8.1         # a specific release tag
-#   e2e/build-example.sh e2e            # the moving non-semver 'e2e' tag
-#                                       #   (Go pins it to a commit pseudo-version)
+#   e2e/build-example.sh "$(git rev-parse HEAD)"
+#                                       # a pushed commit, by its full 40-char hash
+#                                       #   (what the release gate runs)
+#   e2e/build-example.sh e2e            # a moving ref: the non-semver 'e2e' tag
+#   e2e/build-example.sh main           #   or a branch
+#                                       #   (Go pins either to a commit pseudo-version)
 #   KEEP=1 e2e/build-example.sh ...     # keep the /tmp project on success
 set -euo pipefail
 
@@ -50,13 +54,47 @@ if [ -z "$REF" ]; then
   [ -n "$REF" ] || { echo "could not resolve a release tag from $SCHEMAF_REPO" >&2; exit 1; }
 fi
 
-# Only a clean release tag (vX.Y.Z) is immutable and safe to fetch via the module
-# proxy. Moving tags (e2e) and freshly pushed prereleases (vX.Y.Z-pre.<sha>) must
-# bypass proxy+sumdb so we test the exact commit just pushed, not a cached or
-# sumdb-lagged one.
-if [[ ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  export GOPROXY=direct GOSUMDB=off
-  echo "  (ref '$REF' is not a release tag → GOPROXY=direct GOSUMDB=off)"
+# How Go may fetch schemaf@<ref>:
+#   - release tag (vX.Y.Z) or full 40-char commit hash: immutable, so the module
+#     proxy can't serve a stale version — no override, everything via the proxy.
+#   - moving ref (a branch, the 'e2e' tag): the proxy may serve what it resolved
+#     earlier, so schemaf — and ONLY schemaf — bypasses proxy+sumdb via GOPRIVATE.
+#     All other dependencies still come through the proxy.
+# Anything else is refused: an abbreviated hash, an unknown name, or a name that
+# is both a branch and a tag (or a 40-hex name that is also a ref) is ambiguous.
+SCHEMAF_MODULE="github.com/flocko-motion/schemaf"
+if [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "  (ref '$REF' is a release tag → module proxy, no override)"
+else
+  REFS=$(git ls-remote --heads --tags "$SCHEMAF_REPO" "$REF") \
+    || { echo "could not list refs of $SCHEMAF_REPO (git ls-remote failed)" >&2; exit 1; }
+  IS_BRANCH=0; IS_TAG=0
+  while read -r _ name; do
+    case "$name" in
+      "refs/heads/$REF") IS_BRANCH=1 ;;
+      "refs/tags/$REF" | "refs/tags/$REF^{}") IS_TAG=1 ;;
+    esac
+  done <<< "$REFS"
+  if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+    if [ "$IS_BRANCH$IS_TAG" != 00 ]; then
+      echo "ref '$REF' is ambiguous: a commit hash and also a branch or tag on $SCHEMAF_REPO" >&2
+      exit 1
+    fi
+    echo "  (ref '$REF' is a commit hash → module proxy, no override)"
+  elif [ "$IS_BRANCH$IS_TAG" = 11 ]; then
+    echo "ref '$REF' is ambiguous: both a branch and a tag on $SCHEMAF_REPO" >&2
+    exit 1
+  elif [ "$IS_BRANCH$IS_TAG" != 00 ]; then
+    export GOPRIVATE="$SCHEMAF_MODULE"
+    kind=branch; [ "$IS_TAG" = 1 ] && kind=tag
+    echo "  (ref '$REF' is a moving ref ($kind) → GOPRIVATE=$GOPRIVATE: only schemaf bypasses the module proxy)"
+  elif [[ "$REF" =~ ^[0-9a-fA-F]{4,39}$ ]]; then
+    echo "ref '$REF' looks like an abbreviated commit hash — pass the full 40-character hash (git rev-parse <ref>)" >&2
+    exit 1
+  else
+    echo "ref '$REF' is not a release tag (vX.Y.Z), a full commit hash, or a branch or tag on $SCHEMAF_REPO" >&2
+    exit 1
+  fi
 fi
 
 # --- a fresh, legible name in a blank dir OUTSIDE this repo ---
