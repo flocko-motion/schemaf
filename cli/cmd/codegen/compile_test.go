@@ -5,11 +5,13 @@ package codegen
 // go:embed pattern errors are only reported by the compiler, not go/types.
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -32,6 +34,32 @@ func schemafCheckout(t *testing.T) string {
 	return root
 }
 
+var (
+	moduleCacheOnce sync.Once
+	moduleCacheErr  error
+)
+
+// requireModuleCache makes sure schemaf's full module graph is in the module
+// cache, so the tests that then run the go tool offline (GOPROXY=off) find
+// every module. Building schemaf is not enough: it downloads only the modules
+// the current platform compiles, not e.g. Windows-only dependencies that are
+// still part of the graph. It runs `go mod download` in the checkout once per
+// test binary, with the caller's GOPROXY; call it before going offline.
+func requireModuleCache(t *testing.T) {
+	t.Helper()
+	moduleCacheOnce.Do(func() {
+		cmd := exec.Command("go", "mod", "download")
+		cmd.Dir = schemafCheckout(t)
+		cmd.Env = append(os.Environ(), "GOFLAGS=", "GOWORK=off")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			moduleCacheErr = fmt.Errorf("%v\n%s", err, out)
+		}
+	})
+	if moduleCacheErr != nil {
+		t.Fatalf("these tests run the go tool offline and need schemaf's full module graph in the module cache; `go mod download` in the schemaf checkout failed: %v", moduleCacheErr)
+	}
+}
+
 // compileGenerated writes files (paths relative to the module root; a path
 // ending in "/" creates an empty directory) into a temporary Go module that
 // requires the schemaf checkout via a replace directive, then runs go build
@@ -39,6 +67,7 @@ func schemafCheckout(t *testing.T) string {
 func compileGenerated(t *testing.T, files map[string]string) {
 	t.Helper()
 	checkout := schemafCheckout(t)
+	requireModuleCache(t)
 	dir := t.TempDir()
 
 	goVersion := ""
@@ -78,7 +107,7 @@ func compileGenerated(t *testing.T, files map[string]string) {
 		cmd.Dir = dir
 		// -mod=mod lets go add schemaf's indirect requirements to the
 		// temporary go.mod; GOPROXY=off keeps the check offline (everything
-		// is in the module cache because schemaf itself builds).
+		// is in the module cache: requireModuleCache downloaded it).
 		cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off", "GOWORK=off")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			var srcs strings.Builder
