@@ -117,7 +117,7 @@ func TestScanErrors(t *testing.T) {
 	}{
 		{"no handler (misnamed Handle)", okMethod + okPath + okAuth +
 			`func (e E) Handler(ctx context.Context, req Req) (Resp, error) { return Resp{}, nil }`,
-			"endpoint E has Method(), Path() and Auth() but no Handle or HandleRaw method"},
+			"endpoint E has Method(), Path() and Auth() but no Handle, HandleRaw or Stream method"},
 		{"old Auth() bool", okMethod + okPath + okHandle +
 			`func (e E) Auth() bool { return true }`,
 			"E.Auth() returns bool; since schemaf v1.11.0 it returns api.AuthLevel: true → api.AuthRequired, false → api.AuthNone"},
@@ -153,7 +153,7 @@ func (e E) Path() string { return p }`,
 			"endpoint E is missing Auth()"},
 		{"both handlers", okMethod + okPath + okAuth + okHandle +
 			`func (e E) HandleRaw(w http.ResponseWriter, r *http.Request) error { return nil }`,
-			"has both Handle and HandleRaw"},
+			"has more than one of Handle, HandleRaw and Stream"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

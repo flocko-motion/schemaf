@@ -47,7 +47,8 @@ func newEndpointsCmd(ctx *cli.Context) *cobra.Command {
 
 An endpoint struct is any struct that implements:
   Method() string, Path() string, Auth() api.AuthLevel,
-  Handle(ctx, req Req) (Resp, error)  or  HandleRaw(w, r) error
+  Handle(ctx, req Req) (Resp, error),  HandleRaw(w, r) error
+  or  Stream(ctx, req Req) (<-chan Event, error)
 
 A struct with that shape that can't be parsed is an error, never skipped.
 
@@ -72,12 +73,15 @@ type endpointInfo struct {
 	Path        string
 	Auth        api.AuthLevel
 	ReqType     string // empty for raw endpoints
-	RespType    string // empty for raw endpoints
+	RespType    string // empty for raw endpoints; the event type of a stream
 	Summary     string
 	Description string
 	IsRaw       bool
+	IsStream    bool
+	Consumes    []string       // request body media types (Handle endpoints)
+	Produces    []string       // response body media types (Handle endpoints)
 	ReqSchema   map[string]any // request body schema; nil for no body
-	RespSchema  map[string]any // 200 response schema; nil for no content
+	RespSchema  map[string]any // 200 response schema (a stream's: each event's data); nil for no content
 }
 
 func runEndpointsGen(_ *cli.Context) error {
@@ -230,12 +234,13 @@ func parseEndpoint(name string, methods map[methodKey]methodDecl) (ep endpointIn
 	authFn, hasAuth := methods[methodKey{name, "Auth"}]
 	handleFn, hasHandle := methods[methodKey{name, "Handle"}]
 	rawFn, hasHandleRaw := methods[methodKey{name, "HandleRaw"}]
+	streamFn, hasStream := methods[methodKey{name, "Stream"}]
 
-	if !hasHandle && !hasHandleRaw {
+	if !hasHandle && !hasHandleRaw && !hasStream {
 		if hasMethod && hasPath && hasAuth {
 			// Everything but the handler: almost certainly a misnamed Handle
 			// (e.g. Handler, HandleRAW). Don't let the endpoint vanish.
-			return ep, false, fmt.Errorf("endpoint %s has Method(), Path() and Auth() but no Handle or HandleRaw method: add `Handle(ctx context.Context, req Req) (Resp, error)` or `HandleRaw(w http.ResponseWriter, r *http.Request) error`", name)
+			return ep, false, fmt.Errorf("endpoint %s has Method(), Path() and Auth() but no Handle, HandleRaw or Stream method: add `Handle(ctx context.Context, req Req) (Resp, error)`, `HandleRaw(w http.ResponseWriter, r *http.Request) error` or `Stream(ctx context.Context, req Req) (<-chan Event, error)`", name)
 		}
 		return ep, false, nil
 	}
@@ -252,10 +257,10 @@ func parseEndpoint(name string, methods map[methodKey]methodDecl) (ep endpointIn
 		}
 	}
 	if len(missing) > 0 {
-		return ep, false, fmt.Errorf("endpoint %s is missing %s: an endpoint needs Method(), Path(), Auth() and Handle or HandleRaw", name, strings.Join(missing, ", "))
+		return ep, false, fmt.Errorf("endpoint %s is missing %s: an endpoint needs Method(), Path(), Auth() and one of Handle, HandleRaw, Stream", name, strings.Join(missing, ", "))
 	}
-	if hasHandle && hasHandleRaw {
-		return ep, false, fmt.Errorf("endpoint %s has both Handle and HandleRaw — exactly one is allowed", name)
+	if n := countTrue(hasHandle, hasHandleRaw, hasStream); n > 1 {
+		return ep, false, fmt.Errorf("endpoint %s has more than one of Handle, HandleRaw and Stream — exactly one is allowed", name)
 	}
 
 	ep.StructName = name
@@ -268,15 +273,117 @@ func parseEndpoint(name string, methods map[methodKey]methodDecl) (ep endpointIn
 	if ep.Auth, err = parseAuthMethod(name, authFn); err != nil {
 		return ep, false, err
 	}
-	if hasHandleRaw {
+	switch {
+	case hasHandleRaw:
 		ep.IsRaw = true
 		if err := checkHandleRaw(name, rawFn); err != nil {
 			return ep, false, err
 		}
-	} else if ep.ReqType, ep.RespType, err = parseHandle(name, handleFn); err != nil {
+	case hasStream:
+		ep.IsStream = true
+		if ep.Method != "GET" {
+			return ep, false, fmt.Errorf("endpoint %s: a stream endpoint's Method() must be \"GET\" (browsers open streams with EventSource), got %q", name, ep.Method)
+		}
+		if ep.ReqType, ep.RespType, err = parseStream(name, streamFn); err != nil {
+			return ep, false, err
+		}
+	default:
+		if ep.ReqType, ep.RespType, err = parseHandle(name, handleFn); err != nil {
+			return ep, false, err
+		}
+	}
+	if err := parseContentTypes(&ep, methods); err != nil {
 		return ep, false, err
 	}
 	return ep, true, nil
+}
+
+func countTrue(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
+}
+
+// parseContentTypes reads the optional Consumes() and Produces() of ep (JSON
+// when absent). They are only allowed on Handle endpoints, and Consumes()
+// only on methods that carry a body.
+func parseContentTypes(ep *endpointInfo, methods map[methodKey]methodDecl) error {
+	for _, m := range []struct {
+		name string
+		dst  *[]string
+	}{{"Consumes", &ep.Consumes}, {"Produces", &ep.Produces}} {
+		decl, ok := methods[methodKey{ep.StructName, m.name}]
+		if !ok {
+			if !ep.IsRaw && !ep.IsStream {
+				*m.dst = []string{api.MediaJSON}
+			}
+			continue
+		}
+		if ep.IsRaw || ep.IsStream {
+			return fmt.Errorf("endpoint %s: %s() is only allowed on endpoints with Handle (a raw endpoint handles content types itself, a stream answers text/event-stream)", ep.StructName, m.name)
+		}
+		if m.name == "Consumes" && !hasRequestBody(ep.Method) {
+			return fmt.Errorf("endpoint %s: Consumes() on a %s endpoint: %s requests carry no body", ep.StructName, ep.Method, ep.Method)
+		}
+		types, err := parseStringSliceMethod(ep.StructName, decl)
+		if err != nil {
+			return err
+		}
+		if err := api.CheckMediaTypes(m.name, types); err != nil {
+			return fmt.Errorf("endpoint %s: %w", ep.StructName, err)
+		}
+		*m.dst = types
+	}
+	return nil
+}
+
+// parseStringSliceMethod reads Consumes() or Produces(): a single return of a
+// []string{...} literal of string literals.
+func parseStringSliceMethod(structName string, m methodDecl) ([]string, error) {
+	fname := m.fn.Name.Name
+	bad := fmt.Errorf("endpoint %s: %s() must return a []string literal of string literals, e.g. `func (%s) %s() []string { return []string{\"application/x-yaml\"} }`", structName, fname, structName, fname)
+	expr, ok := singleReturn(m.fn)
+	lit, isLit := expr.(*ast.CompositeLit)
+	if !ok || !isLit {
+		return nil, bad
+	}
+	if arr, ok := lit.Type.(*ast.ArrayType); !ok || arr.Len != nil || !isIdent(arr.Elt, "string") {
+		return nil, bad
+	}
+	types := []string{}
+	for _, el := range lit.Elts {
+		bl, ok := el.(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING {
+			return nil, bad
+		}
+		v, err := strconv.Unquote(bl.Value)
+		if err != nil {
+			return nil, bad
+		}
+		types = append(types, v)
+	}
+	return types, nil
+}
+
+// parseStream checks Stream(ctx context.Context, req Req) (<-chan Event, error)
+// and returns the Req and Event type names.
+func parseStream(structName string, m methodDecl) (reqType, eventType string, err error) {
+	params, results := flatTypes(m.fn.Type.Params), flatTypes(m.fn.Type.Results)
+	if len(params) == 2 && len(results) == 2 &&
+		isQualified(params[0], m.file, "context", "context", "Context") &&
+		isIdent(results[1], "error") {
+		if ch, ok := results[0].(*ast.ChanType); ok && ch.Dir == ast.RECV {
+			reqType, eventType = exprTypeName(params[1]), exprTypeName(ch.Value)
+			if reqType != "" && eventType != "" {
+				return reqType, eventType, nil
+			}
+		}
+	}
+	return "", "", fmt.Errorf("endpoint %s: Stream must have the signature `Stream(ctx context.Context, req Req) (<-chan Event, error)` with named Req and Event types", structName)
 }
 
 // singleReturn returns the expression of a body consisting of exactly one
@@ -531,17 +638,17 @@ func buildOpenAPISpec(projectName string, endpoints []endpointInfo, schemas map[
 		if ep.ReqSchema != nil {
 			op["requestBody"] = map[string]any{
 				"required": true,
-				"content": map[string]any{
-					"application/json": map[string]any{"schema": ep.ReqSchema},
-				},
+				"content":  mediaContent(ep.Consumes, ep.ReqSchema),
 			}
 		}
 		if ep.RespSchema != nil {
+			produces := ep.Produces
+			if ep.IsStream {
+				produces = []string{api.MediaEventStream}
+			}
 			op["responses"].(map[string]any)["200"] = map[string]any{
 				"description": "OK",
-				"content": map[string]any{
-					"application/json": map[string]any{"schema": ep.RespSchema},
-				},
+				"content":     mediaContent(produces, ep.RespSchema),
 			}
 		}
 
@@ -594,6 +701,15 @@ func writeGenFile(path string, data []byte) error {
 	}
 	cli.Success("Generated %s", path)
 	return nil
+}
+
+// mediaContent lists schema under each media type.
+func mediaContent(types []string, schema map[string]any) map[string]any {
+	c := map[string]any{}
+	for _, t := range types {
+		c[t] = map[string]any{"schema": schema}
+	}
+	return c
 }
 
 // extractPathParams returns OpenAPI parameter objects for path template variables like {id}.

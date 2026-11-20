@@ -238,7 +238,7 @@ func retryAfterSeconds(d time.Duration) string {
 }
 
 // writeError writes the error response for err. Every error response of the
-// API goes through it. 5xx get an id under which the full error is logged.
+// API goes through it, except schemaf's own 406 and 415 (writeStatusError). 5xx get an id under which the full error is logged.
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	res := resolveError(err)
 	body := errorResponse{Error: res.msg, Code: res.code}
@@ -266,6 +266,14 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(res.status)
 	json.NewEncoder(w).Encode(body)
+}
+
+// writeStatusError writes an error response for a status schemaf answers
+// itself, outside the sentinels (406, 415).
+func writeStatusError(w http.ResponseWriter, status int, code, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(errorResponse{Error: msg, Code: code})
 }
 
 // newErrorID returns 16 random hex characters.

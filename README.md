@@ -20,7 +20,9 @@ Common tasks and where they're documented (jump straight to the section):
 | Authenticate / mint dev tokens | [EXTEND › Authentication](EXTEND.md#authentication) |
 | Sign users in with Auth0 | [EXTEND › Activating Auth0](EXTEND.md#activating-auth0) |
 | Per-instance frontend config (`PUBLIC_*`) | [EXTEND › Runtime config](EXTEND.md#runtime-config-public_) |
-| Stream / upload (raw HTTP) | [EXTEND › Raw Endpoints](EXTEND.md#raw-endpoints) |
+| Request headers, YAML and other content types | [EXTEND › Request headers](EXTEND.md#request-headers) · [Content types](EXTEND.md#content-types) |
+| Server-sent events (SSE) | [EXTEND › Stream Endpoints](EXTEND.md#stream-endpoints) |
+| Upload / download (raw HTTP) | [EXTEND › Raw Endpoints](EXTEND.md#raw-endpoints) |
 | Add a database migration | [EXTEND › Migrations](EXTEND.md#migrations) |
 | Migrate a secondary / external DB | [EXTEND › Applying migrations to another database](EXTEND.md#applying-migrations-to-another-database) |
 | Write DB queries (sqlc) | [EXTEND › Queries](EXTEND.md#queries) |

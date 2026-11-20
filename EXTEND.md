@@ -11,10 +11,13 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
 - [Endpoint Interface](#endpoint-interface)
   - [Auth levels](#auth-levels)
   - [Error responses](#error-responses)
+  - [Request headers](#request-headers)
+  - [Content types](#content-types)
 - [Authentication](#authentication)
   - [Identity providers](#identity-providers)
   - [Activating Auth0](#activating-auth0)
   - [Sessions](#sessions)
+- [Stream Endpoints](#stream-endpoints)
 - [Raw Endpoints](#raw-endpoints)
 - [Database](#database)
   - [Migrations](#migrations)
@@ -305,10 +308,10 @@ Each endpoint struct has four methods:
 - `Handle(ctx, req) (resp, error)` — your business logic
 
 **What the framework does for you:**
-- Decodes the request (path params, query params, JSON body) into the request type
+- Decodes the request (path params, query params, JSON body — or another [content type](#content-types)) into the request type
 - Authenticates the caller according to `Auth()`
-- Calls `Handle(ctx, req)`
-- Encodes the response as JSON
+- Calls `Handle(ctx, req)`; `ctx` carries the caller ([`api.Subject`](#auth-levels)) and the [request headers](#request-headers), and can [start a session](#starting-sessions-from-your-own-code)
+- Encodes the response as JSON (or another [content type](#content-types))
 - On error: answers with the status and error body derived from the error (see [Error responses](#error-responses))
 
 ### Auth levels
@@ -352,7 +355,7 @@ func (e GetShareEndpoint) Handle(ctx context.Context, req GetShareReq) (GetShare
 
 In `openapi.json`, `AuthRequired` endpoints declare `security: [{bearerAuth: []}, {cookieAuth: []}]` and `AuthOptional` endpoints `security: [{}, {bearerAuth: []}, {cookieAuth: []}]` (anonymous allowed). `AuthNone` endpoints declare no security. Every operation's error responses, `401` included, are its `default` response (see [Error responses](#error-responses)).
 
-Codegen is strict: an endpoint whose `Auth()` does not return one of the three constants, whose `Method()` or `Path()` does not return a string literal, whose `Handle` does not have the `(ctx, Req) (Resp, error)` shape, or that has `Method()`, `Path()` and `Auth()` but no `Handle`/`HandleRaw` (e.g. a misnamed `Handler`) is a codegen error, never silently skipped.
+Codegen is strict: an endpoint whose `Auth()` does not return one of the three constants, whose `Method()` or `Path()` does not return a string literal, whose `Handle` does not have the `(ctx, Req) (Resp, error)` shape, that has more than one of `Handle`, `HandleRaw` and [`Stream`](#stream-endpoints), or that has `Method()`, `Path()` and `Auth()` but none of them (e.g. a misnamed `Handler`) is a codegen error, never silently skipped.
 
 #### Upgrading: `Auth() bool` → `api.AuthLevel`
 
@@ -565,6 +568,61 @@ Before v1.13.0, an error response was `{"error": "<message>"}`. Now:
 - 5xx messages are withheld: the message is the status text, and the response carries an `id` to find the full error in the log.
 - schemaf's own 401s no longer say why; the reason is in the log.
 - `openapi.json` declares errors as one `default` response referencing `Error`, instead of description-only `400`/`401`/`500` responses.
+
+### Request headers
+
+`api.Header` reads a request header from `ctx` in `Handle` and `Stream`:
+
+```go
+func Header(ctx context.Context, name string) string
+```
+
+```go
+func (e AcceptInviteEndpoint) Handle(ctx context.Context, req AcceptInviteReq) (AcceptInviteResp, error) {
+    lang := api.Header(ctx, "Accept-Language") // "" when absent
+    ...
+}
+```
+
+- The name is case-insensitive and the first value is returned, as with `http.Header.Get`. A missing header is `""`.
+- On a context that doesn't come from an endpoint request (a service, a CLI command, a test's `context.Background()`), it is `""`.
+- Headers a handler reads are not part of `openapi.json`. Data the client must send belongs in the request type (path, query or body).
+
+### Content types
+
+A typed endpoint takes and answers JSON. To take or answer other formats with the same request and response types, declare them with the optional methods `Consumes()` and `Produces()`:
+
+```go
+// GetGameYAMLEndpoint returns a game as YAML.
+type GetGameYAMLEndpoint struct{}
+
+func (GetGameYAMLEndpoint) Method() string      { return "GET" }
+func (GetGameYAMLEndpoint) Path() string        { return "/api/games/{id}/yaml" }
+func (GetGameYAMLEndpoint) Auth() api.AuthLevel { return api.AuthRequired }
+func (GetGameYAMLEndpoint) Produces() []string  { return []string{"application/x-yaml"} }
+
+// UpdateGameYAMLEndpoint replaces a game from YAML or JSON.
+type UpdateGameYAMLEndpoint struct{}
+
+func (UpdateGameYAMLEndpoint) Consumes() []string { return []string{"application/x-yaml", "application/json"} }
+```
+
+Supported media types (fixed by schemaf; anything else is a codegen error):
+
+| Media type | Format |
+|---|---|
+| `application/json` | JSON |
+| `application/yaml`, `application/x-yaml` | YAML |
+
+YAML uses the same field names as JSON (the `json` tags): a YAML body is the JSON body written as YAML, so both formats share one schema.
+
+- **Default**: without `Consumes()`/`Produces()`, an endpoint consumes and produces `application/json`. The rules below hold for it too: since v1.14.0 a JSON endpoint answers a non-empty body sent as e.g. `text/plain` with 415, and an `Accept` without JSON (or `*/*`) with 406. Before, it read every body as JSON and ignored `Accept`.
+- **Request body**: decoded by the request's `Content-Type` (parameters such as `charset` are ignored). A `Content-Type` not listed in `Consumes()` is a **415** with code `unsupported_media_type`. A body without `Content-Type` is decoded as the first entry of `Consumes()`. An empty body is never decoded, whatever its `Content-Type`: the request type keeps its zero values (plus path and query params).
+- **Response body**: encoded in the format picked from `Accept`: the entry of `Produces()` with the highest `q`, ties going to the order of `Produces()`; `*/*` and `type/*` match. Without `Accept`, or with `*/*`, it is the first entry of `Produces()`. An `Accept` matching none is a **406** with code `not_acceptable`. Ranges that don't parse or carry an invalid `q` are ignored (RFC 9110), a bare `*` counts as `*/*`, and an `Accept` with no valid range counts as absent. The response's `Content-Type` is the picked media type; with more than one entry in `Produces()` it also carries `Vary: Accept`, so caches keep the formats apart.
+- **Errors** are always JSON (see [Error responses](#error-responses)), whatever `Accept` says.
+- **In `openapi.json`**, the request body lists every entry of `Consumes()` under `content`, the `200` response every entry of `Produces()`, each with the same schema.
+
+Codegen is strict here too: `Consumes()` and `Produces()` must each be a single return of a `[]string{...}` literal of string literals, non-empty, without duplicates and with supported media types only. `Consumes()` on an endpoint whose method schemaf decodes no body for (anything but `POST`, `PUT`, `PATCH`), and either method on a stream or raw endpoint, is a codegen error.
 
 ## Authentication
 
@@ -820,11 +878,35 @@ Built-in routes:
 
 #### Starting sessions from your own code
 
-For logins your app handles itself (login codes, guest accounts), start the session directly from a [raw endpoint](#raw-endpoints), which has the `http.ResponseWriter`:
+For logins your app handles itself (login codes, guest accounts, invites), start the session from a typed endpoint with `StartSessionCtx`. schemaf sets the session cookie on the response the endpoint writes:
+
+```go
+func StartSessionCtx(ctx context.Context, subject string) (token string, err error)
+```
 
 ```go
 import schemafapi "github.com/flocko-motion/schemaf/api"
 
+func (e RedeemCodeEndpoint) Handle(ctx context.Context, req RedeemCodeReq) (RedeemCodeResp, error) {
+    userID, err := codes.Redeem(ctx, req.Code)
+    if err != nil {
+        return RedeemCodeResp{}, schemafapi.ErrForbidden
+    }
+    // Sets the cookie on the response and returns the token for Bearer clients.
+    token, err := schemafapi.StartSessionCtx(ctx, userID)
+    if err != nil {
+        return RedeemCodeResp{}, err
+    }
+    return RedeemCodeResp{Token: token}, nil
+}
+```
+
+- It works in `Handle` and in `Stream` (before `Stream` returns). On any other context (a service, a CLI command, a raw endpoint's `r.Context()`) it returns an error naming the fix, and starts no session.
+- The session exists once `StartSessionCtx` returns. If `Handle` then returns an error, the error response still carries the cookie: the caller is signed in.
+
+A [raw endpoint](#raw-endpoints) has the `http.ResponseWriter` and calls `StartSession` with it instead:
+
+```go
 func (e RedeemCodeEndpoint) HandleRaw(w http.ResponseWriter, r *http.Request) error {
     userID, err := codes.Redeem(r.Context(), r.FormValue("code"))
     if err != nil {
@@ -878,9 +960,84 @@ token, err := schemafapi.IssueToken("svc:importer", time.Now().Add(24*time.Hour)
 // time.Time{} (zero) as the second argument issues a token with no expiry.
 ```
 
+## Stream Endpoints
+
+A stream endpoint answers with [server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html). Define `Stream` instead of `Handle`: it returns a channel, and schemaf writes each value sent on it to the client as one event:
+
+```go
+// go/api/workshops.go
+// WorkshopEventsEndpoint streams a workshop's live events.
+type WorkshopEventsEndpoint struct{}
+
+func (WorkshopEventsEndpoint) Method() string      { return "GET" }
+func (WorkshopEventsEndpoint) Path() string        { return "/api/workshops/{id}/events" }
+func (WorkshopEventsEndpoint) Auth() api.AuthLevel { return api.AuthRequired }
+
+func (WorkshopEventsEndpoint) Stream(ctx context.Context, req WorkshopEventsReq) (<-chan WorkshopEvent, error) {
+    sub, err := workshops.Subscribe(ctx, req.ID) // errors here answer like Handle errors
+    if err != nil {
+        return nil, err
+    }
+    events := make(chan WorkshopEvent)
+    go func() {
+        defer close(events) // closing the channel ends the stream
+        for {
+            select {
+            case <-ctx.Done(): // the client left
+                return
+            case e := <-sub:
+                select {
+                case events <- WorkshopEvent{Kind: e.Kind, Player: e.Player}:
+                case <-ctx.Done():
+                    return
+                }
+            }
+        }
+    }()
+    return events, nil
+}
+
+type WorkshopEventsReq struct {
+    ID string `path:"id"`
+}
+
+type WorkshopEvent struct {
+    Kind   string `json:"kind"`
+    Player string `json:"player"`
+}
+```
+
+**What the framework does for you:**
+- Authenticates the caller according to `Auth()`, decodes the request from path and query params, and calls `Stream(ctx, req)`
+- If `Stream` returns an error, answers with the standard [error response](#error-responses), exactly as for `Handle`
+- Otherwise answers `200` with `Content-Type: text/event-stream`, `Cache-Control: no-cache` and `X-Accel-Buffering: no` (so proxies don't buffer), and flushes the headers right away
+- Writes each value received from the channel as one event, `data: <value as JSON>`, and flushes it
+- Writes a comment line (`: keepalive`) every 15 seconds while no event is sent, so proxies and load balancers don't drop an idle stream. The interval is a framework constant
+- Ends the response when the channel is closed
+- Cancels `ctx` when the client disconnects, and stops reading the channel
+
+**Rules:**
+- The method is `GET`, so browsers can use `EventSource`. Any other method is a codegen error.
+- `Stream` must have the signature `Stream(ctx context.Context, req Req) (<-chan Event, error)` with named `Req` and `Event` types. Define exactly one of `Handle`, `HandleRaw` or `Stream`; codegen errors otherwise.
+- One event type per stream. Events carry only `data`, no `event:` name or `id:`, so clients read them with `onmessage`. A stream with several kinds of event uses one type with a field telling them apart (`Kind` above).
+- **Stop when `ctx` is done.** The goroutine sending on the channel must select on `ctx.Done()` and return (closing the channel): after the client leaves, nobody reads the channel any more, and a goroutine blocked on a send leaks.
+- `Stream` returning a `nil` channel with a `nil` error is [misuse](#misuse) (500).
+- An event that fails to encode as JSON ends the stream; the error is logged at error level with method, path and subject.
+- `api.Header`, `api.Subject` and `api.StartSessionCtx` work in `Stream` as in `Handle`. Cookies (a [started session](#starting-sessions-from-your-own-code), a renewed session cookie) must be set before `Stream` returns: once the channel is returned, headers are sent, and a later `StartSessionCtx` returns an error and starts no session.
+- Stream endpoints have no `Consumes()`/`Produces()`.
+
+**In `openapi.json`**, the `200` response has content type `text/event-stream` with the schema of the event type: the schema of each event's `data`. The generated TypeScript client thus types the events; open the stream with `EventSource` (cookie auth, same origin) or `fetch` (Bearer):
+
+```ts
+const source = new EventSource(`/api/workshops/${id}/events`)
+source.onmessage = (m) => {
+  const event: WorkshopEvent = JSON.parse(m.data)
+}
+```
+
 ## Raw Endpoints
 
-For endpoints that need direct HTTP access — binary uploads, streaming downloads, SSE, or any non-JSON content — use `HandleRaw` instead of `Handle`:
+For endpoints that need direct HTTP access — binary uploads, streaming downloads, or formats that are not [content types](#content-types) schemaf supports — use `HandleRaw` instead of `Handle`. Request headers, starting sessions, YAML and [server-sent events](#stream-endpoints) don't need a raw endpoint:
 
 ```go
 // go/api/blobs.go
@@ -914,7 +1071,7 @@ Same struct pattern, same `Method()`, `Path()`, `Auth()`. The only difference is
 | Auth | Framework-managed | Framework-managed |
 
 **Rules:**
-- Define exactly one of `Handle` or `HandleRaw` — codegen will error if both are present
+- Define exactly one of `Handle`, `HandleRaw` or [`Stream`](#stream-endpoints) — codegen errors otherwise
 - If `HandleRaw` returns a non-nil error and you haven't written a response yet, the framework writes the standard [error response](#error-responses), exactly as for `Handle` (`ErrNotFound` → 404 `not_found`, `api.Error` codes, `Retry-After`, etc.)
 - If you've already started writing a response (set headers, streamed bytes), return `nil` and handle errors yourself
 - Auth works identically, with the same [three levels](#auth-levels) — at `api.AuthRequired` the token and session are validated before `HandleRaw` is called, and `api.Subject(r.Context())` returns the authenticated user ID; at `api.AuthOptional` it returns `("", false)` for anonymous callers
