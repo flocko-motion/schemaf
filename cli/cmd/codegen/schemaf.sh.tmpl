@@ -258,12 +258,13 @@ _schemaf_inputs_hash() (
   } | _schemaf_sha256
 )
 
-# _schemaf_commit_glob <commit> <glob> — the regular files of the commit that
-# match the glob (relative to the current directory), one per line, by the
-# rules of the working-tree expansion: a wildcard matches neither "/" nor a
-# leading ".". Symlinks and submodules are not regular files.
+# _schemaf_commit_glob <commit> <glob> — the files of the commit that match
+# the glob (relative to the current directory), one per line as "F <path>" for
+# a regular file or "L <path>" for a symlink, by the rules of the working-tree
+# expansion: a wildcard matches neither "/" nor a leading ".". Submodules and
+# directories are not files.
 _schemaf_commit_glob() {
-  local commit="$1" prefix="" entry meta path ok i c p
+  local commit="$1" prefix="" entry meta path kind ok i c p
   local -a pat comp
   IFS=/ read -r -a pat <<< "$2"
   # Only the literal leading directories narrow the listing.
@@ -273,7 +274,7 @@ _schemaf_commit_glob() {
   done
   git ls-tree -r -z "$commit" -- ${prefix:+"$prefix"} | while IFS= read -r -d '' entry; do
     meta="${entry%%$'\t'*}" path="${entry#*$'\t'}"
-    case "${meta%% *}" in 100644|100755) ;; *) continue ;; esac
+    case "${meta%% *}" in 100644|100755) kind=F ;; 120000) kind=L ;; *) continue ;; esac
     IFS=/ read -r -a comp <<< "$path"
     [ "${#comp[@]}" -eq "${#pat[@]}" ] || continue
     ok=1
@@ -281,22 +282,30 @@ _schemaf_commit_glob() {
       c="${comp[i]}" p="${pat[i]}"
       if [[ $c == .* && $p != .* ]] || [[ $c != $p ]]; then ok=0; break; fi
     done
-    if [ "$ok" = 1 ]; then printf '%s\n' "$path"; fi
+    if [ "$ok" = 1 ]; then printf '%s %s\n' "$kind" "$path"; fi
   done
 }
 
 # _schemaf_commit_inputs_hash <commit> — the inputs hash over the commit's
 # versions of the input files, gen/schema-sources and go/go.mod. Untracked and
-# ignored files are not part of it: the commit is what an artifact ships.
+# ignored files are not part of it: the commit is what an artifact ships. An
+# input committed as a symlink is an error: the working tree follows it, the
+# commit holds only the link.
 _schemaf_commit_inputs_hash() (
   set -f
   commit="$1"
   list=""
+  symlink() {
+    echo "ERROR: input $1 is a symlink in commit ${commit:0:7} — an artifact ships the commit, commit the file itself" >&2
+    exit 1
+  }
   for g in {{.InputGlobs}}; do
     files=$(_schemaf_commit_glob "$commit" "$g") || exit 1
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      f="${line#? }"
       case "$f" in {{.InputExcludes}}) continue ;; esac
+      [ "${line%% *}" = F ] || symlink "$f"
       list="${list}${f}"$'\n'
     done <<< "$files"
   done
@@ -306,9 +315,11 @@ _schemaf_commit_inputs_hash() (
     while IFS= read -r g; do
       [ -n "$g" ] || continue
       files=$(_schemaf_commit_glob "$commit" "$g") || exit 1
-      while IFS= read -r f; do
-        [ -n "$f" ] || continue
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        f="${line#? }"
         case "${f##*/}" in .*|{{.SchemaSourceExcludes}}) continue ;; esac
+        [ "${line%% *}" = F ] || symlink "$f"
         list="${list}${f}"$'\n'
       done <<< "$files"
     done <<< "$sources"
@@ -510,10 +521,10 @@ _schemaf_write_artifact() {
   platform=$(_schemaf_container image inspect --format "${_O}.Os${_C}/${_O}.Architecture${_C}" "$BUILT_IMAGE")
   # Compose files from exactly the commit, like the image: an ignored file in
   # the working tree (which doesn't make it dirty) never ships.
-  git cat-file -e "$commit:compose.gen.yml" 2>/dev/null \
+  git cat-file -e "$commit:./compose.gen.yml" 2>/dev/null \
     || _die "compose.gen.yml is not in commit ${commit:0:7} — run ./schemaf.sh codegen and commit it"
   paths="compose.gen.yml"
-  if git cat-file -e "$commit:compose" 2>/dev/null; then paths="$paths compose"; fi
+  if git cat-file -e "$commit:./compose" 2>/dev/null; then paths="$paths compose"; fi
   src=$(_schemaf_mktemp)
   git archive "$commit" $paths | tar -x -C "$src"
   mkdir "$stage/compose"

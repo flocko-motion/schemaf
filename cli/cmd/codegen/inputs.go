@@ -42,7 +42,7 @@ var inputGlobs = []string{
 }
 
 // inputExcludes are globs removed from the matches of inputGlobs.
-var inputExcludes = []string{"go/api/*.gen.go"}
+var inputExcludes = []string{"go/api/*.gen.go", "go/api/*_test.go"}
 
 // schemaSourceExcludes are base-name globs removed from the matches of the
 // globs in gen/schema-sources: generated and test files don't shape schemas.

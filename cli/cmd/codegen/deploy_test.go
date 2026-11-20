@@ -285,6 +285,7 @@ func TestInputsHashShellAgreesWithGo(t *testing.T) {
 	before := goHash()
 	for path, content := range map[string]string{
 		"go/api/endpoints.gen.go":       "package api\n",
+		"go/api/hello_test.go":          "package api\n",
 		"go/db/migrations/.DS_Store":    "x",
 		"go/db/migrations/sub/0002.sql": "x",
 		"compose/notes.txt":             "x",
@@ -362,9 +363,13 @@ func TestInputsHashShellAgreesWithGo(t *testing.T) {
 
 	// Uncommitted inputs are not in the commit's hash; once everything above
 	// (inputs and non-inputs alike) is committed, the commit's hash agrees
-	// with the working tree's.
+	// with the working tree's. A symlink that isn't an input (an API test
+	// file) is no error in the commit.
 	if c := commitHash(); c == goHash() {
 		t.Error("commit hash includes uncommitted inputs")
+	}
+	if err := os.Symlink("hello.go", "go/api/link_test.go"); err != nil {
+		t.Fatal(err)
 	}
 	commitAll(t, root, "everything")
 	if g, s, c := goHash(), shellHash(), commitHash(); g != s || g != c {
@@ -603,6 +608,37 @@ func TestBuild(t *testing.T) {
 		// Plain build checks the working tree, which matches.
 		if _, stderr, code := u.run(root, "schemaf.sh", "build"); code != 0 {
 			t.Fatalf("plain build refused:\n%s", stderr)
+		}
+		u.calls()
+	})
+
+	t.Run("build --output refuses an input committed as a symlink", func(t *testing.T) {
+		if err := os.Symlink("t.sql", filepath.Join(root, "go/db/queries/link.sql")); err != nil {
+			t.Fatal(err)
+		}
+		if err := runInputsHashGen(); err != nil {
+			t.Fatal(err)
+		}
+		commitAll(t, root, "symlinked query")
+		short := git(t, root, "rev-parse", "--short=7", "HEAD")
+		defer func() {
+			git(t, root, "reset", "-q", "--hard", "HEAD~1")
+		}()
+
+		out := filepath.Join(t.TempDir(), "a.run")
+		_, stderr, code := u.run(root, "schemaf.sh", "build", "--output", out)
+		if code == 0 {
+			t.Fatal("build --output accepted a symlinked input")
+		}
+		mustContain(t, "stderr", stderr, "input go/db/queries/link.sql is a symlink in commit "+short+" — an artifact ships the commit, commit the file itself")
+		mustNotContain(t, "stderr", stderr, "stale")
+		if _, err := os.Stat(out); err == nil {
+			t.Error("artifact written despite the refusal")
+		}
+
+		// Plain build follows the symlink, as codegen did.
+		if _, stderr, code := u.run(root, "schemaf.sh", "build"); code != 0 {
+			t.Fatalf("plain build refused a symlinked input:\n%s", stderr)
 		}
 		u.calls()
 	})
@@ -929,6 +965,57 @@ func TestArtifactComposeFromCommit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(deploy, "compose/redis.yml")); err != nil {
 		t.Error("a committed compose file is missing from the artifact")
 	}
+}
+
+// A project in a subdirectory of its repository: the freshness check and the
+// artifact's compose files resolve paths from the project, not the repo root.
+func TestArtifactProjectInSubdirectory(t *testing.T) {
+	for _, tool := range []string{"bash", "git", "tar"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not installed", tool)
+		}
+	}
+	repo := t.TempDir()
+	app := filepath.Join(repo, "app")
+	if err := os.Mkdir(app, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(app)
+	writeMinimalProject(t)
+	if err := runComposeGen(); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInputsHashGen(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("monorepo\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "-q")
+	commitAll(t, repo, "init")
+
+	builder, runner := newShUser(t), newShUser(t)
+	art := buildArtifact(t, builder, app, "v1")
+	if _, stderr, code := runner.run(runner.home, art, "load"); code != 0 {
+		t.Fatalf("load failed:\n%s", stderr)
+	}
+	deploy := filepath.Join(runner.home, ".myapp", "deploy", "v1")
+	for _, f := range []string{"compose.gen.yml", "compose/redis.yml"} {
+		if _, err := os.Stat(filepath.Join(deploy, f)); err != nil {
+			t.Errorf("deploy dir lacks %s", f)
+		}
+	}
+
+	// A stale commit is still caught from the subdirectory.
+	if err := os.WriteFile(filepath.Join(app, "go/api/hello.go"), []byte("package api\n// changed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, repo, "forgot codegen")
+	_, stderr, code := builder.run(app, "schemaf.sh", "build", "--output", filepath.Join(t.TempDir(), "b.run"))
+	if code == 0 {
+		t.Fatal("build --output accepted stale generated files")
+	}
+	mustContain(t, "stderr", stderr, "generated files are stale — run ./schemaf.sh codegen and commit")
 }
 
 // setSchemafVersion makes the project require schemaf version v, regenerates

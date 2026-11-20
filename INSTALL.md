@@ -285,11 +285,11 @@ Deploying is two steps: **build** an image from a commit, then **run** it. On a 
 generated files are stale — run ./schemaf.sh codegen and commit
 ```
 
-The inputs are `go/api/*.go` (without `*.gen.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, the packages listed in `gen/schema-sources` (those declaring types the API uses, e.g. `go/obj/*.go`), and the schemaf version required in `go/go.mod`. See [Code Generation](EXTEND.md#code-generation).
+The inputs are `go/api/*.go` (without `*.gen.go` and `*_test.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, the packages listed in `gen/schema-sources` (those declaring types the API uses, e.g. `go/obj/*.go`), and the schemaf version required in `go/go.mod`. See [Code Generation](EXTEND.md#code-generation).
 
 The check verifies what the build uses:
 
-- **`build --output`** (a deployment artifact) hashes the inputs **as committed**: the input files of the commit, the commit's `gen/schema-sources` and `go/go.mod`, compared with the commit's `gen/inputs.sha256`. An untracked or gitignored input is not part of that hash. So if codegen ran while, say, a gitignored `compose/extra.yml` was present, the committed `compose.gen.yml` includes a file the artifact won't contain, and `build --output` stops as stale instead of shipping a stack that fails on the run host.
+- **`build --output`** (a deployment artifact) hashes the inputs **as committed**: the input files of the commit, the commit's `gen/schema-sources` and `go/go.mod`, compared with the commit's `gen/inputs.sha256`. An untracked or gitignored input is not part of that hash. So if codegen ran while, say, a gitignored `compose/extra.yml` was present, the committed `compose.gen.yml` includes a file the artifact won't contain, and `build --output` stops as stale instead of shipping a stack that fails on the run host. An input committed as a symlink is refused: `input <path> is a symlink in commit <short> — an artifact ships the commit, commit the file itself`.
 - **Plain `build`, `run` and `test`** hash the working tree, uncommitted and untracked inputs included, so local testing with uncommitted changes works.
 
 ### `build`
