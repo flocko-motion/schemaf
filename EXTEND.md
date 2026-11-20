@@ -1685,7 +1685,7 @@ The generated subtest calls `t.Skip(...)` with that message. A file whose tests 
 
 For work on schemaf itself. `make test <unit|db|e2e|all>` runs the test layers locally; `e2e/db-test.sh` and `e2e/build-example.sh` follow `SCHEMAF_RUNTIME` like everything else (default podman). The reference, though, is the **CI gate**: the GitHub Actions workflow `.github/workflows/gate.yml`, whose check is named `gate`. `schemaftest`'s own tests start containers, so they skip unless `SCHEMAF_CONTAINER_TESTS=1`; `e2e/db-test.sh` (`make test db`) sets it and runs them, and a project's `./schemaf.sh test`, which also runs the framework's tests, stays fast.
 
-**Where**: the pinned Linux amd64 runner image `ubuntu-24.04`, the kind of machine schemaf apps run on: rootless podman runs natively, not in a VM, and nothing is left over from earlier runs.
+**Where**: the pinned Linux amd64 runner image `ubuntu-24.04`, the kind of machine schemaf apps run on: rootless podman runs natively, not in a VM, and nothing is left over from earlier runs. It runs the oldest Go schemaf supports, the `go` directive in `go.mod` (`actions/setup-go` with `go-version-file: go.mod`, `GOTOOLCHAIN=local`), so a dependency that needs a newer Go fails the gate.
 
 **What**: two parallel jobs, `podman` and `docker`. Each sets `SCHEMAF_RUNTIME` to its runtime and runs the full sequence (`make test all`):
 

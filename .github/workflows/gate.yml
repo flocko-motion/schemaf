@@ -33,6 +33,9 @@ jobs:
       # head), never refs/pull/<n>/merge, which the Go module proxy can't fetch.
       GATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SCHEMAF_RUNTIME: ${{ matrix.runtime }}
+      # The oldest Go schemaf supports (go.mod's go directive, installed by
+      # setup-go), never a newer toolchain: a dependency needing newer Go fails.
+      GOTOOLCHAIN: local
       E2E_REFERENCE: "1"
       E2E_BUILD_USER: schemaf-build
       E2E_RUN_USER: schemaf-run
