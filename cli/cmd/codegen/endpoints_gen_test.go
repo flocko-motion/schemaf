@@ -1,32 +1,23 @@
 package codegen
 
 import (
-	"go/ast"
 	"go/parser"
 	"go/token"
-	"go/types"
 	"strings"
 	"testing"
 )
 
 // With no endpoints, the generated file must still compile: Provider() is
-// an empty function. The type-check also catches an unused import.
+// an empty function, with no unused import.
 func TestRenderEndpointsGenNoEndpointsCompiles(t *testing.T) {
 	src, err := renderEndpointsGen(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "endpoints.gen.go", src, 0)
-	if err != nil {
-		t.Fatalf("generated file does not parse: %v\n%s", err, src)
-	}
-	if _, err := (&types.Config{}).Check("api", fset, []*ast.File{file}, nil); err != nil {
-		t.Fatalf("generated file does not type-check: %v\n%s", err, src)
-	}
-	if file.Scope.Lookup("Provider") == nil {
+	if !strings.Contains(string(src), "func Provider()") {
 		t.Fatalf("generated file has no Provider func:\n%s", src)
 	}
+	compileGenerated(t, map[string]string{"api/endpoints.gen.go": string(src)})
 }
 
 func TestRenderEndpointsGenRegistersEndpoint(t *testing.T) {

@@ -229,6 +229,16 @@ _schemaf_check_fresh() {
   [ "$want" = "$got" ] || _die "generated files are stale — run ./schemaf.sh codegen and commit"
 }
 
+# Print codegen's warnings about empty inputs (EXTEND.md › Empty inputs).
+# Empty input is valid: this never fails.
+_schemaf_warn_empty_inputs() {
+  local line
+  [ -f gen/empty-inputs ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ -n "$line" ]; then echo "⚠ $line" >&2; fi
+  done < gen/empty-inputs
+}
+
 # --- images -------------------------------------------------------------------
 
 _schemaf_image_exists() {
@@ -311,6 +321,7 @@ _schemaf_build() {
   fi
   _schemaf_check_tag "$tag"
   _schemaf_check_fresh
+  _schemaf_warn_empty_inputs
   _schemaf_check_runtime
 
   BUILT_IMAGE="${PROJECT_NAME}:${tag}"

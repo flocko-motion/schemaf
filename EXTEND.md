@@ -23,6 +23,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
   - [Queries](#queries)
 - [CLI Subcommands](#cli-subcommands)
 - [Code Generation](#code-generation)
+  - [Empty inputs](#empty-inputs)
 - [Testing](#testing)
 - [Database Backups](#database-backups)
 
@@ -1097,6 +1098,33 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
    - One SHA-256 over codegen's inputs: `go/api/*.go` (without `*.gen.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, and the schemaf version required in `go/go.mod`
    - Computed as: for each input file in byte-wise sorted path order, the line `<sha256 of the file>  <path>` (as `sha256sum` prints it); then the line `schemaf <version>`; the hash of that text is the file's content. Dotfiles are not inputs
    - `./schemaf.sh build` and `./schemaf.sh test` recompute it (with `sha256sum`, or `shasum -a 256` on macOS) and stop on a mismatch: `generated files are stale — run ./schemaf.sh codegen and commit`
+
+7. **Empty inputs → gen/empty-inputs**
+   - The list of empty inputs (see below), one line per input, written next to `gen/inputs.sha256`. An empty or missing file means nothing is empty
+
+### Empty inputs
+
+A project with no endpoints, no migrations or no queries is valid, e.g. while porting an existing app onto schemaf. Every generated Go file compiles with empty input; empty input selects a variant of the generated output, never a placeholder file:
+
+| Input | Empty when | What is generated |
+|---|---|---|
+| `go/api/*.go` | no endpoint structs | `endpoints.gen.go` with a `Provider()` that registers nothing |
+| `go/db/migrations/` | no `*.sql` files | `migrations.gen.go` without `//go:embed`; `Provider()` returns an empty `embed.FS` |
+| `go/db/queries/` | no `*.sql` files | nothing: sqlc does not run (it refuses an empty query set) |
+
+Codegen prints one warning per empty input. It never stops:
+
+```
+⚠ no endpoints in go/api — Provider() registers nothing
+⚠ no migrations in go/db/migrations — db.Provider() is empty
+⚠ no queries in go/db/queries — sqlc generates no query code
+```
+
+Each line of `gen/empty-inputs` is one of these warnings. `./schemaf.sh build` prints them before it builds, so whoever builds the image sees them too.
+
+TypeScript tests are optional and not an input: with no tests in `go/tests/*.test.ts`, `ts.gen_test.go` and `runner.gen.ts` are generated with no tests, and there is no warning. Without a `go/tests/` directory nothing is generated for tests.
+
+**One exception: `go/frontend_dist/.gitkeep`.** `frontend.gen.go` embeds `go/frontend_dist/`, which the frontend build fills at image build time (`Dockerfile.gen`). Its contents aren't known at codegen time, so codegen can't pick a variant; it creates `go/frontend_dist/.gitkeep` instead, so the embed always matches. Commit it.
 
 **Zero configuration.** Just run `./schemaf.sh codegen` and all the glue code appears. Generated files are committed: `build` runs no codegen and needs no Go, so a commit must carry generated files that match its inputs.
 

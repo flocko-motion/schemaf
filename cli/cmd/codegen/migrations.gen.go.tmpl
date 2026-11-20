@@ -4,11 +4,15 @@
 package db
 
 import "embed"
-
+{{if .HasMigrations}}
 // projectMigrations holds all SQL migration files embedded at build time.
 //
 //go:embed migrations/*.sql
 var projectMigrations embed.FS
+{{- else}}
+// projectMigrations is empty: go/db/migrations holds no *.sql files.
+var projectMigrations embed.FS
+{{- end}}
 
 // Provider returns the embedded project migrations for registration with schemaf.
 // Wire up in go/main.go: app.AddDb(db.Provider)

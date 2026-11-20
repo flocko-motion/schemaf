@@ -98,7 +98,7 @@ func runEndpointsGen(_ *cli.Context) error {
 	}
 
 	if len(endpoints) == 0 {
-		cli.Warning("no endpoint structs found in %s", apiDir)
+		warnEmptyInput("no endpoints in %s — Provider() registers nothing", apiDir)
 	}
 
 	sort.Slice(endpoints, func(i, j int) bool {

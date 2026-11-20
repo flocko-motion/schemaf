@@ -448,6 +448,33 @@ func TestBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("empty inputs are printed as warnings, never stop the build", func(t *testing.T) {
+		_, stderr, code := u.run(root, "schemaf.sh", "build", "--force")
+		if code != 0 {
+			t.Fatalf("build failed:\n%s", stderr)
+		}
+		mustNotContain(t, "stderr with no empty inputs", stderr, "⚠")
+
+		warnings := "no migrations in go/db/migrations — db.Provider() is empty\n" +
+			"no endpoints in go/api — Provider() registers nothing\n"
+		if err := os.WriteFile(filepath.Join(root, emptyInputsFile), []byte(warnings), 0644); err != nil {
+			t.Fatal(err)
+		}
+		commitAll(t, root, "empty inputs")
+		defer func() {
+			git(t, root, "reset", "-q", "--hard", "HEAD~1")
+		}()
+		_, stderr, code = u.run(root, "schemaf.sh", "build")
+		if code != 0 {
+			t.Fatalf("build with empty inputs failed:\n%s", stderr)
+		}
+		mustContain(t, "stderr", stderr,
+			"⚠ no migrations in go/db/migrations — db.Provider() is empty\n⚠ no endpoints in go/api — Provider() registers nothing\n")
+		if strings.Index(stderr, "⚠") > strings.Index(stderr, "Building ") {
+			t.Errorf("warnings printed after the build started:\n%s", stderr)
+		}
+	})
+
 	t.Run("invalid tag", func(t *testing.T) {
 		_, stderr, code := u.run(root, "schemaf.sh", "build", "--tag", "-bad/tag")
 		if code == 0 {

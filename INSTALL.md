@@ -295,6 +295,7 @@ Builds `Dockerfile.gen` into the image `<name>:<tag>`. It needs the container ru
 - **Exactly the commit**: with a clean working tree the image is built from `git archive HEAD`, so untracked and ignored files (e.g. `node_modules/`) never reach it. A commit that was built before is not built again, unless `--force`.
 - **Uncommitted changes**: a plain `build` is allowed for local testing; it builds the working tree, always rebuilds, and tags `<short-hash>-dirty` by default. `build --output` refuses: `commit first — a deployment artifact must name exactly one commit`. There is no override.
 - **`--output <file>`** writes a deployment artifact (below). An existing file is an error, never overwritten.
+- **Empty inputs**: before building, `build` prints codegen's warnings about empty inputs from `gen/empty-inputs`, e.g. `⚠ no migrations in go/db/migrations — db.Provider() is empty`. They never stop the build. See [Empty inputs](EXTEND.md#empty-inputs).
 
 ### The artifact: `<name>-<tag>.run`
 

@@ -38,8 +38,9 @@ func newAllCmd(ctx *cli.Context) *cobra.Command {
 	return &cobra.Command{
 		Use:   "all",
 		Short: "Run all codegen steps",
-		Long:  `Runs constants, compose, migrations, sqlc, endpoints, apits, and tests codegen in order, then records the inputs hash (gen/inputs.sha256).`,
+		Long:  `Runs constants, compose, migrations, sqlc, endpoints, apits, and tests codegen in order, then records the empty inputs (gen/empty-inputs) and the inputs hash (gen/inputs.sha256).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			emptyInputs = nil
 			if err := runConstantsGen(); err != nil {
 				return err
 			}
@@ -68,6 +69,9 @@ func newAllCmd(ctx *cli.Context) *cobra.Command {
 				return err
 			}
 			if err := runTestsGen(); err != nil {
+				return err
+			}
+			if err := runEmptyInputsGen(); err != nil {
 				return err
 			}
 			return runInputsHashGen()
