@@ -1478,7 +1478,7 @@ The generated Go wrapper will call `t.Skip(...)` with that message.
 
 ### Testing the framework under both runtimes
 
-For work on schemaf itself (`make test <unit|db|e2e|all>`): `e2e/db-test.sh` and `e2e/build-example.sh` follow `SCHEMAF_RUNTIME` like everything else (default podman), and the release gate (`make release`) runs under podman only. The Docker path is verified by hand: whenever runtime-related code changes, run
+For work on schemaf itself (`make test <unit|db|e2e|all>`): `e2e/db-test.sh` and `e2e/build-example.sh` follow `SCHEMAF_RUNTIME` like everything else (default podman), and the release gate (`make release`) runs under podman only. Nothing beyond `make release` is required. To try the Docker path anyway:
 
 ```bash
 SCHEMAF_RUNTIME=docker make test e2e
