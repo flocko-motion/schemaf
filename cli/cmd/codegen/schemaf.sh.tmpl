@@ -25,6 +25,8 @@ set -euo pipefail
 trap 'rc=$?; echo "ERROR: schemaf.sh failed at line ${LINENO}: \"${BASH_COMMAND}\" (exit ${rc})" >&2; exit ${rc}' ERR
 
 PROJECT_NAME="{{.Name}}"
+# load reads the installed run-side script's version from this exact line
+# (_schemaf_script_version), so it never replaces a newer script with an older one.
 SCHEMAF_VER="{{.SchemafVersion}}"
 ORIG_PWD="$PWD"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -159,19 +161,22 @@ _schemaf_check_runtime() {
 
 # Refuse to start when the other runtime holds the project's Postgres volume
 # (INSTALL.md › Container runtime). Skipped when the other runtime isn't
-# installed or usable. Never migrates or deletes anything.
+# installed or usable. Never migrates or deletes anything. The message is
+# rendered from Go's (cli.VolumeConflictMessage), so both print the same text.
 _schemaf_check_volume() {
-  local vol="${PROJECT_NAME}-postgres-data" rt="${SCHEMAF_RUNTIME:-podman}" other hint
+  local vol="${PROJECT_NAME}-postgres-data" rt="${SCHEMAF_RUNTIME:-podman}" other hint both=""
   _schemaf_container --other info >/dev/null 2>&1 || return 0
   _schemaf_container --other volume inspect "$vol" >/dev/null 2>&1 || return 0
-  if [ "$rt" = podman ]; then other=docker; hint="set SCHEMAF_RUNTIME=docker"; else other=podman; hint="unset SCHEMAF_RUNTIME to use podman, the default"; fi
+  if [ "$rt" = podman ]; then
+    other=docker hint="{{.VolumeHintDocker}}"
+  else
+    other=podman hint="{{.VolumeHintPodman}}"
+  fi
+  if _schemaf_container volume inspect "$vol" >/dev/null 2>&1; then
+    both=$'\n'"{{.VolumeConflictBoth}}"
+  fi
   cat >&2 <<EOF
-ERROR: refusing to start: the Postgres volume $vol exists in $other, but the selected container runtime is $rt.
-The project's data volume may exist only in the selected runtime. Choose one:
-  1. Migrate the data to $rt: INSTALL.md › Migrating from Docker to podman (docs/schemaf/INSTALL.md)
-  2. Or keep the data where it is and use $other: $hint
-     (in your shell profile, or in ~/.${PROJECT_NAME}/etc/env)
-  3. Or, if the data is throwaway, delete it: $other volume rm $vol
+ERROR: {{.VolumeConflict}}
 EOF
   exit 1
 }
@@ -383,14 +388,22 @@ HEADER
 
 # _schemaf_write_artifact <output> <tag> <commit> <describe>
 _schemaf_write_artifact() {
-  local output="$1" tag="$2" commit="$3" describe="$4" stage partial f platform
+  local output="$1" tag="$2" commit="$3" describe="$4" stage src paths partial f platform
   echo "Writing $output..." >&2
   stage=$(_schemaf_mktemp)
   _schemaf_container save -o "$stage/image.tar" "$BUILT_IMAGE"
   platform=$(_schemaf_container image inspect --format "${_O}.Os${_C}/${_O}.Architecture${_C}" "$BUILT_IMAGE")
+  # Compose files from exactly the commit, like the image: an ignored file in
+  # the working tree (which doesn't make it dirty) never ships.
+  git cat-file -e "$commit:compose.gen.yml" 2>/dev/null \
+    || _die "compose.gen.yml is not in commit ${commit:0:7} — run ./schemaf.sh codegen and commit it"
+  paths="compose.gen.yml"
+  if git cat-file -e "$commit:compose" 2>/dev/null; then paths="$paths compose"; fi
+  src=$(_schemaf_mktemp)
+  git archive "$commit" $paths | tar -x -C "$src"
   mkdir "$stage/compose"
-  cp compose.gen.yml "$stage/compose.gen.yml"
-  for f in compose/*.yml; do
+  cp "$src/compose.gen.yml" "$stage/compose.gen.yml"
+  for f in "$src"/compose/*.yml; do
     [ -f "$f" ] || continue
     case "$f" in *.dev.yml) continue ;; esac
     cp "$f" "$stage/compose/"
@@ -413,9 +426,59 @@ _schemaf_write_artifact() {
 
 # --- load (run side, called by an artifact's header) --------------------------
 
+# _schemaf_version_cmp <a> <b> — prints -1, 0 or 1 as schemaf version a is
+# older than, equal to or newer than b, by semver precedence: vMAJOR.MINOR.PATCH
+# with an optional -pre-release (Go pseudo-versions included) and +build. The
+# numbers compare numerically, a pre-release is older than its release, build
+# metadata is ignored. Anything else fails.
+_schemaf_version_cmp() {
+  local re='^v([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z.-]+))?(\+[0-9A-Za-z.-]+)?$'
+  local a b ap bp i
+  [[ "$1" =~ $re ]] || { echo "ERROR: \"$1\" is not a schemaf version (vX.Y.Z)" >&2; return 1; }
+  a="${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}" ap="${BASH_REMATCH[5]}"
+  [[ "$2" =~ $re ]] || { echo "ERROR: \"$2\" is not a schemaf version (vX.Y.Z)" >&2; return 1; }
+  b="${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}" bp="${BASH_REMATCH[5]}"
+  set -- $a $b
+  for i in 1 2 3; do
+    if ((10#$1 != 10#$4)); then ((10#$1 > 10#$4)) && echo 1 || echo -1; return 0; fi
+    shift
+  done
+  if [ "$ap" = "$bp" ]; then echo 0
+  elif [ -z "$ap" ]; then echo 1
+  elif [ -z "$bp" ]; then echo -1
+  else _schemaf_prerelease_cmp "$ap" "$bp"
+  fi
+}
+
+# _schemaf_prerelease_cmp <a> <b> — semver precedence of two different
+# pre-releases: dot-separated identifiers left to right, numeric ones
+# numerically and below alphanumeric ones, others byte-wise; when one is a
+# prefix of the other, the shorter is older.
+_schemaf_prerelease_cmp() {
+  local a="$1." b="$2." x y num='^[0-9]+$' LC_ALL=C
+  while [ -n "$a" ] && [ -n "$b" ]; do
+    x="${a%%.*}" y="${b%%.*}" a="${a#*.}" b="${b#*.}"
+    [ "$x" != "$y" ] || continue
+    if [[ "$x" =~ $num ]] && [[ "$y" =~ $num ]]; then
+      ((10#$x > 10#$y)) && echo 1 || echo -1
+    elif [[ "$x" =~ $num ]]; then echo -1
+    elif [[ "$y" =~ $num ]]; then echo 1
+    elif [[ "$x" > "$y" ]]; then echo 1
+    else echo -1
+    fi
+    return 0
+  done
+  [ -n "$a" ] && echo 1 || echo -1
+}
+
+# _schemaf_script_version <schemaf.sh> — the schemaf version on its SCHEMAF_VER line.
+_schemaf_script_version() {
+  awk -F'"' '/^SCHEMAF_VER="/ { print $2; exit }' "$1"
+}
+
 # _schemaf_load <extracted archive dir>
 _schemaf_load() {
-  local dir="$1" m name tag commit platform host img have dest old
+  local dir="$1" m name tag commit platform host img have dest old ver script installed keep=""
   m="$dir/manifest"
   for f in manifest image.tar schemaf.sh compose.gen.yml; do
     [ -f "$dir/$f" ] || _die "the archive has no $f — it is not a schemaf deployment artifact, or it is damaged"
@@ -424,6 +487,7 @@ _schemaf_load() {
   tag=$(_schemaf_manifest_get "$m" tag)
   commit=$(_schemaf_manifest_get "$m" commit)
   platform=$(_schemaf_manifest_get "$m" platform)
+  ver=$(_schemaf_manifest_get "$m" schemaf_version)
   [ "$name" = "$PROJECT_NAME" ] || _die "the manifest names project \"$name\", its schemaf.sh \"$PROJECT_NAME\" — the archive is damaged"
   _schemaf_check_tag "$tag"
   [ -n "$commit" ] || _die "the manifest names no commit — the archive is damaged"
@@ -452,6 +516,19 @@ _schemaf_load() {
     return 0
   fi
 
+  # The run-side script: newest wins. An older artifact keeps the installed
+  # script, which runs older deploy dirs too (INSTALL.md › Deployment › load).
+  script="$USER_DIR/bin/schemaf.sh"
+  if [ -f "$script" ]; then
+    installed=$(_schemaf_script_version "$script")
+    [ -n "$installed" ] || _die "$script names no schemaf version (no SCHEMAF_VER line) — remove it, then load again"
+    case "$(_schemaf_version_cmp "$ver" "$installed")" in
+      -1) keep="$installed" ;;
+      0|1) ;;
+      *) _die "can't compare this archive's schemaf version \"$ver\" with the installed script's \"$installed\" — build the artifact from a released schemaf version (vX.Y.Z in go/go.mod), or remove $script, then load again" ;;
+    esac
+  fi
+
   if ! _schemaf_image_exists "$img"; then
     echo "Loading $img..." >&2
     _schemaf_container load -i "$dir/image.tar" >&2
@@ -467,10 +544,14 @@ _schemaf_load() {
   rm -rf "$dest"
   mv "$old/new" "$dest"
 
-  mkdir -p "$USER_DIR/bin"
-  cp "$dir/schemaf.sh" "$old/schemaf.sh"
-  chmod 755 "$old/schemaf.sh"
-  mv "$old/schemaf.sh" "$USER_DIR/bin/schemaf.sh"
+  if [ -n "$keep" ]; then
+    echo "keeping run-side schemaf.sh $keep (artifact has $ver)" >&2
+  else
+    mkdir -p "$USER_DIR/bin"
+    cp "$dir/schemaf.sh" "$old/schemaf.sh"
+    chmod 755 "$old/schemaf.sh"
+    mv "$old/schemaf.sh" "$script"
+  fi
   echo "Loaded $img; start it with: ~/.${PROJECT_NAME}/bin/schemaf.sh run --image $tag" >&2
   echo "$tag"
 }
