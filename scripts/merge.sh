@@ -4,6 +4,7 @@
 # (`make release`), over everything merged since the last one.
 # Usage: scripts/merge.sh   (normally via `make merge`)
 set -euo pipefail
+source "$(dirname "$0")/issues.sh"
 
 die() { echo "merge aborted: $*" >&2; exit 1; }
 
@@ -25,6 +26,11 @@ up_to_date() {
 up_to_date
 [[ "$(git rev-list --count origin/main..HEAD)" -gt 0 ]] || die "nothing to merge: '$branch' has no commits beyond main"
 
+# The issues the new commits close (`Closes #<n>` trailers). Checked before the
+# gate, so a typo fails fast.
+issues=$(closing_issues origin/main..HEAD)
+announce_issues $issues
+
 echo "▶ go build ./..."
 go build ./...
 echo "▶ go vet ./..."
@@ -41,7 +47,9 @@ if ! gh pr view "$branch" --json state -q .state 2>/dev/null | grep -qx OPEN; th
 	echo "▶ open PR"
 	gh pr create --base main --head "$branch" --fill
 fi
+pr_ensure_closes "$branch" $issues
 
 echo "▶ merge $branch → main"
 gh pr merge "$branch" --merge --delete-branch=false
+require_closed $issues
 echo "  merged $branch into main (no release — run make release to tag)"

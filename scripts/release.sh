@@ -3,6 +3,7 @@
 # From a branch with new commits it gates them, merges into main via PR, then tags.
 # Usage: scripts/release.sh <major|minor|patch>   (normally via `make release <bump>`)
 set -euo pipefail
+source "$(dirname "$0")/issues.sh"
 
 git fetch -q --tags origin
 # Latest RELEASE version — ignore -pre prereleases when picking what to bump.
@@ -65,15 +66,19 @@ fi
 
 if [[ "$(git rev-list --count origin/main..HEAD)" -gt 0 ]]; then
 	# New commits not yet on main → gate, then merge into main via PR (merge commit).
+	issues=$(closing_issues origin/main..HEAD)
+	announce_issues $issues
 	echo "▶ local sanity: go test ./..."
 	go test ./...
 	git push -u origin "$branch"
 	gate
 	echo "▶ merge $branch → main"
 	gh pr create --base main --head "$branch" --title "release $new" --body "Automated release $new" 2>/dev/null || true
+	pr_ensure_closes "$branch" $issues
 	gh pr merge "$branch" --merge --delete-branch=false
 	git fetch -q origin main
 	release_ref=origin/main
+	close_issues() { require_closed $issues; }
 else
 	# Branch already matches main → release code merged to main earlier.
 	count=$(git rev-list --count "$latest"..HEAD 2>/dev/null || echo 999)
@@ -81,10 +86,13 @@ else
 		echo "nothing to release: main is already at $latest." >&2
 		exit 1
 	fi
+	# No PR here: the issues these commits close are closed after tagging.
+	issues=$(closing_issues "$latest"..HEAD --merged)
 	echo "▶ local sanity: go test ./..."
 	go test ./...
 	gate
 	release_ref=HEAD
+	close_issues() { close_released "$new" $issues; }
 fi
 
 echo "  $latest → $new"
@@ -92,4 +100,5 @@ git tag "$new" "$release_ref"
 git push origin "$new"
 gh release create "$new" --title "$new" --generate-notes || echo "  (gh release create failed; tag $new is pushed — create the GitHub release manually if needed)"
 cleanup_pre
+close_issues
 echo "  released $new on main; now on '$branch'"
