@@ -211,7 +211,7 @@ The framework provides these endpoints out of the box:
 - `/api/config` — the instance's public frontend config (see [Runtime config](#runtime-config-public_))
 - `/api/user/me` — current user info (requires auth)
 - `/api/auth/{provider}/login`, `/api/auth/logout`, `/api/auth/refresh` — login and sessions (see [Authentication](#authentication))
-- `/openapi.json` — OpenAPI 3.0 spec
+- `/openapi.json` — OpenAPI 3.0 spec: exactly `gen/openapi.json`, compiled into the binary by codegen (see [Code Generation](#code-generation))
 
 ### Extending /api/health
 
@@ -379,6 +379,44 @@ The Go doc comment on the endpoint struct becomes the OpenAPI summary. The first
 // Sends a welcome email after creation.
 type CreateUserEndpoint struct{}
 ```
+
+**Request and response types** can be declared anywhere: in `go/api/`, in another package of your module, or in a dependency, directly or through an alias. Keep your domain types in their own package and share them between the API, the database layer and CLIs:
+
+```go
+// go/api/users.go
+type UserResp = obj.User // alias to a type in your obj package
+
+type ListUsersResp struct {
+    Users []obj.User `json:"users"`
+}
+```
+
+Codegen type-checks `go/api/` (its `*.gen.go` files ignored) and builds each schema from the type's JSON encoding, as `encoding/json` produces it:
+
+| Go | OpenAPI |
+|---|---|
+| named struct | `$ref` to a schema named after the type, e.g. `obj.User` → `User` |
+| field | property named by its `json` tag, or by the Go field name without one; `json:"-"` and unexported fields are left out |
+| `omitempty`/`omitzero` or pointer field | optional; every other field is required |
+| embedded struct without a `json` name | its fields are flattened into the outer object |
+| `string`, `bool`, integers, floats | `string`, `boolean`, `integer`, `number` |
+| `time.Time`, `uuid.UUID` (`github.com/google/uuid`) | `string` with format `date-time`, `uuid` |
+| `uuid.NullUUID` | `string` with format `uuid`, nullable |
+| `[]byte` | `string` with format `byte` (base64) |
+| slice, array / `map[K]V` | `array` / `object` with `additionalProperties` |
+| named non-struct type, e.g. `type Role string` | the underlying type |
+| type implementing `encoding.TextMarshaler`; field with `json:",string"` | `string` |
+| `any`, interface, `json.RawMessage` | any JSON value |
+
+A POST, PUT or PATCH request has a body when its type has at least one JSON field; GET and DELETE requests never have one. A response whose type is a struct without JSON fields has no content.
+
+Codegen is strict, and each of these is a codegen error that names the type:
+
+- two types with the same name from different packages, e.g. `api.Address` and `obj.Address`: rename one
+- a type implementing `json.Marshaler` (other than the ones in the table): codegen can't know its JSON shape. If the type encodes as a JSON string (an enum, an ID), implement `encoding.TextMarshaler` instead: `encoding/json` then encodes it as a string, and its schema is `string`. Otherwise use a plain struct in the API
+- a type without a JSON shape (channel, function) or a generic type
+- a POST, PUT or PATCH request type that is not a struct, e.g. `[]obj.User`: a request body is a JSON object
+- a type error in `go/api/` or a package it imports
 
 **What codegen does:**
 - Scans all structs in `go/api/` that implement the endpoint interface
@@ -1078,8 +1116,9 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
 
 3. **Endpoint structs → api.Provider + OpenAPI spec**
    - Auto-discovers endpoint structs in `go/api/*.go`
-   - Generates `go/api/endpoints.gen.go` with `api.Provider` (handler registration)
+   - Generates `go/api/endpoints.gen.go` with `api.Provider` (handler registration). It also carries the spec: `Provider()` hands it to schemaf, and the server answers `GET /openapi.json` with it byte for byte. There is no second spec built at runtime
    - Generates `gen/openapi.json` — OpenAPI 3.0 spec
+   - Generates `gen/schema-sources` — the packages outside `go/api/` that declare a type the spec's schemas are built from, one glob per line (e.g. `go/obj/*.go`), plus `go/go.mod` when a schema type comes from a dependency. Empty when every type is declared in `go/api/`
 
 4. **OpenAPI spec → TypeScript client**
    - Generates `frontend/src/api/generated/api.gen.ts` — type-safe client for your frontend
@@ -1095,7 +1134,8 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
    - Used by `./schemaf.sh run` (prod) and `./schemaf.sh dev` (dev)
 
 6. **Inputs → gen/inputs.sha256**
-   - One SHA-256 over codegen's inputs: `go/api/*.go` (without `*.gen.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, and the schemaf version required in `go/go.mod`
+   - One SHA-256 over codegen's inputs: `go/api/*.go` (without `*.gen.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, the files matched by the globs in `gen/schema-sources` (without `*.gen.go` and `*_test.go`), and the schemaf version required in `go/go.mod`
+   - So editing a type in another package that the API uses, e.g. a field of `obj.User`, makes the generated files stale, while editing a package the API doesn't use does not
    - Computed as: for each input file in byte-wise sorted path order, the line `<sha256 of the file>  <path>` (as `sha256sum` prints it); then the line `schemaf <version>`; the hash of that text is the file's content. Dotfiles are not inputs
    - `./schemaf.sh build` and `./schemaf.sh test` recompute it (with `sha256sum`, or `shasum -a 256` on macOS) and stop on a mismatch: `generated files are stale — run ./schemaf.sh codegen and commit`
 

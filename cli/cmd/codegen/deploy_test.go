@@ -310,6 +310,44 @@ func TestInputsHashShellAgreesWithGo(t *testing.T) {
 			t.Errorf("after changing %s, Go and shell disagree: go %s, shell %s", change.path, g, s)
 		}
 	}
+
+	// A package is an input once gen/schema-sources lists it; its generated
+	// and test files and dotfiles never are. A glob listed twice, or also
+	// covered by inputGlobs, counts once.
+	write := func(path, content string) {
+		t.Helper()
+		_ = os.MkdirAll(filepath.Dir(path), 0755)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agree := func(what string, wantChange bool) {
+		t.Helper()
+		prev := before
+		g, s := goHash(), shellHash()
+		if g != s {
+			t.Errorf("%s: Go and shell disagree: go %s, shell %s", what, g, s)
+		}
+		if (g != prev) != wantChange {
+			t.Errorf("%s: hash changed = %v, want %v", what, g != prev, wantChange)
+		}
+		before = g
+	}
+	before = goHash()
+	write("go/obj/user.go", "package obj\n")
+	agree("unlisted package", false)
+	write(schemaSourcesFile, "go/obj/*.go\ngo/api/*.go\ngo/obj/*.go\n")
+	agree("listing go/obj", true)
+	write("go/obj/user.go", "package obj\n// changed\n")
+	agree("changing a listed package", true)
+	write("go/obj/user_test.go", "package obj\n")
+	write("go/obj/user.gen.go", "package obj\n")
+	write("go/obj/.hidden.go", "package obj\n")
+	agree("generated, test and dot files in a listed package", false)
+	write("go/obj/address.go", "package obj\n")
+	agree("a new file in a listed package", true)
+	write(schemaSourcesFile, "go/obj/*.go\n")
+	agree("dropping a duplicate glob", false)
 }
 
 // TestInputsHashShasumFallback hides sha256sum, so the shell hash takes the

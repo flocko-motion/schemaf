@@ -31,7 +31,7 @@ func scanSource(t *testing.T, src string) ([]endpointInfo, error) {
 	if err := os.WriteFile(filepath.Join(dir, "ep.go"), []byte(src), 0644); err != nil {
 		t.Fatal(err)
 	}
-	eps, _, err := scanAPIDir(dir)
+	eps, err := scanAPIDir(dir)
 	return eps, err
 }
 

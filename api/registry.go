@@ -13,11 +13,21 @@ type Route struct {
 	Summary     string    // first line of endpoint struct doc comment
 	Description string    // remaining lines of endpoint struct doc comment
 	Handler     http.Handler
-	ReqType     any // pointer to zero-value request type (for OpenAPI reflection)
-	RespType    any // pointer to zero-value response type (for OpenAPI reflection)
 }
 
 var routes []Route
+
+// openAPISpec is the spec served at /openapi.json, set by the generated
+// Provider() (go/api/endpoints.gen.go).
+var openAPISpec string
+
+// SetOpenAPISpec sets the OpenAPI spec served at /openapi.json. The
+// generated Provider() calls it with gen/openapi.json, so the server serves
+// exactly the spec the clients were generated from. Not for hand-written
+// code.
+func SetOpenAPISpec(spec string) {
+	openAPISpec = spec
+}
 
 // Register adds a route to the global registry.
 func Register(r Route) {
@@ -32,4 +42,5 @@ func Routes() []Route {
 // Reset clears all registered routes. Intended for use in tests only.
 func Reset() {
 	routes = nil
+	openAPISpec = ""
 }

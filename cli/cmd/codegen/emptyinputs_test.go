@@ -57,10 +57,13 @@ func TestEmptyInputsEmptyProject(t *testing.T) {
 }
 
 func TestEmptyInputsFullProject(t *testing.T) {
+	// Codegen type-checks go/api, so the module must resolve.
+	gomod, gosum := offlineGoMod(t, "myapp", "v1.11.0", nil)
 	t.Chdir(t.TempDir())
 	writeFiles(t, map[string]string{
 		"schemaf.toml":                   "title = \"My App\"\nname = \"myapp\"\n",
-		"go/go.mod":                      "module myapp\n\ngo 1.24\n\nrequire github.com/flocko-motion/schemaf v1.11.0\n",
+		"go/go.mod":                      gomod,
+		"go/go.sum":                      gosum,
 		"go/db/migrations/0001_init.sql": "CREATE TABLE t (id int);\n",
 		"go/db/queries/t.sql":            "-- name: ListT :many\nSELECT * FROM t;\n",
 		"go/api/ping.go": `package api

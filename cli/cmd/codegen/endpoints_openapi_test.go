@@ -2,7 +2,6 @@ package codegen
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -19,11 +18,7 @@ type staticSpec struct {
 
 func writeAndReadSpec(t *testing.T, endpoints []endpointInfo) staticSpec {
 	t.Helper()
-	t.Chdir(t.TempDir())
-	if err := writeOpenAPIJSON("myapp", endpoints, map[string]structInfo{}); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(openapiJSONOut)
+	raw, err := buildOpenAPISpec("myapp", endpoints, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,14 +109,13 @@ func TestOpenAPIErrorResponses(t *testing.T) {
 // TestOpenAPIReservedSchemaName: an endpoint type named like a framework
 // schema is a codegen error, never a silent overwrite.
 func TestOpenAPIReservedSchemaName(t *testing.T) {
-	t.Chdir(t.TempDir())
-	structs := map[string]structInfo{
-		"Error":  {Name: "Error", Fields: []fieldInfo{{JSONName: "msg", GoType: "string", TSType: "string"}}},
-		"GetReq": {Name: "GetReq"},
+	schemas := map[string]any{
+		"Error": map[string]any{"type": "object", "properties": map[string]any{"msg": map[string]any{"type": "string"}}},
 	}
-	err := writeOpenAPIJSON("myapp", []endpointInfo{
-		{StructName: "G", Method: "GET", Path: "/api/g", Auth: api.AuthNone, ReqType: "GetReq", RespType: "Error"},
-	}, structs)
+	_, err := buildOpenAPISpec("myapp", []endpointInfo{
+		{StructName: "G", Method: "GET", Path: "/api/g", Auth: api.AuthNone, ReqType: "GetReq", RespType: "Error",
+			RespSchema: map[string]any{"$ref": "#/components/schemas/Error"}},
+	}, schemas)
 	if err == nil || !strings.Contains(err.Error(), `"Error"`) || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("err = %v, want a reserved-name error naming Error", err)
 	}

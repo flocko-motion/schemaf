@@ -15,6 +15,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,10 @@ const (
 	apiDir          = "go/api"
 	endpointsGenOut = apiDir + "/endpoints.gen.go"
 	openapiJSONOut  = "gen/openapi.json"
+	// schemaSourcesFile lists, one glob per line, the packages outside go/api
+	// that declare a type the spec's schemas are built from (and go/go.mod for
+	// dependencies). They are codegen inputs: see inputs.go.
+	schemaSourcesFile = "gen/schema-sources"
 )
 
 func newEndpointsCmd(ctx *cli.Context) *cobra.Command {
@@ -46,9 +51,14 @@ An endpoint struct is any struct that implements:
 
 A struct with that shape that can't be parsed is an error, never skipped.
 
+Request and response types may be declared in any package; codegen
+type-checks go/api to build their schemas.
+
 Generates:
-  go/api/endpoints.gen.go  — Provider() that registers all endpoints
-  gen/openapi.json         — OpenAPI 3.0 spec (input for swagger-typescript-api)`,
+  go/api/endpoints.gen.go  — Provider() that registers all endpoints and the
+                             spec served at /openapi.json
+  gen/openapi.json         — OpenAPI 3.0 spec (input for the TS and Go clients)
+  gen/schema-sources       — packages declaring the API's types (codegen inputs)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEndpointsGen(ctx)
 		},
@@ -66,20 +76,8 @@ type endpointInfo struct {
 	Summary     string
 	Description string
 	IsRaw       bool
-}
-
-// fieldInfo describes one field of a Go struct for OpenAPI/TS generation.
-type fieldInfo struct {
-	JSONName string
-	GoType   string // original Go type string
-	TSType   string // TypeScript equivalent
-	Required bool
-}
-
-// structInfo describes a struct type defined in the api package.
-type structInfo struct {
-	Name   string
-	Fields []fieldInfo
+	ReqSchema   map[string]any // request body schema; nil for no body
+	RespSchema  map[string]any // 200 response schema; nil for no content
 }
 
 func runEndpointsGen(_ *cli.Context) error {
@@ -92,7 +90,7 @@ func runEndpointsGen(_ *cli.Context) error {
 		return fmt.Errorf("reading project name: %w", err)
 	}
 
-	endpoints, structs, err := scanAPIDir(apiDir)
+	endpoints, err := scanAPIDir(apiDir)
 	if err != nil {
 		return fmt.Errorf("scanning %s: %w", apiDir, err)
 	}
@@ -105,13 +103,23 @@ func runEndpointsGen(_ *cli.Context) error {
 		return endpoints[i].StructName < endpoints[j].StructName
 	})
 
-	// Generate endpoints.gen.go
-	if err := writeEndpointsGen(endpoints); err != nil {
+	schemas, sources, err := loadSchemas(apiDir, endpoints)
+	if err != nil {
+		return err
+	}
+	spec, err := buildOpenAPISpec(projectName, endpoints, schemas)
+	if err != nil {
 		return err
 	}
 
-	// Generate openapi.json
-	if err := writeOpenAPIJSON(projectName, endpoints, structs); err != nil {
+	// endpoints.gen.go carries the spec: the server serves exactly gen/openapi.json.
+	if err := writeEndpointsGen(endpoints, spec); err != nil {
+		return err
+	}
+	if err := writeGenFile(openapiJSONOut, spec); err != nil {
+		return err
+	}
+	if err := writeGenFile(schemaSourcesFile, []byte(strings.Join(append(sources, ""), "\n"))); err != nil {
 		return err
 	}
 
@@ -119,21 +127,21 @@ func runEndpointsGen(_ *cli.Context) error {
 	return nil
 }
 
-// scanAPIDir parses all non-generated Go files in apiDir and extracts
-// endpoint structs and all struct type definitions.
-func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
+// scanAPIDir parses all non-generated Go files in apiDir and extracts the
+// endpoint structs. The schemas of their types come from loadSchemas.
+func scanAPIDir(dir string) ([]endpointInfo, error) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
 		// Skip generated files
 		return !strings.HasSuffix(fi.Name(), ".gen.go")
 	}, parser.ParseComments)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parsing %s: %w", dir, err)
+		return nil, fmt.Errorf("parsing %s: %w", dir, err)
 	}
 
 	// Collect all method declarations and struct types across files
 	methods := map[methodKey]methodDecl{}
-	allStructs := map[string]*ast.StructType{}
+	structNames := map[string]bool{}
 	docComments := map[string]string{} // struct name → doc comment
 
 	for _, pkg := range pkgs {
@@ -155,11 +163,10 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 						if !ok {
 							continue
 						}
-						st, ok := ts.Type.(*ast.StructType)
-						if !ok {
+						if _, ok := ts.Type.(*ast.StructType); !ok {
 							continue
 						}
-						allStructs[ts.Name.Name] = st
+						structNames[ts.Name.Name] = true
 						// Extract doc comment
 						comment := ""
 						if d.Doc != nil {
@@ -174,8 +181,8 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 		}
 	}
 
-	names := make([]string, 0, len(allStructs))
-	for name := range allStructs {
+	names := make([]string, 0, len(structNames))
+	for name := range structNames {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -198,16 +205,9 @@ func scanAPIDir(dir string) ([]endpointInfo, map[string]structInfo, error) {
 		endpoints = append(endpoints, ep)
 	}
 	if len(errs) > 0 {
-		return nil, nil, errors.Join(errs...)
+		return nil, errors.Join(errs...)
 	}
-
-	// Build structInfo map for all structs in the package
-	structs := map[string]structInfo{}
-	for name, st := range allStructs {
-		structs[name] = extractStructInfo(name, st)
-	}
-
-	return endpoints, structs, nil
+	return endpoints, nil
 }
 
 type methodKey struct{ recv, name string }
@@ -450,71 +450,6 @@ func exprTypeName(expr ast.Expr) string {
 	return ""
 }
 
-// extractStructInfo builds a structInfo from an ast.StructType.
-func extractStructInfo(name string, st *ast.StructType) structInfo {
-	var fields []fieldInfo
-	for _, field := range st.Fields.List {
-		if len(field.Names) == 0 {
-			continue // embedded field, skip for now
-		}
-		goType := exprTypeName(field.Type)
-		jsonName := ""
-		if field.Tag != nil {
-			tag := strings.Trim(field.Tag.Value, "`")
-			jsonName = extractJSONTag(tag)
-		}
-		if jsonName == "" || jsonName == "-" {
-			if len(field.Names) > 0 {
-				jsonName = goFieldName(field.Names[0].Name)
-			}
-		}
-		fields = append(fields, fieldInfo{
-			JSONName: jsonName,
-			GoType:   goType,
-			TSType:   goTypeToTS(goType),
-			Required: true,
-		})
-	}
-	return structInfo{Name: name, Fields: fields}
-}
-
-// extractJSONTag pulls the name from a `json:"name,omitempty"` tag string.
-func extractJSONTag(tag string) string {
-	for _, part := range strings.Fields(tag) {
-		if strings.HasPrefix(part, `json:"`) {
-			val := strings.TrimPrefix(part, `json:"`)
-			val = strings.TrimSuffix(val, `"`)
-			name, _, _ := strings.Cut(val, ",")
-			return name
-		}
-	}
-	return ""
-}
-
-// goTypeToTS maps a Go type string to a TypeScript type string.
-func goTypeToTS(goType string) string {
-	switch goType {
-	case "string":
-		return "string"
-	case "bool":
-		return "boolean"
-	case "int", "int8", "int16", "int32", "int64",
-		"uint", "uint8", "uint16", "uint32", "uint64",
-		"float32", "float64":
-		return "number"
-	case "time.Time":
-		return "string" // ISO 8601
-	}
-	if strings.HasPrefix(goType, "[]") {
-		return goTypeToTS(goType[2:]) + "[]"
-	}
-	if strings.HasPrefix(goType, "*") {
-		return goTypeToTS(goType[1:])
-	}
-	// Named struct type — reference by name
-	return goType
-}
-
 // splitDocComment splits a doc comment into summary (first line) and description (rest).
 // Per Go convention, the first word of a doc comment is the symbol name — it is stripped.
 func splitDocComment(comment, structName string) (summary, description string) {
@@ -538,33 +473,9 @@ func splitDocComment(comment, structName string) (summary, description string) {
 	return
 }
 
-// goFieldName converts a Go exported field name to a JSON-safe key.
-// Handles common cases: ID→id, UserID→userId, CreatedAt→createdAt.
-func goFieldName(name string) string {
-	if name == "" {
-		return name
-	}
-	// Walk runes: lowercase leading uppercase run (handles ID, URL, etc.)
-	runes := []rune(name)
-	i := 0
-	for i < len(runes) && runes[i] >= 'A' && runes[i] <= 'Z' {
-		i++
-	}
-	// If the whole name is uppercase (e.g. "ID"), lowercase it all
-	if i == len(runes) {
-		return strings.ToLower(name)
-	}
-	// If more than one leading uppercase and not at end, keep last uppercase as word boundary
-	if i > 1 {
-		i--
-	}
-	prefix := strings.ToLower(string(runes[:i]))
-	return prefix + string(runes[i:])
-}
-
 // writeEndpointsGen generates go/api/endpoints.gen.go from the template.
-func writeEndpointsGen(endpoints []endpointInfo) error {
-	src, err := renderEndpointsGen(endpoints)
+func writeEndpointsGen(endpoints []endpointInfo, spec []byte) error {
+	src, err := renderEndpointsGen(endpoints, spec)
 	if err != nil {
 		return err
 	}
@@ -575,23 +486,25 @@ func writeEndpointsGen(endpoints []endpointInfo) error {
 	return nil
 }
 
-// renderEndpointsGen renders the content of go/api/endpoints.gen.go.
-func renderEndpointsGen(endpoints []endpointInfo) ([]byte, error) {
+// renderEndpointsGen renders the content of go/api/endpoints.gen.go, which
+// registers the endpoints and the OpenAPI spec the server serves.
+func renderEndpointsGen(endpoints []endpointInfo, spec []byte) ([]byte, error) {
 	tmpl, err := template.New("endpoints").Parse(endpointsGenTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("parsing endpoints template: %w", err)
 	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]any{"Endpoints": endpoints}); err != nil {
+	if err := tmpl.Execute(&buf, map[string]any{"Endpoints": endpoints, "Spec": string(spec)}); err != nil {
 		return nil, fmt.Errorf("executing endpoints template: %w", err)
 	}
 	return buf.Bytes(), nil
 }
 
-// writeOpenAPIJSON generates openapi.json from the extracted endpoint info.
-// NOTE: This is an AST-based static generator. It does not require a running server.
-func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, structs map[string]structInfo) error {
+// buildOpenAPISpec builds the OpenAPI spec (the content of gen/openapi.json
+// and of what the server serves) from the endpoints and the component
+// schemas of their types, plus schemaf's own routes and schemas.
+func buildOpenAPISpec(projectName string, endpoints []endpointInfo, schemas map[string]any) ([]byte, error) {
 	// Framework auth routes (login, logout, refresh) are always part of the spec.
 	paths, authSchemas := api.AuthOpenAPI()
 
@@ -615,31 +528,20 @@ func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, structs map[
 			op["security"] = api.OpenAPISecurity(ep.Auth)
 		}
 
-		// Request body for non-GET methods with a non-empty Req type
-		if !ep.IsRaw && ep.Method != "GET" && ep.Method != "DELETE" {
-			if st, ok := structs[ep.ReqType]; ok && len(st.Fields) > 0 {
-				op["requestBody"] = map[string]any{
-					"required": true,
-					"content": map[string]any{
-						"application/json": map[string]any{
-							"schema": map[string]any{"$ref": "#/components/schemas/" + ep.ReqType},
-						},
-					},
-				}
+		if ep.ReqSchema != nil {
+			op["requestBody"] = map[string]any{
+				"required": true,
+				"content": map[string]any{
+					"application/json": map[string]any{"schema": ep.ReqSchema},
+				},
 			}
 		}
-
-		// Response schema
-		if !ep.IsRaw {
-			if st, ok := structs[ep.RespType]; ok && len(st.Fields) > 0 {
-				op["responses"].(map[string]any)["200"] = map[string]any{
-					"description": "OK",
-					"content": map[string]any{
-						"application/json": map[string]any{
-							"schema": map[string]any{"$ref": "#/components/schemas/" + ep.RespType},
-						},
-					},
-				}
+		if ep.RespSchema != nil {
+			op["responses"].(map[string]any)["200"] = map[string]any{
+				"description": "OK",
+				"content": map[string]any{
+					"application/json": map[string]any{"schema": ep.RespSchema},
+				},
 			}
 		}
 
@@ -654,13 +556,15 @@ func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, structs map[
 		paths[ep.Path].(map[string]any)[method] = op
 	}
 
-	// Build schemas for all structs referenced
-	schemas := buildSchemas(endpoints, structs)
+	allSchemas := map[string]any{}
+	for name, schema := range schemas {
+		allSchemas[name] = schema
+	}
 	for name, schema := range authSchemas {
-		if _, taken := schemas[name]; taken {
-			return fmt.Errorf("type %q in %s: the OpenAPI schema name %q is reserved by schemaf — rename the type", name, apiDir, name)
+		if _, taken := allSchemas[name]; taken {
+			return nil, fmt.Errorf("type %q used by an endpoint: the OpenAPI schema name %q is reserved by schemaf — rename the type", name, name)
 		}
-		schemas[name] = schema
+		allSchemas[name] = schema
 	}
 
 	spec := map[string]any{
@@ -669,108 +573,27 @@ func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, structs map[
 		"paths":   paths,
 		"components": map[string]any{
 			"securitySchemes": api.OpenAPISecuritySchemes(api.SessionCookieName(projectName)),
-			"schemas":         schemas,
+			"schemas":         allSchemas,
 		},
 	}
 
 	data, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshaling openapi spec: %w", err)
+		return nil, fmt.Errorf("marshaling openapi spec: %w", err)
 	}
+	return data, nil
+}
 
-	if err := os.MkdirAll("gen", 0755); err != nil {
-		return fmt.Errorf("creating gen/: %w", err)
+// writeGenFile writes a file under gen/.
+func writeGenFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(openapiJSONOut, data, 0644); err != nil {
-		return fmt.Errorf("writing %s: %w", openapiJSONOut, err)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
-	cli.Success("Generated %s", openapiJSONOut)
+	cli.Success("Generated %s", path)
 	return nil
-}
-
-// buildSchemas collects all structs referenced by endpoints (transitively).
-func buildSchemas(endpoints []endpointInfo, structs map[string]structInfo) map[string]any {
-	// Collect referenced type names
-	referenced := map[string]bool{}
-	queue := []string{}
-	for _, ep := range endpoints {
-		if ep.IsRaw {
-			continue
-		}
-		queue = append(queue, ep.ReqType, ep.RespType)
-	}
-	for len(queue) > 0 {
-		name := queue[0]
-		queue = queue[1:]
-		if referenced[name] {
-			continue
-		}
-		st, ok := structs[name]
-		if !ok {
-			continue
-		}
-		referenced[name] = true
-		// Follow field types that are also structs
-		for _, f := range st.Fields {
-			baseType := strings.TrimPrefix(strings.TrimPrefix(f.GoType, "[]"), "*")
-			if _, ok := structs[baseType]; ok {
-				queue = append(queue, baseType)
-			}
-		}
-	}
-
-	schemas := map[string]any{}
-	for name := range referenced {
-		st := structs[name]
-		props := map[string]any{}
-		var required []string
-		for _, f := range st.Fields {
-			baseType := strings.TrimPrefix(strings.TrimPrefix(f.GoType, "[]"), "*")
-			var schema map[string]any
-			if _, ok := structs[baseType]; ok {
-				// Named struct → $ref
-				if strings.HasPrefix(f.GoType, "[]") {
-					schema = map[string]any{"type": "array", "items": map[string]any{"$ref": "#/components/schemas/" + baseType}}
-				} else {
-					schema = map[string]any{"$ref": "#/components/schemas/" + baseType}
-				}
-			} else {
-				schema = primitiveSchema(f.GoType)
-			}
-			props[f.JSONName] = schema
-			if f.Required {
-				required = append(required, f.JSONName)
-			}
-		}
-		s := map[string]any{"type": "object", "properties": props}
-		if len(required) > 0 {
-			s["required"] = required
-		}
-		schemas[name] = s
-	}
-	return schemas
-}
-
-// primitiveSchema returns a JSON Schema for primitive Go types.
-func primitiveSchema(goType string) map[string]any {
-	goType = strings.TrimPrefix(goType, "*")
-	if strings.HasPrefix(goType, "[]") {
-		return map[string]any{"type": "array", "items": primitiveSchema(goType[2:])}
-	}
-	switch goType {
-	case "string":
-		return map[string]any{"type": "string"}
-	case "bool":
-		return map[string]any{"type": "boolean"}
-	case "int", "int8", "int16", "int32", "int64",
-		"uint", "uint8", "uint16", "uint32", "uint64":
-		return map[string]any{"type": "integer"}
-	case "float32", "float64":
-		return map[string]any{"type": "number"}
-	case "time.Time":
-		return map[string]any{"type": "string", "format": "date-time"}
-	}
-	return map[string]any{"type": "object"}
 }
 
 // extractPathParams returns OpenAPI parameter objects for path template variables like {id}.

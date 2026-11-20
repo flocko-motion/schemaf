@@ -27,7 +27,7 @@ func TestConstantsGenCompiles(t *testing.T) {
 // With no TS tests, ts.gen_test.go holds only its helpers. go vet type-checks
 // it (go build skips _test files).
 func TestTSTestGenNoTestsCompiles(t *testing.T) {
-	endpoints, err := renderEndpointsGen(nil)
+	endpoints, err := renderEndpointsGen(nil, []byte("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}

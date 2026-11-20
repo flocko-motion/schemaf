@@ -133,6 +133,7 @@ myapp/
 ├── Dockerfile.gen                  # Generated: production Dockerfile
 ├── gen/                            # Other generated files
 │   ├── openapi.json                # Generated: OpenAPI spec
+│   ├── schema-sources              # Generated: packages declaring the API's types
 │   └── inputs.sha256               # Generated: hash of codegen's inputs (freshness check)
 ├── go/                            # All Go code (CLI + server unified)
 │   ├── main.go                    # Wire up providers, start app
@@ -228,7 +229,7 @@ schemaf collapses all of this into a single compiled binary:
 | Go API client | generated from OpenAPI spec via oapi-codegen at codegen time |
 | Admin / custom tools | `./myapp <subcommand>` — anything you add via `app.AddSubcommand()` |
 
-The binary has full knowledge of itself. Its endpoint structs are compiled in — so it can reflect over its own API to generate the OpenAPI spec and typed clients (TypeScript + Go) without a running server. Its migrations are embedded — so it can apply them on startup without external files. Its frontend is embedded — so production deployment is a single binary copy.
+The binary has full knowledge of itself. Its OpenAPI spec is generated from the endpoint structs and their types at codegen time and compiled in — so the typed clients (TypeScript + Go) come without a running server, and the spec the server serves is exactly the one the clients were generated from. Its migrations are embedded — so it can apply them on startup without external files. Its frontend is embedded — so production deployment is a single binary copy.
 
 **Deployment is therefore trivial:**
 ```bash
