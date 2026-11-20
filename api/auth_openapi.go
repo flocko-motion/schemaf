@@ -82,8 +82,8 @@ func openAPIErrorSchema() map[string]any {
 }
 
 // FrameworkOpenAPI returns the OpenAPI path items of the framework's routes
-// under /api/ (health, status, config, user/me and the auth routes) and the
-// framework's component schemas (including the shared Error schema), as
+// under /api/ (health, status, config, user/me, errors/{id} and the auth
+// routes) and the framework's component schemas (including the shared Error schema), as
 // plain JSON-shaped maps. Codegen merges them into gen/openapi.json (which
 // the server serves and enforces, see NewMux), so the generated clients
 // always have these routes and the error type, and the route gate lets them
@@ -114,9 +114,9 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 
 	stringMap := map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
 	anyMap := map[string]any{"type": "object", "additionalProperties": true}
-	// getOp is a GET operation with the given responses plus the default
-	// error response.
-	getOp := func(id, summary, desc string, level AuthLevel, responses map[string]any) map[string]any {
+	// getOp is a GET operation with the given path parameters (nil for
+	// none) and responses, plus the default error response.
+	getOp := func(id, summary, desc string, level AuthLevel, params []any, responses map[string]any) map[string]any {
 		responses["default"] = OpenAPIErrorResponse()
 		op := map[string]any{
 			"operationId": id,
@@ -127,26 +127,35 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 		if sec := OpenAPISecurity(level); sec != nil {
 			op["security"] = sec
 		}
+		if params != nil {
+			op["parameters"] = params
+		}
 		return map[string]any{"get": op}
 	}
 
 	paths = map[string]any{
 		"/api/health": getOp("getApiHealth", "Health check",
 			`"status" is "ok" or "error", "db" and every registered health check are "ok" or "error: …". 503 (with the same body) when anything is unhealthy.`,
-			AuthNone, map[string]any{
+			AuthNone, nil, map[string]any{
 				"200": jsonResp("Healthy", stringMap),
 				// Unhealthy: the same body, not the Error schema.
 				"503": jsonResp("Unhealthy", stringMap),
 			}),
 		"/api/status": getOp("getApiStatus", "Service status",
 			"Mode (development or production), uptime, last backup, active identity providers, and every registered status provider.",
-			AuthNone, map[string]any{"200": jsonResp("OK", anyMap)}),
+			AuthNone, nil, map[string]any{"200": jsonResp("OK", anyMap)}),
 		"/api/config": getOp("getApiConfig", "Public frontend config",
 			"Every PUBLIC_* environment variable, keyed by its full name. Read it in the frontend through config() from config.gen.ts.",
-			AuthNone, map[string]any{"200": jsonResp("OK", stringMap)}),
+			AuthNone, nil, map[string]any{"200": jsonResp("OK", stringMap)}),
 		"/api/user/me": getOp("getApiUserMe", "The authenticated caller",
 			"The subject of the caller.",
-			AuthRequired, map[string]any{"200": jsonResp("OK", ref("SchemafUser"))}),
+			AuthRequired, nil, map[string]any{"200": jsonResp("OK", ref("SchemafUser"))}),
+		"/api/errors/{id}": getOp("getApiErrorsId", "Details of a server error",
+			"The details stored for the 5xx answered with this id: open in development mode, in production only to callers the app allows (app.CanSeeErrorDetails). 404 when the id is unknown or expired (kept: newest 1000, at most 24 hours, per process).",
+			AuthOptional, []any{map[string]any{
+				"name": "id", "in": "path", "required": true,
+				"schema": map[string]any{"type": "string"},
+			}}, map[string]any{"200": jsonResp("OK", ref("SchemafErrorDetails"))}),
 		"/api/auth/auth0/login": map[string]any{
 			"post": map[string]any{
 				"operationId": "postApiAuthAuth0Login",
@@ -207,6 +216,21 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 		"SchemafUser": map[string]any{
 			"type": "object", "required": []any{"id"},
 			"properties": map[string]any{"id": str},
+		},
+		"SchemafErrorDetails": map[string]any{
+			"type":     "object",
+			"required": []any{"id", "time", "method", "path", "status", "code", "error"},
+			"properties": map[string]any{
+				"id":      str,
+				"time":    map[string]any{"type": "string", "format": "date-time"},
+				"method":  str,
+				"path":    str,
+				"status":  map[string]any{"type": "integer"},
+				"code":    str,
+				"subject": map[string]any{"type": "string", "description": "The caller, if authenticated."},
+				"error":   map[string]any{"type": "string", "description": "The full error."},
+				"misuse":  map[string]any{"type": "string", "description": "The misuse of the error API, if any."},
+			},
 		},
 		"SchemafRefreshResponse": map[string]any{
 			"type": "object", "required": []any{"token"},

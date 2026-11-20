@@ -39,8 +39,9 @@ type App struct {
 	subcommands []cli.SubcommandProvider
 	services    []func(context.Context)
 
-	identityProviders []api.IdentityProvider
-	onLogin           api.OnLoginFunc
+	identityProviders  []api.IdentityProvider
+	onLogin            api.OnLoginFunc
+	canSeeErrorDetails api.CanSeeErrorDetailsFunc
 
 	// apiProviders and frontend are applied by Start, which rebuilds the
 	// routes on every start.
@@ -105,6 +106,18 @@ func (a *App) AddIdentityProvider(p api.IdentityProvider) {
 // are only available here.
 func (a *App) OnLogin(fn func(ctx context.Context, id api.Identity) (subject string, err error)) {
 	a.onLogin = fn
+}
+
+// CanSeeErrorDetails sets who may look up the details of a server error
+// (GET /api/errors/{id}) in production. Without it, nobody may: details are
+// off by default. In development mode every caller may, and fn is not asked.
+// Wire up in Wire (go/app/app.go):
+//
+//	app.CanSeeErrorDetails(func(ctx context.Context, subject string) bool {
+//	    return users.IsAdmin(ctx, subject)
+//	})
+func (a *App) CanSeeErrorDetails(fn func(ctx context.Context, subject string) bool) {
+	a.canSeeErrorDetails = fn
 }
 
 // SetFrontend registers an embedded frontend filesystem for production serving.

@@ -83,11 +83,11 @@ func hasBody(method string) bool {
 // and returns false on failure.
 func decodeRequest(w http.ResponseWriter, r *http.Request, req any, consumes []string) bool {
 	if err := decodePathParams(r, req); err != nil {
-		writeError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
+		WriteError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
 		return false
 	}
 	if err := decodeQueryParams(r, req); err != nil {
-		writeError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
+		WriteError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
 		return false
 	}
 	if !hasBody(r.Method) {
@@ -95,7 +95,7 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, req any, consumes []s
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, r, Error(ErrBadRequest, "bad_request", "reading request body: "+err.Error()))
+		WriteError(w, r, Error(ErrBadRequest, "bad_request", "reading request body: "+err.Error()))
 		return false
 	}
 	if len(body) == 0 {
@@ -108,7 +108,7 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, req any, consumes []s
 		return false
 	}
 	if err := c.decode(body, req); err != nil {
-		writeError(w, r, Error(ErrBadRequest, "bad_request", "invalid request body: "+err.Error()))
+		WriteError(w, r, Error(ErrBadRequest, "bad_request", "invalid request body: "+err.Error()))
 		return false
 	}
 	return true
@@ -131,14 +131,14 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp], consumes, produces []
 		ctx, er := withEndpointRequest(w, r)
 		resp, err := e.Handle(ctx, req)
 		if err != nil {
-			er.commit(func() { writeError(w, r, err) })
+			er.commit(func() { WriteError(w, r, err) })
 			return
 		}
 
 		// Encode into a buffer, so an encoding error can still answer 500.
 		var buf bytes.Buffer
 		if err := codecs[mt].encode(&buf, resp); err != nil {
-			er.commit(func() { writeError(w, r, fmt.Errorf("encoding response as %s: %w", mt, err)) })
+			er.commit(func() { WriteError(w, r, fmt.Errorf("encoding response as %s: %w", mt, err)) })
 			return
 		}
 		er.commit(func() {
@@ -160,7 +160,7 @@ func newTypedHandler[Req, Resp any](e Endpoint[Req, Resp], consumes, produces []
 // The framework does not decode the request or encode the response — you
 // have full control over http.ResponseWriter and *http.Request.
 // If HandleRaw returns a non-nil error and no response has been written yet,
-// the framework writes the standard error response (see writeError).
+// the framework writes the standard error response (see WriteError).
 type RawEndpoint interface {
 	Method() string
 	Path() string
@@ -184,7 +184,7 @@ func NewRawRoute(e RawEndpoint, summary, description string) Route {
 func newRawHandler(e RawEndpoint) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := e.HandleRaw(w, r); err != nil {
-			writeError(w, r, err)
+			WriteError(w, r, err)
 		}
 	})
 }

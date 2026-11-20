@@ -57,6 +57,7 @@ func Wire(app *schemaf.App) {
     app.SetFrontend(FrontendFS())                  // generated: embedded frontend assets (go/app/frontend.gen.go)
     app.AddSubcommand(importer.SubcommandProvider) // custom: CLI commands
     // optional: app.OnLogin(...), app.AddIdentityProvider(...) — see Authentication
+    // optional: app.CanSeeErrorDetails(...) — see Error details
     // optional: app.AddService(...) — see Services vs. subcommands
 }
 ```
@@ -250,9 +251,10 @@ The framework provides these endpoints out of the box:
 - `/api/config` — the instance's public frontend config (see [Runtime config](#runtime-config-public_))
 - `/api/user/me` — current user info (requires auth)
 - `/api/auth/{provider}/login`, `/api/auth/logout`, `/api/auth/refresh` — login and sessions (see [Authentication](#authentication))
+- `/api/errors/{id}` — the details of a 5xx by its `id` (see [Error details](#error-details))
 - `/openapi.json` — OpenAPI 3.0 spec: exactly `gen/openapi.json`, compiled into the binary by codegen (see [Code Generation](#code-generation))
 
-All of them except `/openapi.json` are part of `openapi.json` (`GET /api/health`, `GET /api/status`, `GET /api/config`, `GET /api/user/me` and the auth routes), so the generated TypeScript and Go clients can call them with types, and the [route gate](#routing) lets them through. `/openapi.json` is the one route outside `/api/`.
+All of them except `/openapi.json` are part of `openapi.json` (`GET /api/health`, `GET /api/status`, `GET /api/config`, `GET /api/user/me`, `GET /api/errors/{id}` and the auth routes), so the generated TypeScript and Go clients can call them with types, and the [route gate](#routing) lets them through. `/openapi.json` is the one route outside `/api/`.
 
 ### Extending /api/health
 
@@ -564,7 +566,7 @@ You write the struct. Everything else is generated or framework-provided.
 
 ### Error responses
 
-Every error response from the API has the same shape, whichever layer answered: a typed endpoint, a [raw endpoint](#raw-endpoints), an identity provider's `Exchange`, `OnLogin`, or schemaf itself (bad request body, auth middleware, login checks). A client never has to care where an error came from.
+Every error response from the API has the same shape, whichever layer answered: a typed endpoint, a [raw endpoint](#raw-endpoints), an identity provider's `Exchange`, `OnLogin`, a plain `net/http` handler using [`api.WriteError`](#outside-the-endpoint-pipeline), or schemaf itself (bad request body, auth middleware, login checks). A client never has to care where an error came from.
 
 ```json
 {"error": "an organisation needs at least one head", "code": "last_head"}
@@ -575,7 +577,7 @@ Every error response from the API has the same shape, whichever layer answered: 
 |---|---|---|
 | `error` | always | the message (see [Message](#message)) |
 | `code` | always | machine-readable; the client branches on it (see [Code](#code)) |
-| `id` | on 5xx only | 16 hex characters; the full error is logged under it |
+| `id` | on 5xx only | 16 hex characters; the full error is logged under it and can be [looked up](#error-details) |
 
 #### Status
 
@@ -590,10 +592,19 @@ The status comes from the sentinel error anywhere in the error chain (`errors.Is
 | (none: written by schemaf's [route gate](#routing) for a wrong method, never by an endpoint) | 405 Method Not Allowed | `method_not_allowed` |
 | (none: written by schemaf when `Accept` matches none of `Produces()`, see [Content types](#content-types)) | 406 Not Acceptable | `not_acceptable` |
 | `api.ErrConflict` | 409 Conflict | `conflict` |
+| `api.ErrGone` | 410 Gone | `gone` |
+| `api.ErrPreconditionFailed` | 412 Precondition Failed | `precondition_failed` |
+| `api.ErrTooLarge` | 413 Request Entity Too Large | `too_large` |
 | (none: written by schemaf when `Content-Type` is not in `Consumes()`, see [Content types](#content-types)) | 415 Unsupported Media Type | `unsupported_media_type` |
+| `api.ErrUnprocessable` | 422 Unprocessable Entity | `unprocessable` |
 | `api.ErrTooManyRequests` | 429 Too Many Requests | `too_many_requests` |
 | (no sentinel) | 500 Internal Server Error | `internal` |
+| `api.ErrNotImplemented` | 501 Not Implemented | `not_implemented` |
+| `api.ErrBadGateway` | 502 Bad Gateway | `bad_gateway` |
 | `api.ErrUnavailable` | 503 Service Unavailable | `unavailable` |
+| `api.ErrGatewayTimeout` | 504 Gateway Timeout | `gateway_timeout` |
+
+501, 502 and 504 are 5xx like any other: their message is withheld, they keep their code, carry an `id` and are logged (see [Message](#message)).
 
 `api.ErrUnauthorized` sets the status and code only. It never touches the session cookie and sets no `WWW-Authenticate` header: cookies are the business of schemaf's [auth layer](#authentication), not of your endpoint.
 
@@ -653,7 +664,7 @@ Rules:
 #### Message
 
 - **4xx** are expected errors, meant for the user: the message is `err.Error()`. If that is empty, it is the status text (`http.StatusText`, e.g. `"Conflict"`).
-- **5xx** are the server's fault, and their message is withheld: it is always the status text (`"Internal Server Error"`, `"Service Unavailable"`), whatever the error says. The response carries an `id`, and the full error is logged under it. Messages tend to leak internals (driver errors, SQL, paths); codes don't.
+- **5xx** are the server's fault, and their message is withheld: it is always the status text (`"Internal Server Error"`, `"Service Unavailable"`), whatever the error says. The response carries an `id`, the full error is logged under it, and it can be looked up under the `id` (see [Error details](#error-details)). Messages tend to leak internals (driver errors, SQL, paths); codes don't.
 - **schemaf's own 401s** (auth middleware) say `"Unauthorized"` and nothing more. The reason (missing, expired, malformed, bad signature, revoked session) is logged, never sent to the client.
 
 #### Misuse
@@ -664,6 +675,7 @@ Misusing the error API is a 500 with code `internal` and an `id`, never a panic 
 - an empty or invalid code, from any source
 - a default code with the wrong status
 - `Retry-After` on a status other than 429 or 503, or with a duration ≤ 0
+- [`api.WriteError`](#outside-the-endpoint-pipeline) with a `nil` error
 
 An empty message is not misuse; it falls back to the status text.
 
@@ -690,11 +702,89 @@ Only on 429 and 503, with a duration > 0; anything else is [misuse](#misuse).
 - The reasons for schemaf's own 401s are logged at warn level.
 - Other 4xx are not logged.
 
+#### Outside the endpoint pipeline
+
+Endpoints return errors, and schemaf writes the response. A handler outside schemaf's endpoint pipeline (a plain `http.Handler`, middleware, the standalone mux of a package that is also mounted behind schemaf endpoints) answers errors with `api.WriteError`:
+
+```go
+func WriteError(w http.ResponseWriter, r *http.Request, err error)
+```
+
+```go
+mux.HandleFunc("POST /games/{id}/move", func(w http.ResponseWriter, r *http.Request) {
+    if !mayMove(r) {
+        api.WriteError(w, r, api.Error(api.ErrForbidden, "denied", "it is not your turn"))
+        // → 403 {"error": "it is not your turn", "code": "denied"}
+        return
+    }
+    // …
+})
+```
+
+The response is the same as an endpoint returning `err` would get: status, body, `Retry-After`, logging, the `id` and [error details](#error-details) on 5xx, and the [misuse](#misuse) rules. It is the function schemaf itself uses for every error response. Importing `api` needs no running schemaf app: no database, config or auth.
+
+- Endpoints keep returning errors; don't call `api.WriteError` from `Handle`, `HandleRaw` or `Stream`.
+- Call it only before anything of the response is written. As with `http.Error`, it doesn't check.
+- Outside the pipeline there is no auth context, so a 5xx is logged without a `subject`.
+
+#### Error details
+
+A 5xx withholds its message from the client but carries an `id`. The details behind that id can be looked up, for example when a user reports "it said Internal Server Error, id `3f9a1c0be47d2a16`". Dev clients fetch them to show the full error.
+
+**The store.** schemaf records every 5xx written through [`api.WriteError`](#outside-the-endpoint-pipeline) (every error response schemaf writes goes through it), in memory in the server process: the newest 1000 entries, each kept for at most 24 hours, oldest dropped first. 4xx are never recorded; they carry their full message and have no `id`. The store is lost on restart, and each replica knows only its own errors. Both values are framework constants.
+
+**What's stored** (never the request body or headers):
+
+| Field | Content |
+|---|---|
+| `id` | the `id` of the response |
+| `time` | when the error was written (RFC 3339) |
+| `method`, `path` | the request |
+| `status`, `code` | the response |
+| `subject` | the caller, if authenticated (omitted otherwise) |
+| `error` | the full `err.Error()` |
+| `misuse` | the [misuse](#misuse) problem and fix, if any (omitted otherwise) |
+
+**The route.** `GET /api/errors/{id}` (`api.AuthOptional`) returns the stored entry as JSON with the fields above. It is in `openapi.json` with the schema `SchemafErrorDetails`, so the generated clients type it. An unknown or expired id is a 404 `not_found`.
+
+**Who may look up:**
+
+- In [development mode](#development-mode), every caller, anonymous included. Put public dev servers behind HTTP basic auth.
+- In production, only callers the app allows with `app.CanSeeErrorDetails` in `Wire`. Without it, nobody: details are off by default.
+
+```go
+app.CanSeeErrorDetails(func(ctx context.Context, subject string) bool {
+    return users.IsAdmin(ctx, subject)
+})
+```
+
+An anonymous caller gets 401 `unauthorized`, and a subject the predicate refuses gets 403 `forbidden` (also every subject when no predicate is set). The subject who caused the error gets no special access.
+
+**From Go.** `api.LookupError(id)` returns the stored entry, so a standalone server (one using `api.WriteError` outside the schemaf app) can serve its own lookup:
+
+```go
+func LookupError(id string) (api.ErrorDetails, bool)
+
+type ErrorDetails struct {
+    ID      string    `json:"id"`
+    Time    time.Time `json:"time"`
+    Method  string    `json:"method"`
+    Path    string    `json:"path"`
+    Status  int       `json:"status"`
+    Code    string    `json:"code"`
+    Subject string    `json:"subject,omitempty"`
+    Error   string    `json:"error"`
+    Misuse  string    `json:"misuse,omitempty"`
+}
+```
+
+There is no CLI subcommand: the store lives in the server process.
+
 #### OpenAPI
 
 `openapi.json` has one shared schema, `components.schemas.Error`: `error` (string, required), `code` (string, required; its description lists every default code from the [status table](#status), schemaf's own `method_not_allowed`, `not_acceptable` and `unsupported_media_type` included) and `id` (string, 5xx only). Every operation, raw endpoints and schemaf's auth routes included, has a `default` response referencing it, so the generated TypeScript and Go clients type the error body.
 
-`Error` is a reserved schema name, like the `Schemaf…` schemas of the auth routes: a type in `go/api/` that would appear in the spec under one of these names is a codegen error, never a silent overwrite.
+`Error` is a reserved schema name, like the `Schemaf…` schemas of the framework routes (`SchemafErrorDetails` included): a type in `go/api/` that would appear in the spec under one of these names is a codegen error, never a silent overwrite.
 
 #### Upgrading: error responses
 
@@ -704,6 +794,8 @@ Before v1.13.0, an error response was `{"error": "<message>"}`. Now:
 - 5xx messages are withheld: the message is the status text, and the response carries an `id` to find the full error in the log.
 - schemaf's own 401s no longer say why; the reason is in the log.
 - `openapi.json` declares errors as one `default` response referencing `Error`, instead of description-only `400`/`401`/`500` responses.
+
+Since the seven sentinels `api.ErrGone`, `api.ErrPreconditionFailed`, `api.ErrTooLarge`, `api.ErrUnprocessable`, `api.ErrNotImplemented`, `api.ErrBadGateway` and `api.ErrGatewayTimeout` were added, their codes are default codes: `gone`, `precondition_failed`, `too_large`, `unprocessable`, `not_implemented`, `bad_gateway`, `gateway_timeout`. An app that uses one of them as its own code with another sentinel (say `api.Error(api.ErrBadRequest, "unprocessable", …)`) now hits [misuse](#misuse) and answers 500. Codegen can't detect this, because codes are runtime values: grep your code for these strings, and rename the code or switch to the matching sentinel. Run `./schemaf.sh codegen` to get `GET /api/errors/{id}` into `gen/openapi.json`; the server refuses to start with a spec that lacks it.
 
 ### Request headers
 
@@ -764,7 +856,7 @@ Codegen is strict here too: `Consumes()` and `Produces()` must each be a single 
 
 schemaf has built-in auth, fully managed by the framework:
 
-- **Per-endpoint**: `Auth()` returns `api.AuthRequired`, `api.AuthOptional` or `api.AuthNone` (see [Auth levels](#auth-levels)). `/api/health`, `/api/status`, `/api/config`, `/openapi.json` and the login routes are always open; `/api/user/me` and `/api/auth/refresh` require auth.
+- **Per-endpoint**: `Auth()` returns `api.AuthRequired`, `api.AuthOptional` or `api.AuthNone` (see [Auth levels](#auth-levels)). `/api/health`, `/api/status`, `/api/config`, `/openapi.json` and the login routes are always open; `/api/user/me` and `/api/auth/refresh` require auth; `/api/errors/{id}` is optional (see [Error details](#error-details)).
 - **Optional auth**: at `api.AuthOptional` the handler also runs for anonymous callers, and `api.Subject(ctx)` tells it whether someone is signed in. Present but invalid credentials still give 401 (and clear a dead cookie); the `Origin` check applies to cookie requests as usual.
 - **One token, two transports**: schemaf's token (an HMAC-SHA256 JWT) is accepted from the session cookie or from `Authorization: Bearer <token>`. Browsers use the cookie; scripts and other servers use Bearer. If both are present, Bearer wins.
 - **Signing key is auto-managed**: generated on first boot and stored in Postgres (`_schemaf_config`). Nothing to configure, no secret to manage.
@@ -1011,6 +1103,7 @@ Built-in routes:
 |---|---|
 | `POST /api/auth/logout` | Ends the current session and clears the cookie. Responds 204, also when there is no session. |
 | `POST /api/auth/refresh` | Requires auth with a session token (a stateless token gives 400). Returns `{"token": "..."}`, a fresh token for the current session (and renews the cookie if the request used it). |
+| `GET /api/errors/{id}` | `api.AuthOptional`. Returns the details of a 5xx by its `id`: open in development mode, in production only to callers `app.CanSeeErrorDetails` allows (see [Error details](#error-details)). |
 
 #### Starting sessions from your own code
 

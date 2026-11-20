@@ -21,13 +21,20 @@ import (
 // Sentinel errors that handlers can return (directly or wrapped with %w) to
 // produce specific HTTP status codes. See EXTEND.md, "Error responses".
 var (
-	ErrBadRequest      = errors.New("bad request")       // 400
-	ErrUnauthorized    = errors.New("unauthorized")      // 401
-	ErrForbidden       = errors.New("forbidden")         // 403
-	ErrNotFound        = errors.New("not found")         // 404
-	ErrConflict        = errors.New("conflict")          // 409
-	ErrTooManyRequests = errors.New("too many requests") // 429
-	ErrUnavailable     = errors.New("unavailable")       // 503
+	ErrBadRequest         = errors.New("bad request")         // 400
+	ErrUnauthorized       = errors.New("unauthorized")        // 401
+	ErrForbidden          = errors.New("forbidden")           // 403
+	ErrNotFound           = errors.New("not found")           // 404
+	ErrConflict           = errors.New("conflict")            // 409
+	ErrGone               = errors.New("gone")                // 410
+	ErrPreconditionFailed = errors.New("precondition failed") // 412
+	ErrTooLarge           = errors.New("too large")           // 413
+	ErrUnprocessable      = errors.New("unprocessable")       // 422
+	ErrTooManyRequests    = errors.New("too many requests")   // 429
+	ErrNotImplemented     = errors.New("not implemented")     // 501
+	ErrBadGateway         = errors.New("bad gateway")         // 502
+	ErrUnavailable        = errors.New("unavailable")         // 503
+	ErrGatewayTimeout     = errors.New("gateway timeout")     // 504
 )
 
 // sentinel is a schemaf sentinel error with its status and default code.
@@ -44,8 +51,15 @@ var sentinels = []sentinel{
 	{ErrForbidden, "api.ErrForbidden", http.StatusForbidden, "forbidden"},
 	{ErrNotFound, "api.ErrNotFound", http.StatusNotFound, "not_found"},
 	{ErrConflict, "api.ErrConflict", http.StatusConflict, "conflict"},
+	{ErrGone, "api.ErrGone", http.StatusGone, "gone"},
+	{ErrPreconditionFailed, "api.ErrPreconditionFailed", http.StatusPreconditionFailed, "precondition_failed"},
+	{ErrTooLarge, "api.ErrTooLarge", http.StatusRequestEntityTooLarge, "too_large"},
+	{ErrUnprocessable, "api.ErrUnprocessable", http.StatusUnprocessableEntity, "unprocessable"},
 	{ErrTooManyRequests, "api.ErrTooManyRequests", http.StatusTooManyRequests, "too_many_requests"},
+	{ErrNotImplemented, "api.ErrNotImplemented", http.StatusNotImplemented, "not_implemented"},
+	{ErrBadGateway, "api.ErrBadGateway", http.StatusBadGateway, "bad_gateway"},
 	{ErrUnavailable, "api.ErrUnavailable", http.StatusServiceUnavailable, "unavailable"},
+	{ErrGatewayTimeout, "api.ErrGatewayTimeout", http.StatusGatewayTimeout, "gateway_timeout"},
 }
 
 // codeInternal is the default code of a 500 (an error without a sentinel).
@@ -154,14 +168,8 @@ var sentinelNames = func() string {
 func resolveError(err error) resolvedError {
 	res := resolvedError{status: statusFor(err)}
 	res.code = defaultCode(res.status)
-	res.misuse = checkError(err, &res)
-	if res.misuse != "" {
-		return resolvedError{
-			status: http.StatusInternalServerError,
-			code:   codeInternal,
-			msg:    http.StatusText(http.StatusInternalServerError),
-			misuse: res.misuse,
-		}
+	if misuse := checkError(err, &res); misuse != "" {
+		return misuseError(misuse)
 	}
 	res.msg = http.StatusText(res.status)
 	if res.status < 500 {
@@ -170,6 +178,17 @@ func resolveError(err error) resolvedError {
 		}
 	}
 	return res
+}
+
+// misuseError is what a misuse of the error API answers with: a mute 500
+// with code "internal".
+func misuseError(misuse string) resolvedError {
+	return resolvedError{
+		status: http.StatusInternalServerError,
+		code:   codeInternal,
+		msg:    http.StatusText(http.StatusInternalServerError),
+		misuse: misuse,
+	}
 }
 
 // checkError fills res.code and res.retryAfter from err's Code() and
@@ -237,29 +256,60 @@ func retryAfterSeconds(d time.Duration) string {
 	return strconv.FormatInt(int64((d+time.Second-1)/time.Second), 10)
 }
 
-// writeError writes the error response for err. Every error response of the
-// API goes through it, except the statuses schemaf answers itself
-// (writeStatusError). 5xx get an id under which the full error is logged.
-func writeError(w http.ResponseWriter, r *http.Request, err error) {
-	res := resolveError(err)
+// WriteError writes the error response for err, exactly as an endpoint
+// returning err would: status, {"error","code","id"} body, Retry-After,
+// logging, error details and the misuse rules. It is for handlers outside
+// schemaf's endpoint pipeline (a plain http.Handler, middleware, a
+// standalone mux); endpoints keep returning errors.
+//
+//	api.WriteError(w, r, api.Error(api.ErrForbidden, "denied", "it is not your turn"))
+//	// → 403 {"error": "it is not your turn", "code": "denied"}
+//
+// Every error response of schemaf goes through it, except the statuses
+// schemaf answers itself (405, 406, 415). A 5xx gets an id under which the
+// full error is logged and stored (see LookupError). A nil err is misuse
+// (500). Like http.Error, it doesn't check whether the response was already
+// started: call it before writing anything.
+func WriteError(w http.ResponseWriter, r *http.Request, err error) {
+	var res resolvedError
+	var errText string
+	if err == nil {
+		res = misuseError("api.WriteError called with a nil error: pass the error to answer with")
+		errText = "<nil>"
+	} else {
+		res = resolveError(err)
+		errText = err.Error()
+	}
 	body := errorResponse{Error: res.msg, Code: res.code}
 	if res.status >= 500 {
 		body.ID = newErrorID()
+		d := ErrorDetails{
+			ID:     body.ID,
+			Time:   now().UTC(),
+			Method: r.Method,
+			Path:   r.URL.Path,
+			Status: res.status,
+			Code:   res.code,
+			Error:  errText,
+			Misuse: res.misuse,
+		}
 		args := []any{
-			"id", body.ID,
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", res.status,
-			"code", res.code,
-			"error", err.Error(),
+			"id", d.ID,
+			"method", d.Method,
+			"path", d.Path,
+			"status", d.Status,
+			"code", d.Code,
+			"error", d.Error,
 		}
 		if sub, ok := Subject(r.Context()); ok {
+			d.Subject = sub
 			args = append(args, "subject", sub)
 		}
-		if res.misuse != "" {
-			args = append(args, "misuse", res.misuse)
+		if d.Misuse != "" {
+			args = append(args, "misuse", d.Misuse)
 		}
 		log.ErrorCtx(r.Context(), "api: server error", args...)
+		errorDetails.record(d)
 	}
 	if res.retryAfter > 0 {
 		w.Header().Set("Retry-After", retryAfterSeconds(res.retryAfter))
