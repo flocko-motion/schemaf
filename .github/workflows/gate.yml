@@ -133,7 +133,7 @@ jobs:
           for _ in $(seq 1 30); do systemctl is-active --quiet "$svc" && break; sleep 1; done
           systemctl is-active --quiet "$svc" || { echo "::error::$svc is not active: no user systemd for $u (lingering?)"; systemctl status "$svc" --no-pager || true; exit 1; }
           sudo systemctl --user --machine="$u@" enable --now podman.socket
-          ping_socket "$u" sudo -u "$u"
+          ping_socket "$u" sudo -H -u "$u"   # -H: its own HOME (podman reads ~/.config/containers)
 
           # the runner's own podman and systemctl find its runtime dir from here on
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
