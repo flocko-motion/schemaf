@@ -1409,6 +1409,7 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
    - So editing a type in another package that the API uses, e.g. a field of `obj.User`, makes the generated files stale, while editing a package the API doesn't use does not
    - Computed as: for each input file in byte-wise sorted path order, the line `<sha256 of the file>  <path>` (as `sha256sum` prints it); then the line `schemaf <version>`; the hash of that text is the file's content. Dotfiles are not inputs
    - `./schemaf.sh build` and `./schemaf.sh test` recompute it (with `sha256sum`, or `shasum -a 256` on macOS) and stop on a mismatch: `generated files are stale — run ./schemaf.sh codegen and commit`
+   - `./schemaf.sh build --output` (a deployment artifact) recomputes it over the committed inputs instead: the input files of the commit (via `git ls-tree` / `git cat-file`), with the commit's `gen/schema-sources` and `go/go.mod`, compared with the commit's `gen/inputs.sha256`. Untracked and gitignored inputs are not part of that hash, so generated files that depend on one (e.g. a `compose.gen.yml` including a gitignored `compose/extra.yml`) are stale for the artifact. Plain `build`, `run` and `test` hash the working tree. See [Generated files must be fresh](INSTALL.md#generated-files-must-be-fresh)
 
 7. **Empty inputs → gen/empty-inputs**
    - The list of empty inputs (see below), one line per input, written next to `gen/inputs.sha256`. An empty or missing file means nothing is empty

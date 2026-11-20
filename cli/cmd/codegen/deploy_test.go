@@ -253,6 +253,17 @@ func TestInputsHashShellAgreesWithGo(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
+	// The commit-based variant (build --output) hashes HEAD's versions.
+	commitHash := func() string {
+		t.Helper()
+		cmd := exec.Command("bash", "-c", "set -euo pipefail\n"+funcs+"\n_schemaf_commit_inputs_hash HEAD")
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("shell commit inputs hash: %v\n%s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
 	goHash := func() string {
 		t.Helper()
 		h, err := inputsHash()
@@ -262,8 +273,8 @@ func TestInputsHashShellAgreesWithGo(t *testing.T) {
 		return h
 	}
 
-	if g, s := goHash(), shellHash(); g != s {
-		t.Fatalf("Go and shell disagree: go %s, shell %s", g, s)
+	if g, s, c := goHash(), shellHash(), commitHash(); g != s || g != c {
+		t.Fatalf("Go and shell disagree: go %s, shell %s, shell (commit) %s", g, s, c)
 	}
 	if got := strings.TrimSpace(readFile(t, inputsHashFile)); got != goHash() {
 		t.Fatalf("%s = %s, want %s", inputsHashFile, got, goHash())
@@ -348,6 +359,27 @@ func TestInputsHashShellAgreesWithGo(t *testing.T) {
 	agree("a new file in a listed package", true)
 	write(schemaSourcesFile, "go/obj/*.go\n")
 	agree("dropping a duplicate glob", false)
+
+	// Uncommitted inputs are not in the commit's hash; once everything above
+	// (inputs and non-inputs alike) is committed, the commit's hash agrees
+	// with the working tree's.
+	if c := commitHash(); c == goHash() {
+		t.Error("commit hash includes uncommitted inputs")
+	}
+	commitAll(t, root, "everything")
+	if g, s, c := goHash(), shellHash(), commitHash(); g != s || g != c {
+		t.Fatalf("after committing, Go and shell disagree: go %s, shell %s, shell (commit) %s", g, s, c)
+	}
+
+	// An untracked or ignored input changes the working tree's hash only.
+	before = goHash()
+	write(".gitignore", "compose/extra.yml\n")
+	commitAll(t, root, "ignore")
+	write("compose/extra.yml", "services: {}\n")
+	write("go/obj/untracked.go", "package obj\n")
+	if g, s, c := goHash(), shellHash(), commitHash(); g == before || g != s || c != before {
+		t.Fatalf("untracked inputs: before %s, go %s, shell %s, shell (commit) %s (want go = shell != commit = before)", before, g, s, c)
+	}
 }
 
 // TestInputsHashShasumFallback hides sha256sum, so the shell hash takes the
@@ -529,6 +561,61 @@ func TestBuild(t *testing.T) {
 			}
 			mustContain(t, "stderr", stderr, "generated files are stale — run ./schemaf.sh codegen and commit")
 		}
+	})
+
+	t.Run("build --output checks the committed inputs, not the working tree", func(t *testing.T) {
+		// Codegen ran while a gitignored compose file was present: the
+		// committed compose.gen.yml includes a file the artifact won't contain.
+		extra := filepath.Join(root, "compose/extra.yml")
+		if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("compose/extra.yml\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(extra, []byte("services:\n  extra:\n    image: busybox\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := runComposeGen(); err != nil {
+			t.Fatal(err)
+		}
+		if err := runInputsHashGen(); err != nil {
+			t.Fatal(err)
+		}
+		mustContain(t, "compose.gen.yml", readFile(t, filepath.Join(root, "compose.gen.yml")), "extra.yml")
+		commitAll(t, root, "codegen with an ignored compose file")
+		defer func() {
+			_ = os.Remove(extra)
+			git(t, root, "reset", "-q", "--hard", "HEAD~1")
+		}()
+		if s := git(t, root, "status", "--porcelain"); s != "" {
+			t.Fatalf("working tree not clean:\n%s", s)
+		}
+
+		out := filepath.Join(t.TempDir(), "a.run")
+		_, stderr, code := u.run(root, "schemaf.sh", "build", "--output", out)
+		if code == 0 {
+			t.Fatal("build --output accepted generated files that depend on an ignored input")
+		}
+		mustContain(t, "stderr", stderr, "generated files are stale — run ./schemaf.sh codegen and commit")
+		if _, err := os.Stat(out); err == nil {
+			t.Error("artifact written despite the refusal")
+		}
+		mustNotContain(t, "calls", u.calls(), "build -f")
+
+		// Plain build checks the working tree, which matches.
+		if _, stderr, code := u.run(root, "schemaf.sh", "build"); code != 0 {
+			t.Fatalf("plain build refused:\n%s", stderr)
+		}
+		u.calls()
+	})
+
+	t.Run("build --output passes for a clean committed project", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "a.run")
+		if _, stderr, code := u.run(root, "schemaf.sh", "build", "--output", out); code != 0 {
+			t.Fatalf("build --output failed:\n%s", stderr)
+		}
+		if _, err := os.Stat(out); err != nil {
+			t.Errorf("no artifact: %v", err)
+		}
+		u.calls()
 	})
 
 	t.Run("empty inputs are printed as warnings, never stop the build", func(t *testing.T) {
@@ -820,16 +907,13 @@ func TestArtifactComposeFromCommit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("compose/extra.yml\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	commitAll(t, root, "ignore extra")
+	// Created after codegen: the commit's inputs are fresh, the ignored file
+	// sits in the working tree only. (Codegen run while it was present makes
+	// the commit stale for build --output — see TestBuild.)
 	if err := os.WriteFile(filepath.Join(root, "compose/extra.yml"), []byte("services:\n  extra:\n    image: busybox\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runComposeGen(); err != nil {
-		t.Fatal(err)
-	}
-	if err := runInputsHashGen(); err != nil {
-		t.Fatal(err)
-	}
-	commitAll(t, root, "ignore extra")
 	if out := git(t, root, "status", "--porcelain"); out != "" {
 		t.Fatalf("tree should be clean, git status says:\n%s", out)
 	}
