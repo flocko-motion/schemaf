@@ -86,8 +86,21 @@ jobs:
       - name: Two real users (build, run)
         run: |
           set -euo pipefail
+          # The runner image writes XDG_CONFIG_HOME=$HOME/.config into
+          # /etc/environment, and its post-gen script expands $HOME to
+          # /home/runner. pam_env applies it to every user sudo switches to, so
+          # the created users would read podman's config from the runner's
+          # home. A real server has no such entry: remove it. (The runner's own
+          # job environment was set at startup and keeps its value.)
+          sudo sed -i '/^XDG_CONFIG_HOME=/d' /etc/environment
           for u in "$E2E_BUILD_USER" "$E2E_RUN_USER"; do
             sudo useradd --create-home --shell /bin/bash "$u"
+            home=$(getent passwd "$u" | cut -d: -f6)
+            xdg=$(sudo -H -u "$u" env | sed -n 's/^XDG_CONFIG_HOME=//p')
+            case "$xdg" in
+              "" | "$home" | "$home"/*) ;;
+              *) echo "::error::$u gets XDG_CONFIG_HOME=$xdg, outside its home $home (from /etc/environment?)"; exit 1 ;;
+            esac
             # rootless podman needs subordinate IDs and a runtime dir (lingering)
             grep -q "^$u:" /etc/subuid || { echo "::error::useradd gave $u no /etc/subuid range"; exit 1; }
             grep -q "^$u:" /etc/subgid || { echo "::error::useradd gave $u no /etc/subgid range"; exit 1; }
@@ -113,8 +126,12 @@ jobs:
             local u=$1 run
             shift
             run=/run/user/$(id -u "$u")
-            "$@" env XDG_RUNTIME_DIR="$run" podman --remote --url "unix://$run/podman/podman.sock" version >/dev/null \
-              || { echo "::error::podman's API socket for $u doesn't answer at unix://$run/podman/podman.sock"; exit 1; }
+            if ! "$@" env XDG_RUNTIME_DIR="$run" podman --remote --url "unix://$run/podman/podman.sock" version >/dev/null; then
+              echo "::error::podman's API socket for $u doesn't answer at unix://$run/podman/podman.sock"
+              echo "$u's HOME and XDG_* as podman saw them:"
+              "$@" env | grep -E '^(HOME|XDG_)' || true
+              exit 1
+            fi
             echo "podman API socket answers for $u: unix://$run/podman/podman.sock"
           }
 
