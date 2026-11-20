@@ -60,8 +60,6 @@ type Endpoint[Req, Resp any] interface {
 // and auth declaration. summary and description are extracted from the struct's
 // doc comment by codegen and passed as string literals in the generated Provider().
 func NewRoute[Req, Resp any](e Endpoint[Req, Resp], summary, description string) Route {
-	var zeroReq Req
-	var zeroResp Resp
 	return Route{
 		Method:      e.Method(),
 		Path:        e.Path(),
@@ -69,8 +67,6 @@ func NewRoute[Req, Resp any](e Endpoint[Req, Resp], summary, description string)
 		Summary:     summary,
 		Description: description,
 		Handler:     withAuth(e.Auth(), newTypedHandler(e)),
-		ReqType:     &zeroReq,
-		RespType:    &zeroResp,
 	}
 }
 
@@ -135,8 +131,6 @@ func NewRawRoute(e RawEndpoint, summary, description string) Route {
 		Summary:     summary,
 		Description: description,
 		Handler:     withAuth(e.Auth(), newRawHandler(e)),
-		ReqType:     nil,
-		RespType:    nil,
 	}
 }
 

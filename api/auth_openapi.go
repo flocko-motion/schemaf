@@ -13,8 +13,7 @@ func SessionCookieName(projectName string) string {
 
 // OpenAPISecuritySchemes returns the OpenAPI security schemes schemaf's auth
 // accepts: bearerAuth (Authorization: Bearer <JWT>) and cookieAuth (the
-// session cookie named cookieName). Both generators (runtime BuildOpenAPI and
-// the static codegen spec) use it.
+// session cookie named cookieName), for the codegen spec.
 func OpenAPISecuritySchemes(cookieName string) map[string]any {
 	return map[string]any{
 		"bearerAuth": map[string]any{
@@ -81,9 +80,9 @@ func openAPIErrorSchema() map[string]any {
 
 // AuthOpenAPI returns the OpenAPI path items of the framework's auth routes
 // and the framework's component schemas (including the shared Error schema),
-// as plain JSON-shaped maps. Both the codegen (static gen/openapi.json) and
-// BuildOpenAPI merge them in, so the generated clients always have the auth
-// routes and the error type. The auth0 login route is always included,
+// as plain JSON-shaped maps. Codegen merges them into gen/openapi.json (which
+// the server serves), so the generated clients always have the auth routes
+// and the error type. The auth0 login route is always included,
 // independent of deployment config.
 func AuthOpenAPI() (paths map[string]any, schemas map[string]any) {
 	ref := func(name string) map[string]any {

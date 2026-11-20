@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -26,50 +27,115 @@ const schemaRefPrefix = "#/components/schemas/"
 //
 // It sets ReqSchema (only for endpoints whose request has a JSON body) and
 // RespSchema on each typed endpoint, and returns the named component schemas
-// they reference. A package that doesn't type-check, a type without a JSON
-// shape and two types sharing a schema name are errors.
-func loadSchemas(dir string, endpoints []endpointInfo) (map[string]any, error) {
-	b := &schemaBuilder{components: map[string]any{}, owners: map[string]*types.TypeName{}}
+// they reference, and the schema sources: one glob per project package
+// outside dir that declares a type the schemas are built from, plus
+// go/go.mod when one comes from a dependency (see gen/schema-sources). A
+// package that doesn't type-check, a type without a JSON shape and two
+// types sharing a schema name are errors.
+func loadSchemas(dir string, endpoints []endpointInfo) (components map[string]any, sources []string, err error) {
+	b := &schemaBuilder{components: map[string]any{}, owners: map[string]*types.TypeName{}, used: map[*types.Package]bool{}}
 	hasTyped := slices.ContainsFunc(endpoints, func(ep endpointInfo) bool { return !ep.IsRaw })
 	if !hasTyped {
-		return b.components, nil
+		return b.components, nil, nil
 	}
 	pkg, err := loadAPIPackage(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for i := range endpoints {
 		ep := &endpoints[i]
 		if ep.IsRaw {
 			continue
 		}
-		req, resp, err := handleTypes(pkg, ep.StructName)
+		req, resp, err := handleTypes(pkg.Types, ep.StructName)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if ep.Method != "GET" && ep.Method != "DELETE" && b.hasJSONFields(req) {
-			ep.ReqSchema = b.schema(req, ep.StructName+" request")
+		if hasRequestBody(ep.Method) {
+			if structOf(req) == nil {
+				b.errorf("endpoint %s: %s request type %s is not a struct — a request body is a JSON object", ep.StructName, ep.Method, req)
+			} else if b.fieldCount(req) > 0 {
+				ep.ReqSchema = b.schema(req, ep.StructName+" request")
+			}
 		}
-		if !b.isEmptyStruct(resp) {
+		if structOf(resp) == nil || b.fieldCount(resp) > 0 {
 			ep.RespSchema = b.schema(resp, ep.StructName+" response")
 		}
 	}
 	if len(b.errs) > 0 {
-		return nil, errors.Join(b.errs...)
+		return nil, nil, errors.Join(b.errs...)
 	}
-	return b.components, nil
+	sources, err = schemaSources(pkg, b.used)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b.components, sources, nil
+}
+
+// hasRequestBody reports whether requests with method carry a JSON body.
+func hasRequestBody(method string) bool {
+	switch method {
+	case "POST", "PUT", "PATCH":
+		return true
+	}
+	return false
+}
+
+// schemaSources maps the packages the schemas were built from to the globs
+// of gen/schema-sources: "<dir>/*.go" for each package of the project's
+// module other than the api package itself, "go/go.mod" if any package comes
+// from a dependency. Standard library packages are left out. Paths are
+// relative to the project root (the working directory).
+func schemaSources(api *packages.Package, used map[*types.Package]bool) ([]string, error) {
+	root, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	var errs []error
+	packages.Visit([]*packages.Package{api}, nil, func(p *packages.Package) {
+		if p == api || !used[p.Types] || p.Module == nil {
+			return // the api package is an input already; nil Module: std
+		}
+		if !p.Module.Main {
+			out = append(out, "go/go.mod")
+			return
+		}
+		if len(p.GoFiles) == 0 {
+			return
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(p.GoFiles[0]))
+		if err != nil || strings.HasPrefix(rel, "..") {
+			errs = append(errs, fmt.Errorf("package %s is outside the project root %s", p.PkgPath, root))
+			return
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.ContainsAny(rel, " \t\n*?[]|\\") {
+			errs = append(errs, fmt.Errorf("package directory %q contains whitespace or glob characters — it can't be a codegen input; rename it", rel))
+			return
+		}
+		out = append(out, rel+"/*.go")
+	})
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
 }
 
 // loadAPIPackage type-checks the package in dir. Generated files (*.gen.go)
 // are replaced by their bare package clause: codegen is about to rewrite
 // them, and stale output must not break type checking.
-func loadAPIPackage(dir string) (*types.Package, error) {
+func loadAPIPackage(dir string) (*packages.Package, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
 	overlay := map[string][]byte{}
-	gens, _ := filepath.Glob(filepath.Join(abs, "*.gen.go"))
+	gens, err := filepath.Glob(filepath.Join(abs, "*.gen.go"))
+	if err != nil {
+		return nil, err
+	}
 	for _, g := range gens {
 		f, err := parser.ParseFile(token.NewFileSet(), g, nil, parser.PackageClauseOnly)
 		if err != nil {
@@ -78,7 +144,8 @@ func loadAPIPackage(dir string) (*types.Package, error) {
 		overlay[g] = []byte("package " + f.Name.Name + "\n")
 	}
 	cfg := &packages.Config{
-		Mode:    packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedModule | packages.NeedTypes |
+			packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 		Dir:     abs,
 		Overlay: overlay,
 	}
@@ -98,7 +165,7 @@ func loadAPIPackage(dir string) (*types.Package, error) {
 	if len(pkgs) != 1 || pkgs[0].Types == nil {
 		return nil, fmt.Errorf("loading %s: expected one package, got %d", dir, len(pkgs))
 	}
-	return pkgs[0].Types, nil
+	return pkgs[0], nil
 }
 
 // handleTypes returns the Req and Resp types of endpoint structName's
@@ -124,7 +191,15 @@ func handleTypes(pkg *types.Package, structName string) (req, resp types.Type, e
 type schemaBuilder struct {
 	components map[string]any
 	owners     map[string]*types.TypeName // schema name → the type it was built from
+	used       map[*types.Package]bool    // packages declaring a type a schema depends on
 	errs       []error
+}
+
+// note records that a schema depends on the declaration of named type n.
+func (b *schemaBuilder) note(n *types.Named) {
+	if pkg := n.Obj().Pkg(); pkg != nil {
+		b.used[pkg] = true
+	}
 }
 
 func (b *schemaBuilder) errorf(format string, args ...any) {
@@ -145,23 +220,19 @@ func structOf(t types.Type) *types.Struct {
 	return st
 }
 
-func (b *schemaBuilder) hasJSONFields(t types.Type) bool {
-	st := structOf(t)
-	return st != nil && len(jsonFields(st)) > 0
-}
-
-func (b *schemaBuilder) isEmptyStruct(t types.Type) bool {
-	st := structOf(t)
-	return st != nil && len(jsonFields(st)) == 0
+// fieldCount returns the number of JSON fields of the struct underlying t
+// (see structOf).
+func (b *schemaBuilder) fieldCount(t types.Type) int {
+	return len(b.jsonFields(structOf(t)))
 }
 
 // namedPath returns "pkgpath.Name" for a named type, or "".
 func namedPath(t types.Type) string {
 	n, ok := types.Unalias(t).(*types.Named)
-	if !ok || n.Obj().Pkg() == nil {
+	if !ok {
 		return ""
 	}
-	return n.Obj().Pkg().Path() + "." + n.Obj().Name()
+	return qualifiedName(n.Obj())
 }
 
 // specialSchemas are named types whose JSON form is not their Go shape.
@@ -185,9 +256,10 @@ func (b *schemaBuilder) schema(t types.Type, where string) map[string]any {
 		return copySchema(s)
 	}
 	if n, ok := t.(*types.Named); ok {
+		b.note(n)
 		switch {
 		case hasMethod(n, "MarshalJSON"):
-			b.errorf("%s: %s implements json.Marshaler, so its JSON shape is unknown to codegen — use a plain type in the API", where, qualifiedName(n.Obj()))
+			b.errorf("%s: %s implements json.Marshaler, so its JSON shape is unknown to codegen — if it encodes as a JSON string, implement encoding.TextMarshaler instead; otherwise use a plain struct in the API", where, qualifiedName(n.Obj()))
 			return map[string]any{}
 		case hasMethod(n, "MarshalText"):
 			return map[string]any{"type": "string"}
@@ -284,12 +356,13 @@ func qualifiedName(obj *types.TypeName) string {
 }
 
 // object returns the object schema of a struct: its JSON fields (embedded
-// structs flattened), each required unless it has omitempty/omitzero or is
-// a pointer.
+// structs flattened), each required unless it has omitempty/omitzero, is a
+// pointer or is promoted through an embedded pointer (all left out when it
+// is nil).
 func (b *schemaBuilder) object(st *types.Struct, where string) map[string]any {
 	props := map[string]any{}
 	var required []string
-	for _, f := range jsonFields(st) {
+	for _, f := range b.jsonFields(st) {
 		s := b.schema(f.typ, where+"."+f.goName)
 		if f.asString {
 			s = map[string]any{"type": "string"}
@@ -321,9 +394,12 @@ type jsonField struct {
 // exported fields, renamed by their json tag, without `json:"-"`; fields of
 // untagged embedded structs promoted, and conflicts resolved as
 // encoding/json does (the shallowest field wins; among equally deep ones a
-// tagged field wins; otherwise all of them are dropped).
-func jsonFields(st *types.Struct) []jsonField {
-	all := collectFields(st, 0, map[*types.Struct]bool{})
+// tagged field wins; otherwise all of them are dropped). A nil st has none.
+func (b *schemaBuilder) jsonFields(st *types.Struct) []jsonField {
+	if st == nil {
+		return nil
+	}
+	all := b.collectFields(st, 0, false, map[*types.Struct]bool{})
 	byName := map[string][]jsonField{}
 	var order []string
 	for _, f := range all {
@@ -367,7 +443,9 @@ func dominantField(fs []jsonField) (jsonField, bool) {
 	return jsonField{}, false
 }
 
-func collectFields(st *types.Struct, depth int, visiting map[*types.Struct]bool) []jsonField {
+// collectFields lists st's JSON fields before conflict resolution. viaPtr
+// is true below an embedded pointer: those fields are all optional.
+func (b *schemaBuilder) collectFields(st *types.Struct, depth int, viaPtr bool, visiting map[*types.Struct]bool) []jsonField {
 	if visiting[st] {
 		return nil
 	}
@@ -384,7 +462,15 @@ func collectFields(st *types.Struct, depth int, visiting map[*types.Struct]bool)
 		optList := strings.Split(opts, ",")
 		if f.Embedded() && name == "" {
 			if inner := structOf(f.Type()); inner != nil {
-				out = append(out, collectFields(inner, depth+1, visiting)...)
+				ft := types.Unalias(f.Type())
+				ptr, isPtr := ft.(*types.Pointer)
+				if isPtr {
+					ft = types.Unalias(ptr.Elem())
+				}
+				if n, ok := ft.(*types.Named); ok {
+					b.note(n)
+				}
+				out = append(out, b.collectFields(inner, depth+1, viaPtr || isPtr, visiting)...)
 				continue
 			}
 			if !f.Exported() {
@@ -398,10 +484,14 @@ func collectFields(st *types.Struct, depth int, visiting map[*types.Struct]bool)
 		if name == "" {
 			jf.name = f.Name()
 		}
-		_, isPtr := types.Unalias(f.Type()).(*types.Pointer)
-		jf.optional = isPtr || slices.Contains(optList, "omitempty") || slices.Contains(optList, "omitzero")
+		ft := types.Unalias(f.Type())
+		ptr, isPtr := ft.(*types.Pointer)
+		jf.optional = viaPtr || isPtr || slices.Contains(optList, "omitempty") || slices.Contains(optList, "omitzero")
 		if slices.Contains(optList, "string") {
-			if bt, ok := types.Unalias(f.Type()).Underlying().(*types.Basic); ok && bt.Info()&(types.IsNumeric|types.IsBoolean) != 0 {
+			if isPtr {
+				ft = types.Unalias(ptr.Elem()) // encoding/json applies ,string through one pointer
+			}
+			if bt, ok := ft.Underlying().(*types.Basic); ok && bt.Info()&(types.IsNumeric|types.IsBoolean) != 0 {
 				jf.asString = true
 			}
 		}

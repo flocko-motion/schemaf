@@ -198,8 +198,9 @@ Codegen produces:
 - `schemaf.sh` → project CLI entrypoint (auto-updated on every codegen)
 - `go/db/migrations.gen.go` → `db.Provider` (embedded SQL)
 - `go/db/queries.gen.go` → type-safe query functions (sqlc)
-- `go/api/endpoints.gen.go` → `api.Provider` (handler registration)
+- `go/api/endpoints.gen.go` → `api.Provider` (handler registration, and the OpenAPI spec the server serves)
 - `gen/openapi.json` → OpenAPI spec
+- `gen/schema-sources` → the packages declaring the API's types (input to the freshness check)
 - `frontend/src/api/generated/api.gen.ts` → TypeScript client
 
 ## schemaf.sh
@@ -281,7 +282,7 @@ Deploying is two steps: **build** an image from a commit, then **run** it. On a 
 generated files are stale — run ./schemaf.sh codegen and commit
 ```
 
-The inputs are `go/api/*.go` (without `*.gen.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, and the schemaf version required in `go/go.mod`. See [Code Generation](EXTEND.md#code-generation).
+The inputs are `go/api/*.go` (without `*.gen.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, the packages listed in `gen/schema-sources` (those declaring types the API uses, e.g. `go/obj/*.go`), and the schemaf version required in `go/go.mod`. See [Code Generation](EXTEND.md#code-generation).
 
 ### `build`
 

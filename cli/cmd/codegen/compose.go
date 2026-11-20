@@ -156,6 +156,7 @@ func schemafShData(base map[string]any) (map[string]any, error) {
 	d["SchemafVersion"] = version
 	d["InputGlobs"] = strings.Join(inputGlobs, " ")
 	d["InputExcludes"] = strings.Join(inputExcludes, "|")
+	d["SchemaSourceExcludes"] = strings.Join(schemaSourceExcludes, "|")
 	name, _ := base["Name"].(string)
 	if name == "" {
 		return nil, fmt.Errorf("schemaf.sh needs the project name — set name in schemaf.toml")

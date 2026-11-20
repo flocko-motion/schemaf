@@ -15,6 +15,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,10 @@ const (
 	apiDir          = "go/api"
 	endpointsGenOut = apiDir + "/endpoints.gen.go"
 	openapiJSONOut  = "gen/openapi.json"
+	// schemaSourcesFile lists, one glob per line, the packages outside go/api
+	// that declare a type the spec's schemas are built from (and go/go.mod for
+	// dependencies). They are codegen inputs: see inputs.go.
+	schemaSourcesFile = "gen/schema-sources"
 )
 
 func newEndpointsCmd(ctx *cli.Context) *cobra.Command {
@@ -46,9 +51,14 @@ An endpoint struct is any struct that implements:
 
 A struct with that shape that can't be parsed is an error, never skipped.
 
+Request and response types may be declared in any package; codegen
+type-checks go/api to build their schemas.
+
 Generates:
-  go/api/endpoints.gen.go  — Provider() that registers all endpoints
-  gen/openapi.json         — OpenAPI 3.0 spec (input for swagger-typescript-api)`,
+  go/api/endpoints.gen.go  — Provider() that registers all endpoints and the
+                             spec served at /openapi.json
+  gen/openapi.json         — OpenAPI 3.0 spec (input for the TS and Go clients)
+  gen/schema-sources       — packages declaring the API's types (codegen inputs)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEndpointsGen(ctx)
 		},
@@ -93,18 +103,23 @@ func runEndpointsGen(_ *cli.Context) error {
 		return endpoints[i].StructName < endpoints[j].StructName
 	})
 
-	schemas, err := loadSchemas(apiDir, endpoints)
+	schemas, sources, err := loadSchemas(apiDir, endpoints)
+	if err != nil {
+		return err
+	}
+	spec, err := buildOpenAPISpec(projectName, endpoints, schemas)
 	if err != nil {
 		return err
 	}
 
-	// Generate endpoints.gen.go
-	if err := writeEndpointsGen(endpoints); err != nil {
+	// endpoints.gen.go carries the spec: the server serves exactly gen/openapi.json.
+	if err := writeEndpointsGen(endpoints, spec); err != nil {
 		return err
 	}
-
-	// Generate openapi.json
-	if err := writeOpenAPIJSON(projectName, endpoints, schemas); err != nil {
+	if err := writeGenFile(openapiJSONOut, spec); err != nil {
+		return err
+	}
+	if err := writeGenFile(schemaSourcesFile, []byte(strings.Join(append(sources, ""), "\n"))); err != nil {
 		return err
 	}
 
@@ -126,7 +141,7 @@ func scanAPIDir(dir string) ([]endpointInfo, error) {
 
 	// Collect all method declarations and struct types across files
 	methods := map[methodKey]methodDecl{}
-	allStructs := map[string]*ast.StructType{}
+	structNames := map[string]bool{}
 	docComments := map[string]string{} // struct name → doc comment
 
 	for _, pkg := range pkgs {
@@ -148,11 +163,10 @@ func scanAPIDir(dir string) ([]endpointInfo, error) {
 						if !ok {
 							continue
 						}
-						st, ok := ts.Type.(*ast.StructType)
-						if !ok {
+						if _, ok := ts.Type.(*ast.StructType); !ok {
 							continue
 						}
-						allStructs[ts.Name.Name] = st
+						structNames[ts.Name.Name] = true
 						// Extract doc comment
 						comment := ""
 						if d.Doc != nil {
@@ -167,8 +181,8 @@ func scanAPIDir(dir string) ([]endpointInfo, error) {
 		}
 	}
 
-	names := make([]string, 0, len(allStructs))
-	for name := range allStructs {
+	names := make([]string, 0, len(structNames))
+	for name := range structNames {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -460,8 +474,8 @@ func splitDocComment(comment, structName string) (summary, description string) {
 }
 
 // writeEndpointsGen generates go/api/endpoints.gen.go from the template.
-func writeEndpointsGen(endpoints []endpointInfo) error {
-	src, err := renderEndpointsGen(endpoints)
+func writeEndpointsGen(endpoints []endpointInfo, spec []byte) error {
+	src, err := renderEndpointsGen(endpoints, spec)
 	if err != nil {
 		return err
 	}
@@ -472,23 +486,25 @@ func writeEndpointsGen(endpoints []endpointInfo) error {
 	return nil
 }
 
-// renderEndpointsGen renders the content of go/api/endpoints.gen.go.
-func renderEndpointsGen(endpoints []endpointInfo) ([]byte, error) {
+// renderEndpointsGen renders the content of go/api/endpoints.gen.go, which
+// registers the endpoints and the OpenAPI spec the server serves.
+func renderEndpointsGen(endpoints []endpointInfo, spec []byte) ([]byte, error) {
 	tmpl, err := template.New("endpoints").Parse(endpointsGenTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("parsing endpoints template: %w", err)
 	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]any{"Endpoints": endpoints}); err != nil {
+	if err := tmpl.Execute(&buf, map[string]any{"Endpoints": endpoints, "Spec": string(spec)}); err != nil {
 		return nil, fmt.Errorf("executing endpoints template: %w", err)
 	}
 	return buf.Bytes(), nil
 }
 
-// writeOpenAPIJSON generates openapi.json from the extracted endpoint info.
-// NOTE: This is an AST-based static generator. It does not require a running server.
-func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, schemas map[string]any) error {
+// buildOpenAPISpec builds the OpenAPI spec (the content of gen/openapi.json
+// and of what the server serves) from the endpoints and the component
+// schemas of their types, plus schemaf's own routes and schemas.
+func buildOpenAPISpec(projectName string, endpoints []endpointInfo, schemas map[string]any) ([]byte, error) {
 	// Framework auth routes (login, logout, refresh) are always part of the spec.
 	paths, authSchemas := api.AuthOpenAPI()
 
@@ -540,14 +556,15 @@ func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, schemas map[
 		paths[ep.Path].(map[string]any)[method] = op
 	}
 
-	if schemas == nil {
-		schemas = map[string]any{}
+	allSchemas := map[string]any{}
+	for name, schema := range schemas {
+		allSchemas[name] = schema
 	}
 	for name, schema := range authSchemas {
-		if _, taken := schemas[name]; taken {
-			return fmt.Errorf("type %q used by an endpoint: the OpenAPI schema name %q is reserved by schemaf — rename the type", name, name)
+		if _, taken := allSchemas[name]; taken {
+			return nil, fmt.Errorf("type %q used by an endpoint: the OpenAPI schema name %q is reserved by schemaf — rename the type", name, name)
 		}
-		schemas[name] = schema
+		allSchemas[name] = schema
 	}
 
 	spec := map[string]any{
@@ -556,22 +573,26 @@ func writeOpenAPIJSON(projectName string, endpoints []endpointInfo, schemas map[
 		"paths":   paths,
 		"components": map[string]any{
 			"securitySchemes": api.OpenAPISecuritySchemes(api.SessionCookieName(projectName)),
-			"schemas":         schemas,
+			"schemas":         allSchemas,
 		},
 	}
 
 	data, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshaling openapi spec: %w", err)
+		return nil, fmt.Errorf("marshaling openapi spec: %w", err)
 	}
+	return data, nil
+}
 
-	if err := os.MkdirAll("gen", 0755); err != nil {
-		return fmt.Errorf("creating gen/: %w", err)
+// writeGenFile writes a file under gen/.
+func writeGenFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(openapiJSONOut, data, 0644); err != nil {
-		return fmt.Errorf("writing %s: %w", openapiJSONOut, err)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
-	cli.Success("Generated %s", openapiJSONOut)
+	cli.Success("Generated %s", path)
 	return nil
 }
 

@@ -182,7 +182,8 @@ EOF
 }
 
 # >>> inputs-hash — the shell side of gen/inputs.sha256 (cli/cmd/codegen/inputs.go).
-# The input list is rendered from Go's inputGlobs; a test checks both agree.
+# The input list is rendered from Go's inputGlobs and schemaSourceExcludes; a
+# test checks both agree.
 
 # stdin → hex SHA-256.
 _schemaf_sha256() {
@@ -213,9 +214,20 @@ _schemaf_inputs_hash() (
     case "$f" in {{.InputExcludes}}) continue ;; esac
     list="${list}${f}"$'\n'
   done
+  # The packages declaring the API's types, one glob per line (gen/schema-sources).
+  if [ -f gen/schema-sources ]; then
+    while IFS= read -r g || [ -n "$g" ]; do
+      [ -n "$g" ] || continue
+      for f in $g; do
+        [ -f "$f" ] || continue
+        case "${f##*/}" in .*|{{.SchemaSourceExcludes}}) continue ;; esac
+        list="${list}${f}"$'\n'
+      done
+    done < gen/schema-sources
+  fi
   ver=$(_schemaf_gomod_version) || exit 1
   {
-    printf '%s' "$list" | LC_ALL=C sort | while IFS= read -r f; do
+    printf '%s' "$list" | LC_ALL=C sort -u | while IFS= read -r f; do
       [ -n "$f" ] || continue
       sum=$(_schemaf_sha256 < "$f") || exit 1
       printf '%s  %s\n' "$sum" "$f"

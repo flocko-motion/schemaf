@@ -7,9 +7,12 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -40,8 +43,14 @@ var inputGlobs = []string{
 // inputExcludes are globs removed from the matches of inputGlobs.
 var inputExcludes = []string{"go/api/*.gen.go"}
 
+// schemaSourceExcludes are base-name globs removed from the matches of the
+// globs in gen/schema-sources: generated and test files don't shape schemas.
+var schemaSourceExcludes = []string{"*.gen.go", "*_test.go"}
+
 // inputFiles returns the regular files matched by inputGlobs, minus
-// inputExcludes and dotfiles, sorted byte-wise.
+// inputExcludes and dotfiles, plus those matched by the globs listed in
+// gen/schema-sources, minus schemaSourceExcludes and dotfiles; sorted
+// byte-wise, without duplicates.
 func inputFiles() ([]string, error) {
 	var files []string
 	for _, g := range inputGlobs {
@@ -68,8 +77,61 @@ func inputFiles() ([]string, error) {
 			}
 		}
 	}
+	sources, err := readSchemaSources()
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range sources {
+		matches, err := filepath.Glob(g)
+		if err != nil {
+			return nil, fmt.Errorf("%s: glob %s: %w", schemaSourcesFile, g, err)
+		}
+	nextSource:
+		for _, m := range matches {
+			base := filepath.Base(m)
+			if strings.HasPrefix(base, ".") {
+				continue
+			}
+			for _, ex := range schemaSourceExcludes {
+				if ok, _ := filepath.Match(ex, base); ok {
+					continue nextSource
+				}
+			}
+			info, err := os.Stat(m)
+			if err != nil {
+				return nil, err
+			}
+			if info.Mode().IsRegular() {
+				files = append(files, filepath.ToSlash(m))
+			}
+		}
+	}
 	sort.Strings(files)
-	return files, nil
+	return slices.Compact(files), nil
+}
+
+// readSchemaSources returns the globs in gen/schema-sources (none if the
+// file is missing). A line with whitespace is an error: the shell side
+// couldn't expand it.
+func readSchemaSources() ([]string, error) {
+	data, err := os.ReadFile(schemaSourcesFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var globs []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		if strings.ContainsAny(line, " \t\r") {
+			return nil, fmt.Errorf("%s: line %q contains whitespace — run ./schemaf.sh codegen", schemaSourcesFile, line)
+		}
+		globs = append(globs, line)
+	}
+	return globs, nil
 }
 
 // inputsHash computes the hash of codegen's inputs in the current directory
