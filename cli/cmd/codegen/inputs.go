@@ -29,8 +29,9 @@ const schemafModule = "github.com/flocko-motion/schemaf"
 
 // inputGlobs are codegen's normative inputs, relative to the project root.
 // This is the single definition: schemaf.sh.tmpl renders the same list into
-// its shell implementation (_schemaf_inputs_hash), and a test checks that
-// both compute the same hash. Globs match like bash without dotglob: names
+// its shell implementation (_schemaf_inputs_hash over the working tree,
+// _schemaf_commit_inputs_hash over a commit for build --output), and a test
+// checks that all compute the same hash. Globs match like bash without dotglob: names
 // starting with "." are never inputs.
 var inputGlobs = []string{
 	"go/api/*.go",
@@ -41,7 +42,7 @@ var inputGlobs = []string{
 }
 
 // inputExcludes are globs removed from the matches of inputGlobs.
-var inputExcludes = []string{"go/api/*.gen.go"}
+var inputExcludes = []string{"go/api/*.gen.go", "go/api/*_test.go"}
 
 // schemaSourceExcludes are base-name globs removed from the matches of the
 // globs in gen/schema-sources: generated and test files don't shape schemas.
