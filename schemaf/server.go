@@ -46,9 +46,10 @@ type Server struct {
 // Start starts the app's server: it connects to opts.DSN and runs the
 // migrations, loads the signing key (generating it on first boot), starts the
 // session store and its cleanup, activates the identity providers and the
-// OnLogin hook, starts the AddService services and serves on opts.Listener.
-// The services and the session cleanup run on a context derived from ctx,
-// which Stop cancels. schemaftest marks ctx as isolated (internal/isolation):
+// OnLogin and OnRequest hooks, starts the AddService services and serves on
+// opts.Listener. A wrong OnRequest registration fails it before anything
+// starts. The services and the session cleanup run on a context derived from
+// ctx, which Stop cancels. schemaftest marks ctx as isolated (internal/isolation):
 // no OIDC environment providers, no backup scheduler, no frontend dev proxy.
 //
 // The server's state is process-wide, so only one server runs at a time: a
@@ -77,6 +78,9 @@ func (a *App) Start(ctx context.Context, opts ServerOptions) (*Server, error) {
 // start does Start's work; on error, Start undoes it.
 func (a *App) start(ctx context.Context, s *Server, opts ServerOptions) error {
 	api.Reset() // every start begins from nothing
+	if a.onRequestErr != nil {
+		return a.onRequestErr
+	}
 	isolated := isolation.Isolated(ctx)
 	providers, err := a.identityProvidersFor(envForProviders(isolated))
 	if err != nil {
@@ -99,6 +103,7 @@ func (a *App) start(ctx context.Context, s *Server, opts ServerOptions) error {
 	}
 	api.SetIdentityProviders(providers)
 	api.SetOnLogin(a.onLogin)
+	api.SetOnRequest(a.onRequest)
 	api.SetCanSeeErrorDetails(a.canSeeErrorDetails)
 	if api.DevMode() {
 		slog.Info("server mode", "mode", "development")
@@ -177,9 +182,9 @@ func (s *Server) Err() <-chan error { return s.serveErr }
 // the HTTP server down (no new connections, in-flight requests finish), waits
 // for the services to return, closes the database pool and clears the
 // process-wide server state (signing key, sessions, identity providers,
-// OnLogin, routes, frontend, database). ctx bounds the shutdown and the wait:
-// a service still running at its deadline makes Stop fail, but the teardown
-// is complete either way and a new server can start.
+// OnLogin, OnRequest, routes, frontend, database). ctx bounds the shutdown
+// and the wait: a service still running at its deadline makes Stop fail, but
+// the teardown is complete either way and a new server can start.
 func (s *Server) Stop(ctx context.Context) error {
 	s.stopOnce.Do(func() { s.stopErr = s.stop(ctx) })
 	return s.stopErr

@@ -41,9 +41,9 @@ func Routes() []Route {
 
 // Reset clears everything a server start sets: the routes and the spec, the
 // embedded frontend, the signing key, the session store, the identity
-// providers, the OnLogin hook and the CanSeeErrorDetails predicate. The
-// error details store is kept: WriteError records into it outside any
-// server too. The server calls it before it registers the
+// providers, the OnLogin and OnRequest hooks and the CanSeeErrorDetails
+// predicate. The error details store is kept: WriteError records into it
+// outside any server too. The server calls it before it registers the
 // routes and after it stops, so every start begins from nothing.
 func Reset() {
 	routes = nil
@@ -53,5 +53,6 @@ func Reset() {
 	sessionStore = nil
 	identityProviders = nil
 	onLogin = nil
+	onRequest = nil
 	canSeeErrorDetails = nil
 }
