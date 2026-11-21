@@ -25,8 +25,9 @@ const schemaRefPrefix = "#/components/schemas/"
 // and response types, wherever those types are declared: in dir, in another
 // package of the module or in a dependency, directly or through an alias.
 //
-// It sets ReqSchema (only for endpoints whose request has a JSON body) and
-// RespSchema on each typed endpoint, and returns the named component schemas
+// It sets ReqSchema (only for endpoints whose request has a JSON body),
+// Params (the path and query parameters) and RespSchema on each typed
+// endpoint, and returns the named component schemas
 // they reference, and the schema sources: one glob per project package
 // outside dir that declares a type the schemas are built from, plus
 // go/go.mod when one comes from a dependency (see gen/schema-sources). A
@@ -51,12 +52,22 @@ func loadSchemas(dir string, endpoints []endpointInfo) (components map[string]an
 		if err != nil {
 			return nil, nil, err
 		}
+		// Non-nil even when empty: a nil Params makes buildOpenAPISpec fall
+		// back to the untyped path params of Path(), as for raw endpoints.
+		ep.Params = append([]any{}, b.params(ep, req)...)
 		if hasRequestBody(ep.Method) {
 			if structOf(req) == nil {
 				b.errorf("endpoint %s: %s request type %s is not a struct — a request body is a JSON object", ep.StructName, ep.Method, req)
 			} else if b.fieldCount(req) > 0 {
+				b.requestRoot = true
 				ep.ReqSchema = b.schema(req, ep.StructName+" request")
+				b.requestRoot = false
 			}
+		}
+		// Checked before the field count: a response of only path/query
+		// fields counts zero fields and would get no schema at all.
+		if b.checkParamStruct(derefPointer(resp), ep.StructName+" response") {
+			continue
 		}
 		if structOf(resp) == nil || b.fieldCount(resp) > 0 {
 			ep.RespSchema = b.schema(resp, ep.StructName+" response")
@@ -207,6 +218,10 @@ type schemaBuilder struct {
 	owners     map[string]*types.TypeName // schema name → the type it was built from
 	used       map[*types.Package]bool    // packages declaring a type a schema depends on
 	errs       []error
+	// requestRoot is set while building an endpoint's request schema, until
+	// the request struct itself is reached: the one place a struct with
+	// path/query fields may appear (see checkParamStruct).
+	requestRoot bool
 }
 
 // note records that a schema depends on the declaration of named type n.
@@ -269,6 +284,9 @@ func (b *schemaBuilder) schema(t types.Type, where string) map[string]any {
 	if s, ok := specialSchemas[namedPath(t)]; ok {
 		return copySchema(s)
 	}
+	if b.checkParamStruct(t, where) {
+		return map[string]any{}
+	}
 	if n, ok := t.(*types.Named); ok {
 		b.note(n)
 		switch {
@@ -314,6 +332,34 @@ func (b *schemaBuilder) schema(t types.Type, where string) map[string]any {
 	}
 	b.errorf("%s: type %s has no JSON schema — use a JSON-encodable type or tag the field `json:\"-\"`", where, t)
 	return map[string]any{}
+}
+
+// derefPointer returns the element of a pointer type (through aliases), or t.
+func derefPointer(t types.Type) types.Type {
+	t = types.Unalias(t)
+	if p, ok := t.(*types.Pointer); ok {
+		return types.Unalias(p.Elem())
+	}
+	return t
+}
+
+// checkParamStruct records an error if t is a struct with path or query
+// fields anywhere but as an endpoint's request type. Those fields are left
+// out of its schema, so in a response, an event or another type's field the
+// schema would hide fields the JSON carries.
+// It reports whether it recorded one.
+func (b *schemaBuilder) checkParamStruct(t types.Type, where string) bool {
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	root := b.requestRoot
+	b.requestRoot = false // only the request struct itself, not what it contains
+	if root || !hasParamTags(st, map[*types.Struct]bool{}) {
+		return false
+	}
+	b.errorf("%s: type %s has path or query fields, so it is a request type and can't be used here — declare a separate type", where, typeName(t))
+	return true
 }
 
 // hasMethod reports whether n or *n has method name.
@@ -469,8 +515,8 @@ func (b *schemaBuilder) collectFields(st *types.Struct, depth int, viaPtr bool, 
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
 		tag := reflect.StructTag(st.Tag(i)).Get("json")
-		if tag == "-" {
-			continue
+		if tag == "-" || paramTagged(st.Tag(i)) {
+			continue // path and query fields are parameters, not body
 		}
 		name, opts, _ := strings.Cut(tag, ",")
 		optList := strings.Split(opts, ",")

@@ -132,10 +132,49 @@ echo "    ✓ main.go only wires through app.Wire; the test stack has no postgre
 step "compile"
 ( cd go && go build ./... )
 
+# Path and query parameters (#58): a typed path param, a required scalar, an
+# optional pointer and a repeated slice, declared in the spec and enforced.
+step "add an endpoint with a typed path param and query params"
+cat > go/api/echo.go <<'GO'
+package api
+
+import (
+	"context"
+
+	schemafapi "github.com/flocko-motion/schemaf/api"
+)
+
+// EchoParamsEndpoint answers with the path and query params it received.
+type EchoParamsEndpoint struct{}
+
+func (EchoParamsEndpoint) Method() string             { return "GET" }
+func (EchoParamsEndpoint) Path() string               { return "/api/echo/{n}" }
+func (EchoParamsEndpoint) Auth() schemafapi.AuthLevel { return schemafapi.AuthNone }
+func (EchoParamsEndpoint) Handle(ctx context.Context, req EchoParamsReq) (EchoParamsResp, error) {
+	return EchoParamsResp{N: req.N, Sort: req.Sort, Search: req.Search, Tags: req.Tags}, nil
+}
+
+type EchoParamsReq struct {
+	N      int      `path:"n"`
+	Sort   string   `query:"sort"`
+	Search *string  `query:"search"`
+	Tags   []string `query:"tag"`
+}
+
+type EchoParamsResp struct {
+	N      int      `json:"n"`
+	Sort   string   `json:"sort"`
+	Search *string  `json:"search"`
+	Tags   []string `json:"tags"`
+}
+GO
+
 # The #21 scenario: a TypeScript test against an authenticated endpoint (with
 # the token the wrapper passes) and a DB-backed one, on its own instance.
-step "add a TypeScript test against an authenticated and a DB-backed endpoint"
+step "add a TypeScript test against an authenticated, a DB-backed and a parameterised endpoint"
 cat > go/tests/api.test.ts <<'TS'
+import { Api } from "../../frontend/src/api/generated/api.gen"
+
 export async function testUserMe(baseUrl: string, token: string) {
   const resp = await fetch(`${baseUrl}/api/user/me`, { headers: { Authorization: `Bearer ${token}` } })
   if (resp.status !== 200) throw new Error(`GET /api/user/me: expected 200, got ${resp.status}`)
@@ -151,6 +190,30 @@ export async function testNumber(baseUrl: string) {
   const got = await (await fetch(`${baseUrl}/api/number`)).json()
   if (got.number !== 42) throw new Error(`GET /api/number: expected 42, got ${JSON.stringify(got)}`)
 }
+
+export async function testParams(baseUrl: string) {
+  // Through the generated client: the spec's params are its typed arguments.
+  const api = new Api({ baseUrl })
+  const full = await api.api.getApiEchoN(7, { sort: "name", search: "foo", tag: ["a", "b"] })
+  const got = JSON.stringify(full.data)
+  const want = JSON.stringify({ n: 7, sort: "name", search: "foo", tags: ["a", "b"] })
+  if (got !== want) throw new Error(`getApiEchoN (all params): expected ${want}, got ${got}`)
+
+  const minimal = await api.api.getApiEchoN(7, { sort: "name" })
+  const gotMin = JSON.stringify(minimal.data)
+  const wantMin = JSON.stringify({ n: 7, sort: "name", search: null, tags: [] })
+  if (gotMin !== wantMin) throw new Error(`getApiEchoN (required only): expected ${wantMin}, got ${gotMin}`)
+
+  // The client's types forbid these two requests, so they go through fetch.
+  const missing = await fetch(`${baseUrl}/api/echo/7`)
+  if (missing.status !== 400) throw new Error(`GET /api/echo/7 without sort: expected 400, got ${missing.status}`)
+  const body = await missing.json()
+  if (body.code !== "bad_request" || body.error !== 'query param "sort" is required')
+    throw new Error(`GET /api/echo/7 without sort: unexpected body ${JSON.stringify(body)}`)
+
+  const badPath = await fetch(`${baseUrl}/api/echo/abc?sort=name`)
+  if (badPath.status !== 400) throw new Error(`GET /api/echo/abc: expected 400, got ${badPath.status}`)
+}
 TS
 ./schemaf.sh codegen
 
@@ -159,7 +222,7 @@ step "run the tests under ${RUNTIME} (each instance on its own database, no post
 
 step "the scaffolded integration test and the TypeScript tests really ran"
 OUT="$( cd go && go test ./tests/ -count=1 -v -run 'TestHealth|TestTSApi' 2>&1 )" || { echo "$OUT" >&2; exit 1; }
-for t in TestHealth TestTSApi/UserMe TestTSApi/Number; do
+for t in TestHealth TestTSApi/UserMe TestTSApi/Number TestTSApi/Params; do
   grep -q -- "--- PASS: ${t} " <<<"$OUT" || { echo "$OUT" >&2; echo "expected ${t} to pass" >&2; exit 1; }
   echo "    ✓ ${t}"
 done
