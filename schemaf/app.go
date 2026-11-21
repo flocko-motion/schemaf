@@ -43,6 +43,11 @@ type App struct {
 	onLogin            api.OnLoginFunc
 	canSeeErrorDetails api.CanSeeErrorDetailsFunc
 
+	// onRequest is the OnRequest hook; onRequestErr a wrong registration
+	// (twice, or nil), reported by Start.
+	onRequest    api.OnRequestFunc
+	onRequestErr error
+
 	// apiProviders and frontend are applied by Start, which rebuilds the
 	// routes on every start.
 	apiProviders []func()
@@ -106,6 +111,34 @@ func (a *App) AddIdentityProvider(p api.IdentityProvider) {
 // are only available here.
 func (a *App) OnLogin(fn func(ctx context.Context, id api.Identity) (subject string, err error)) {
 	a.onLogin = fn
+}
+
+// OnRequest registers the per-request hook: it runs on every API call after
+// authentication and before the handler. Its admission (api.Admission) is
+// the authenticated caller, handed only to this hook and valid only while it
+// runs. The returned context is the one the handler gets; a returned error
+// refuses the request like an endpoint error. Calling it twice, or with nil,
+// is a startup error. See EXTEND.md, "Per-request hook". Wire up in Wire
+// (go/app/app.go):
+//
+//	app.OnRequest(func(ctx context.Context, a *api.Admission) (context.Context, error) {
+//	    subject, ok := a.Subject()
+//	    caller, err := users.Resolve(ctx, subject, ok)
+//	    if err != nil {
+//	        return nil, err
+//	    }
+//	    return users.WithCaller(ctx, caller), nil
+//	})
+func (a *App) OnRequest(fn func(ctx context.Context, adm *api.Admission) (context.Context, error)) {
+	switch {
+	case a.onRequestErr != nil: // keep the first wrong registration
+	case fn == nil:
+		a.onRequestErr = errors.New("app.OnRequest called with nil: pass the hook, or don't call OnRequest")
+	case a.onRequest != nil:
+		a.onRequestErr = errors.New("app.OnRequest called twice: register one hook and call your own steps from it")
+	default:
+		a.onRequest = fn
+	}
 }
 
 // CanSeeErrorDetails sets who may look up the details of a server error

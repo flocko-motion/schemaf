@@ -19,6 +19,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
   - [Identity providers](#identity-providers)
   - [Activating Auth0](#activating-auth0)
   - [Sessions](#sessions)
+  - [Per-request hook: `OnRequest`](#per-request-hook-onrequest)
 - [Stream Endpoints](#stream-endpoints)
 - [Raw Endpoints](#raw-endpoints)
 - [Database](#database)
@@ -57,6 +58,7 @@ func Wire(app *schemaf.App) {
     app.SetFrontend(FrontendFS())                  // generated: embedded frontend assets (go/app/frontend.gen.go)
     app.AddSubcommand(importer.SubcommandProvider) // custom: CLI commands
     // optional: app.OnLogin(...), app.AddIdentityProvider(...) — see Authentication
+    // optional: app.OnRequest(...) — see Per-request hook
     // optional: app.CanSeeErrorDetails(...) — see Error details
     // optional: app.AddService(...) — see Services vs. subcommands
 }
@@ -474,6 +476,7 @@ const (
 - **Invalid** credentials are present but rejected: bad signature, revoked or ended session, expired Bearer token, revoked subject. A signed-in caller is never silently downgraded to anonymous.
 - When invalid credentials came from the cookie, the 401 also clears the cookie, so the browser stops sending it and the next request to an optional endpoint is anonymous. A rejected Bearer token leaves the cookie alone.
 - The [CSRF `Origin` check](#sessions) applies to cookie-authenticated requests at `AuthOptional` exactly as at `AuthRequired`.
+- At every level, an [`OnRequest`](#per-request-hook-onrequest) hook runs after authentication and before the handler; its admission reports the caller as `api.Subject` does in the handler.
 
 Use `AuthOptional` for endpoints that serve signed-in users and guests alike, such as a shared or public page:
 
@@ -632,7 +635,7 @@ You write the struct. Everything else is generated or framework-provided.
 
 ### Error responses
 
-Every error response from the API has the same shape, whichever layer answered: a typed endpoint, a [raw endpoint](#raw-endpoints), an identity provider's `Exchange`, `OnLogin`, a plain `net/http` handler using [`api.WriteError`](#outside-the-endpoint-pipeline), or schemaf itself (bad request body, auth middleware, login checks). A client never has to care where an error came from.
+Every error response from the API has the same shape, whichever layer answered: a typed endpoint, a [raw endpoint](#raw-endpoints), an identity provider's `Exchange`, `OnLogin`, a plain `net/http` handler using [`api.WriteError`](#outside-the-endpoint-pipeline), the [`OnRequest`](#per-request-hook-onrequest) hook, or schemaf itself (bad request body, auth middleware, login checks). A client never has to care where an error came from.
 
 ```json
 {"error": "an organisation needs at least one head", "code": "last_head"}
@@ -928,7 +931,7 @@ schemaf has built-in auth, fully managed by the framework:
 - **Signing key is auto-managed**: generated on first boot and stored in Postgres (`_schemaf_config`). Nothing to configure, no secret to manage.
 - In a handler, `api.Subject(ctx)` returns the authenticated subject; `/api/user/me` returns the current user.
 
-Every authenticated request is verified against schemaf's own token and session only. How a user *proves* who they are (Auth0, passkeys, a login code) happens once, at login, through an [identity provider](#identity-providers) or [your own login endpoint](#starting-sessions-from-your-own-code). After that, endpoints and middleware never see the provider. Rights and roles are your app's concern: schemaf only tells you *who* is calling.
+Every authenticated request is verified against schemaf's own token and session only. How a user *proves* who they are (Auth0, passkeys, a login code) happens once, at login, through an [identity provider](#identity-providers) or [your own login endpoint](#starting-sessions-from-your-own-code). After that, endpoints and middleware never see the provider. Rights and roles are your app's concern: schemaf only tells you *who* is calling. To turn the subject into your app's own caller once per request, use [`OnRequest`](#per-request-hook-onrequest).
 
 ### Identity providers
 
@@ -1254,6 +1257,56 @@ import schemafapi "github.com/flocko-motion/schemaf/api"
 token, err := schemafapi.IssueToken("svc:importer", time.Now().Add(24*time.Hour))
 // time.Time{} (zero) as the second argument issues a token with no expiry.
 ```
+
+### Per-request hook: `OnRequest`
+
+schemaf tells your app *who* is calling: a subject string. If your app keeps its own users, roles or tenants behind that subject, register one `OnRequest` hook in `Wire`. It runs on every API call, after authentication and before the handler, so mapping the subject to your app's own caller (and checking account state such as deleted, disabled or half-registered) sits at one point in code instead of in every handler:
+
+```go
+// go/app/app.go
+app.OnRequest(func(ctx context.Context, a *api.Admission) (context.Context, error) {
+    subject, ok := a.Subject()                     // ("", false) for an anonymous caller
+    caller, err := users.Resolve(ctx, subject, ok) // your own lookup and account checks
+    if err != nil {
+        return nil, err // refuses the request, answered like an endpoint error
+    }
+    return users.WithCaller(ctx, caller), nil // the handler gets this context
+})
+```
+
+The hook can call as many of your own functions as it likes; that is how you compose several steps.
+
+- **Where it runs**: on every request that reaches a route in `openapi.json`: your endpoints at all three [auth levels](#auth-levels) (`AuthNone` included), typed, [raw](#raw-endpoints) and [stream](#stream-endpoints), and schemaf's own `/api/*` routes (`/api/health`, `/api/status`, `/api/config`, the login, logout and refresh routes, `/api/user/me`, `/api/errors/{id}`). It does **not** run for the frontend, for `/openapi.json`, or for the [route gate's](#routing) own 404 and 405.
+- **Order**: route gate → authentication → `OnRequest` → handler. A failed authentication (401, 403) answers before the hook; the hook never sees it.
+- **Who is calling**: `a.Subject()` gives the authenticated subject, or `("", false)` for an anonymous caller on `AuthOptional` and for every caller on `AuthNone` (credentials are still never looked at there). The hook's `ctx` carries the authentication result too, so `api.Subject(ctx)` reports the same.
+- **Enrich**: the returned context is the one the handler gets: `ctx` in `Handle` and `Stream`, `r.Context()` in `HandleRaw` and schemaf's own handlers. Everything schemaf calls with that context sees it too, such as [`CanSeeErrorDetails`](#error-details).
+- **Refuse**: a returned error answers the request exactly like an endpoint error (status, code, message, logging, the 5xx `id`, see [Error responses](#error-responses)), and the handler does not run. An `api.ErrUnauthorized` from the hook leaves the session cookie alone, as from an endpoint; a cookie renewal that authentication already did stays done.
+- **One hook**: calling `app.OnRequest` twice, or with `nil`, is a startup error. Put all steps into the one hook.
+- **Strict**: returning a `nil` context with a `nil` error is a 500; the logged error names the hook.
+- Without `OnRequest`, requests run exactly as without it. [Integration tests](#integration-tests-schemaftest) run the hook too, since they share `Wire`.
+
+#### The admission: identities only the hook can mint
+
+`*api.Admission` is the ingredient that only schemaf provides, and only to the `OnRequest` hook. Use it to make your app's own caller type unforgeable by the rest of your app: give that type a single constructor that requires an `*api.Admission` (or that *is* the hook), and keep it in a protected part of your code (code owners). Then a caller can only ever be built in the hook, from the subject schemaf authenticated:
+
+```go
+// core/caller.go: the only way to make a Caller
+func Admit(ctx context.Context, a *api.Admission) (context.Context, error) {
+    subject, ok := a.Subject()
+    // ... look up the account, build the sealed Caller, put it into ctx
+}
+
+// go/app/app.go
+app.OnRequest(core.Admit)
+```
+
+- **Only schemaf makes a valid one.** Its fields are unexported: `&api.Admission{}`, a copy of one, or `nil` is never valid.
+- **It reaches the hook and nothing else**: never the context, never an endpoint, no getter.
+- **It carries the authenticated subject**, so identity and the proof that schemaf authenticated it are one value.
+- **It works only while the hook runs.** schemaf invalidates it when the hook returns, so an admission kept by mistake (in a goroutine, a global) is useless afterwards. Copies are invalidated with it.
+- **Misuse is loud**: `a.Subject()` on an admission that is not valid (zero value, `nil`, or used after its hook returned) panics, naming the cause; it never reports an anonymous caller instead. `a.Valid()` checks without panicking.
+- **Nothing else is hidden**: `api.Subject(ctx)` and `api.SessionID(ctx)` keep working in the handler. The guarantee comes from your caller type requiring an admission, not from hiding the subject.
+- The hook runs in [integration tests](#integration-tests-schemaftest) through `schemaftest.Start` as in production; schemaf offers no other way to obtain a valid admission.
 
 ## Stream Endpoints
 

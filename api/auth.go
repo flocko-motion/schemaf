@@ -261,18 +261,22 @@ func sameOrigin(r *http.Request) bool {
 	return false
 }
 
-// withAuth wraps next in the auth middleware for level.
+// withAuth wraps next in the auth middleware for level, followed by the
+// OnRequest hook.
 //
-// AuthNone returns next unchanged: credentials are never looked at.
+// AuthNone never looks at credentials: the hook runs anonymous.
 // AuthRequired and AuthOptional authenticate the request (cookie or Bearer),
 // renew cookie session tokens past half their lifetime and inject the caller
 // into the context. Without any credentials, AuthRequired answers 401 while
 // AuthOptional runs next anonymously. Present but invalid credentials are a
-// 401 at both levels, and clear the cookie when they came from it.
+// 401 at both levels, and clear the cookie when they came from it. A failed
+// authentication answers before the hook runs.
 func withAuth(level AuthLevel, next http.Handler) http.Handler {
 	switch level {
 	case AuthNone:
-		return next
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			runOnRequest(w, r, next)
+		})
 	case AuthOptional, AuthRequired:
 	default:
 		panic(fmt.Sprintf("api: invalid auth level %d", level))
@@ -281,7 +285,7 @@ func withAuth(level AuthLevel, next http.Handler) http.Handler {
 		info, renew, aerr := authenticate(r)
 		if aerr != nil {
 			if aerr.noCredentials && level == AuthOptional {
-				next.ServeHTTP(w, r)
+				runOnRequest(w, r, next)
 				return
 			}
 			if aerr.status == http.StatusUnauthorized && info.viaCookie {
@@ -297,7 +301,7 @@ func withAuth(level AuthLevel, next http.Handler) http.Handler {
 			}
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyAuth{}, info)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		runOnRequest(w, r.WithContext(ctx), next)
 	})
 }
 

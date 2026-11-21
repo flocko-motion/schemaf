@@ -87,6 +87,7 @@ schemaf is **batteries-included**. These are built-in, not optional:
   - Accepted from an HttpOnly session cookie or a Bearer token in the `Authorization` header
   - Pluggable identity providers exchanged for schemaf's own session at login: built-in Auth0, switched on by two env vars with no code (see [Activating Auth0](EXTEND.md#activating-auth0)), plus your own (passkeys, login codes, ...)
   - Short-lived, auto-renewed tokens backed by revocable sessions in Postgres
+  - One per-request hook (`app.OnRequest`) after authentication turns the subject into your app's own caller, or refuses the request, on every API call; its admission, handed only to the hook, lets the app make that caller unforgeable elsewhere (see [Per-request hook](EXTEND.md#per-request-hook-onrequest))
   - Signing key is auto-generated on first boot and stored in Postgres (`_schemaf_config` table)
   - No configuration, no secrets to manage — the framework owns the key entirely
   - Auth is declared per-endpoint at one of three levels — required, optional (signed-in users and guests on the same endpoint) or none (see [Auth levels](EXTEND.md#auth-levels)) — `/health` and `/status` are always open
