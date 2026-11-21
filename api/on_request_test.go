@@ -292,6 +292,7 @@ func TestOnRequestNotAfterFailedAuth(t *testing.T) {
 }
 
 func TestOnRequestBuiltInRoutes(t *testing.T) {
+	t.Setenv("SCHEMAF_DEV", "") // production: anonymous error details are a 401
 	e, h := newHookEnv(t)
 	alice, _ := e.login("alice")
 	cases := []struct {
