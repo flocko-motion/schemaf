@@ -53,6 +53,7 @@ type endpointInfo struct {
 	Consumes    []string       // request body media types (Handle endpoints)
 	Produces    []string       // response body media types (Handle endpoints)
 	ReqSchema   map[string]any // request body schema; nil for no body
+	Params      []any          // path and query parameters of a typed endpoint; nil: path params from Path(), as strings
 	RespSchema  map[string]any // 200 response schema (a stream's: each event's data); nil for no content
 }
 
@@ -635,8 +636,13 @@ func buildOpenAPISpec(projectName string, endpoints []endpointInfo, schemas map[
 			}
 		}
 
-		// Declare path parameters (e.g. {id} → parameter "id" in: path)
-		if params := extractPathParams(ep.Path); len(params) > 0 {
+		// Typed endpoints declare their request type's path and query
+		// params; a raw endpoint (no request type) its {name} segments.
+		params := ep.Params
+		if params == nil {
+			params = extractPathParams(ep.Path)
+		}
+		if len(params) > 0 {
 			op["parameters"] = params
 		}
 
@@ -704,16 +710,13 @@ func mediaContent(types []string, schema map[string]any) map[string]any {
 // extractPathParams returns OpenAPI parameter objects for path template variables like {id}.
 func extractPathParams(path string) []any {
 	var params []any
-	for _, segment := range strings.Split(path, "/") {
-		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
-			name := segment[1 : len(segment)-1]
-			params = append(params, map[string]any{
-				"name":     name,
-				"in":       "path",
-				"required": true,
-				"schema":   map[string]any{"type": "string"},
-			})
-		}
+	for _, name := range pathTemplateParams(path) {
+		params = append(params, map[string]any{
+			"name":     name,
+			"in":       "path",
+			"required": true,
+			"schema":   map[string]any{"type": "string"},
+		})
 	}
 	return params
 }

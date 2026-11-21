@@ -78,21 +78,24 @@ func hasBody(method string) bool {
 	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch
 }
 
-// decodeRequest fills req from path params, query params and, for methods
-// that carry one, the body (by Content-Type). It writes the error response
-// and returns false on failure.
+// decodeRequest fills req from, for methods that carry one, the body (by
+// Content-Type), then from path and query params: the body never overwrites
+// a path or query field. It writes the error response and returns false on
+// failure.
 func decodeRequest(w http.ResponseWriter, r *http.Request, req any, consumes []string) bool {
-	if err := decodePathParams(r, req); err != nil {
+	if hasBody(r.Method) && !decodeBody(w, r, req, consumes) {
+		return false
+	}
+	if err := decodeParams(r, req); err != nil {
 		WriteError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
 		return false
 	}
-	if err := decodeQueryParams(r, req); err != nil {
-		WriteError(w, r, Error(ErrBadRequest, "bad_request", err.Error()))
-		return false
-	}
-	if !hasBody(r.Method) {
-		return true
-	}
+	return true
+}
+
+// decodeBody decodes the request body into req. An empty body leaves req
+// alone. It writes the error response and returns false on failure.
+func decodeBody(w http.ResponseWriter, r *http.Request, req any, consumes []string) bool {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		WriteError(w, r, Error(ErrBadRequest, "bad_request", "reading request body: "+err.Error()))

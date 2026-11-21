@@ -31,7 +31,22 @@ case "$1 $2" in
     fi
     echo "" ;;
   "pr create") touch "$GH_STATE/pr" ;;
-  "pr merge") touch "$GH_STATE/merged" ;;
+  "pr merge")
+    # Like GitHub: a merge commit of origin/main and the PR head on origin's
+    # main. GH_MAIN_MOVED=1: main got another commit first, so the merge
+    # commit's tree is not the branch's.
+    touch "$GH_STATE/merged"
+    base=$(git rev-parse origin/main)
+    if [ "${GH_MAIN_MOVED:-}" = 1 ]; then
+      blob=$(echo moved | git hash-object -w --stdin)
+      tree=$(printf '100644 blob %s\tmoved.txt\n' "$blob" | git mktree)
+      base=$(git commit-tree "$tree" -p "$base" -m "someone else")
+      tree=$( (git ls-tree HEAD; printf '100644 blob %s\tmoved.txt\n' "$blob") | git mktree)
+    else
+      tree=$(git rev-parse 'HEAD^{tree}')
+    fi
+    merge=$(git commit-tree "$tree" -p "$base" -p HEAD -m "Merge pull request")
+    git push -q origin "$merge:refs/heads/main" ;;
   "run list")
     case "$GH_SCENARIO" in
       notfound) ;;
@@ -310,12 +325,74 @@ func TestReleaseRefusesWhenHeadIsNotOriginMain(t *testing.T) {
 	if tags := s.git(s.work, "tag", "-l") + s.remoteTags(); tags != "" {
 		t.Errorf("tags were created: %q", tags)
 	}
+}
 
-	// From a feature branch, too.
+// tagOriginMain tags origin/main as tag on the remote: the last release.
+func (s *sandbox) tagOriginMain(tag string) {
+	s.git(s.work, "tag", tag, "origin/main")
+	s.git(s.work, "push", "-q", "origin", tag)
+}
+
+func TestReleaseFromBranchMergesThenTags(t *testing.T) {
+	s := newSandbox(t)
+	s.tagOriginMain("v1.2.3")
+	sha := s.featureBranch()
+	out, ok := s.run("scripts/release.sh", []string{"GH_SCENARIO=green", "FAKE_UNAME=Linux"}, "minor")
+	if !ok {
+		t.Fatalf("release.sh failed:\n%s", out)
+	}
+	if !s.exists("ghstate/merged") || !strings.Contains(s.ghLog(), "gh pr merge feat --merge --match-head-commit "+sha) {
+		t.Fatalf("the branch was not merged through its PR:\n%s\n%s", out, s.ghLog())
+	}
+	s.git(s.work, "fetch", "-q", "origin")
+	tagged := s.git(s.work, "rev-parse", "v1.3.0^{commit}")
+	if want := s.git(s.work, "rev-parse", "origin/main"); tagged != want {
+		t.Errorf("v1.3.0 is %s, want the merge commit on origin/main %s", tagged, want)
+	}
+	if parents := s.git(s.work, "rev-list", "--parents", "-n1", tagged); !strings.HasSuffix(parents, " "+sha) {
+		t.Errorf("the tagged commit is not the merge of %s: %s", sha, parents)
+	}
+	if !s.exists("ghstate/release") {
+		t.Error("no GitHub release was created")
+	}
+	if b, _ := os.ReadFile(filepath.Join(s.root, "go.log")); strings.Count(string(b), "go test") != 1 {
+		t.Errorf("the fast checks should run once (in merge.sh), go log:\n%s", b)
+	}
+}
+
+func TestReleaseFromBranchRedGateTagsNothing(t *testing.T) {
+	s := newSandbox(t)
 	s.featureBranch()
-	out, ok = s.run("scripts/release.sh", nil, "patch")
-	if ok || !strings.Contains(out, "is not origin/main") {
-		t.Fatalf("release.sh must refuse on a feature branch:\n%s", out)
+	out, ok := s.run("scripts/release.sh", []string{"GH_SCENARIO=red"}, "patch")
+	if ok || !strings.Contains(out, "nothing tagged") {
+		t.Fatalf("release.sh must stop when the merge fails:\n%s", out)
+	}
+	if s.exists("ghstate/merged") || s.exists("ghstate/release") || s.remoteTags() != "" {
+		t.Errorf("merged, released or tagged on a red gate: tags %q\n%s", s.remoteTags(), out)
+	}
+}
+
+func TestReleaseFromBranchRefusesWhenMainMoved(t *testing.T) {
+	s := newSandbox(t)
+	s.featureBranch()
+	out, ok := s.run("scripts/release.sh", []string{"GH_SCENARIO=green", "GH_MAIN_MOVED=1"}, "patch")
+	if ok || !strings.Contains(out, "main moved in between") {
+		t.Fatalf("release.sh must refuse to tag a merge commit with other content:\n%s", out)
+	}
+	if s.remoteTags() != "" || s.exists("ghstate/release") {
+		t.Errorf("tagged or released although main moved: %q", s.remoteTags())
+	}
+}
+
+func TestReleaseFromBranchBadBumpPushesNothing(t *testing.T) {
+	s := newSandbox(t)
+	s.featureBranch()
+	out, ok := s.run("scripts/release.sh", []string{"GH_SCENARIO=green"}, "huge")
+	if ok || !strings.Contains(out, "Usage: make release") {
+		t.Fatalf("release.sh must refuse an unknown bump:\n%s", out)
+	}
+	if s.ghLog() != "" {
+		t.Errorf("gh was called before the bump was checked:\n%s", s.ghLog())
 	}
 }
 

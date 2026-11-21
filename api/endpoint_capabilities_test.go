@@ -331,10 +331,10 @@ func TestYAMLKeepsStringsThatLookLikeOtherTypes(t *testing.T) {
 // --- Server-sent events ---
 
 type tickReq struct {
-	N    int  `query:"n"`
-	Fail bool `query:"fail"`
-	Nil  bool `query:"nil"`
-	Hold bool `query:"hold"` // send nothing, wait for ctx
+	N    *int  `query:"n"`
+	Fail *bool `query:"fail"`
+	Nil  *bool `query:"nil"`
+	Hold *bool `query:"hold"` // send nothing, wait for ctx
 }
 
 type tick struct {
@@ -349,24 +349,24 @@ func (tickEndpoint) Method() string  { return "GET" }
 func (tickEndpoint) Path() string    { return "/api/test/ticks" }
 func (tickEndpoint) Auth() AuthLevel { return AuthNone }
 func (e tickEndpoint) Stream(ctx context.Context, req tickReq) (<-chan tick, error) {
-	if req.Fail {
+	if req.Fail != nil && *req.Fail {
 		return nil, Error(ErrConflict, "busy", "workshop is busy")
 	}
-	if req.Nil {
+	if req.Nil != nil && *req.Nil {
 		return nil, nil
 	}
 	lang := Header(ctx, "Accept-Language")
 	ch := make(chan tick)
 	go func() {
 		defer close(ch)
-		if req.Hold {
+		if req.Hold != nil && *req.Hold {
 			<-ctx.Done()
 			if e.done != nil {
 				close(e.done)
 			}
 			return
 		}
-		for i := 1; i <= req.N; i++ {
+		for i := 1; req.N != nil && i <= *req.N; i++ {
 			select {
 			case ch <- tick{Seq: i, Lang: lang}:
 			case <-ctx.Done():
