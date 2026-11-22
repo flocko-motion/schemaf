@@ -323,7 +323,25 @@ Builds `Dockerfile.gen` into the image `<name>:<tag>`. It needs the container ru
 - **Exactly the commit**: with a clean working tree the image is built from `git archive HEAD`, so untracked and ignored files (e.g. `node_modules/`) never reach it. A commit that was built before is not built again, unless `--force`.
 - **Uncommitted changes**: a plain `build` is allowed for local testing; it builds the working tree, always rebuilds, and tags `<short-hash>-dirty` by default. `build --output` refuses: `commit first — a deployment artifact must name exactly one commit`. There is no override.
 - **`--output <file>`** writes a deployment artifact (below). An existing file is an error, never overwritten.
+- **Lockfiles**: the image gets exactly the dependencies the commit pins (see [Lockfiles](#lockfiles) below).
 - **Empty inputs**: before building, `build` prints codegen's warnings about empty inputs from `gen/empty-inputs`, e.g. `⚠ no migrations in go/db/migrations — db.Provider() is empty`. They never stop the build. See [Empty inputs](EXTEND.md#empty-inputs).
+
+### Lockfiles
+
+`build` installs exactly what the lockfiles pin, so every build of a commit gets the same dependencies, on any host:
+
+- the frontend stage runs `npm ci`, which installs exactly `frontend/package-lock.json`;
+- the Go stage runs `go build -mod=readonly`, which compiles exactly what `go/go.mod` and `go/go.sum` pin. It never runs `go mod tidy`.
+
+Nothing is fixed up during the build. A lockfile that is missing or out of date stops `build`, naming the file and the fix, which you run on your dev host and commit:
+
+| Problem | When | Fix |
+|---|---|---|
+| `go/go.sum` missing, or `frontend/package-lock.json` missing while `frontend/package.json` exists | before the image build: `frontend/package-lock.json is missing in commit 3f9a2c1 — build installs exactly what it pins (npm ci). Run npm install in frontend/ and commit frontend/package-lock.json` (a file that exists but is gitignored gets the hint `(is it gitignored?)`) | run the install (or `go mod tidy`) and commit the file |
+| `frontend/package-lock.json` out of sync with `frontend/package.json` | the frontend stage of the image build | `npm install` in `frontend/`, commit `frontend/package-lock.json` |
+| `go/go.mod` or `go/go.sum` out of date (a missing `require` or checksum) | the Go stage of the image build | `go mod tidy` in `go/`, commit `go/go.mod` and `go/go.sum` |
+
+`init` runs both installs, so a fresh project has both files; commit them with the rest.
 
 ### The artifact: `<name>-<tag>.run`
 

@@ -24,6 +24,7 @@ func writeMinimalProject(t *testing.T) {
 	files := map[string]string{
 		"schemaf.toml":                   "title = \"My App\"\nname = \"myapp\"\n",
 		"go/go.mod":                      "module myapp\n\ngo 1.24\n\nrequire github.com/flocko-motion/schemaf v1.11.0\n",
+		"go/go.sum":                      "github.com/flocko-motion/schemaf v1.11.0 h1:x=\n",
 		"go/api/hello.go":                "package api\n",
 		"go/db/migrations/0001_init.sql": "CREATE TABLE t (id int);\n",
 		"go/db/queries/t.sql":            "-- name: ListT :many\nSELECT * FROM t;\n",
@@ -1281,4 +1282,96 @@ func withoutEnv(env []string, key string) []string {
 		}
 	}
 	return out
+}
+
+// TestBuildRequiresLockfiles: build installs exactly what the lockfiles pin
+// (INSTALL.md › Lockfiles), so a missing one stops it before the image build,
+// naming the file and the fix.
+func TestBuildRequiresLockfiles(t *testing.T) {
+	root := newDeployProject(t)
+	u := newShUser(t)
+
+	refuses := func(t *testing.T, wants ...string) {
+		t.Helper()
+		_, stderr, code := u.run(root, "schemaf.sh", "build", "--force")
+		if code == 0 {
+			t.Fatal("build accepted a missing lockfile")
+		}
+		mustContain(t, "stderr", stderr, wants...)
+		mustNotContain(t, "calls", u.calls(), "podman build")
+	}
+
+	t.Run("go.sum missing in the commit", func(t *testing.T) {
+		git(t, root, "rm", "-q", "go/go.sum")
+		git(t, root, "commit", "-q", "-m", "no go.sum")
+		defer func() {
+			git(t, root, "revert", "--no-edit", "HEAD")
+		}()
+		short := git(t, root, "rev-parse", "--short", "HEAD")
+		refuses(t, "go/go.sum is missing in commit "+short+" — build compiles exactly what it pins (go build -mod=readonly). Run go mod tidy in go/ and commit go/go.mod and go/go.sum")
+	})
+
+	t.Run("package-lock.json missing next to package.json", func(t *testing.T) {
+		if err := os.MkdirAll(filepath.Join(root, "frontend"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "frontend/package.json"), []byte("{}\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		head := commitAll(t, root, "frontend without lockfile")
+		refuses(t, "frontend/package-lock.json is missing in commit "+head+" — build installs exactly what it pins (npm ci). Run npm install in frontend/ and commit frontend/package-lock.json")
+	})
+
+	t.Run("a gitignored lockfile gets a hint", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(root, "frontend/.gitignore"), []byte("package-lock.json\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "frontend/package-lock.json"), []byte("{}\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		commitAll(t, root, "ignore the lockfile")
+		refuses(t, "frontend/package-lock.json is missing in commit", "(is it gitignored?)")
+	})
+
+	t.Run("uncommitted build checks the working tree", func(t *testing.T) {
+		if err := os.Remove(filepath.Join(root, "frontend/.gitignore")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(root, "frontend/package-lock.json")); err != nil {
+			t.Fatal(err)
+		}
+		refuses(t, "frontend/package-lock.json is missing — build installs exactly what it pins (npm ci)")
+	})
+
+	t.Run("with both lockfiles committed, build runs", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(root, "frontend/package-lock.json"), []byte("{}\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		commitAll(t, root, "lockfile")
+		if _, stderr, code := u.run(root, "schemaf.sh", "build"); code != 0 {
+			t.Fatalf("build failed:\n%s", stderr)
+		}
+		mustContain(t, "calls", u.calls(), "podman build")
+	})
+}
+
+// TestDockerfileUsesOnlyLockfiles: the generated Dockerfile installs exactly
+// the lockfiles and explains an out-of-sync one (INSTALL.md › Lockfiles).
+func TestDockerfileUsesOnlyLockfiles(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeMinimalProject(t)
+	if err := os.MkdirAll("frontend", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runComposeGen(); err != nil {
+		t.Fatal(err)
+	}
+	d := readFile(t, "Dockerfile.gen")
+	mustContain(t, "Dockerfile.gen", d,
+		"npm ci",
+		"go build -mod=readonly",
+		"frontend/package-lock.json is out of sync with frontend/package.json — run npm install in frontend/ on your dev host and commit frontend/package-lock.json",
+		"go/go.mod or go/go.sum is out of date — run go mod tidy in go/ on your dev host and commit go/go.mod and go/go.sum",
+	)
+	mustNotContain(t, "Dockerfile.gen", d, "RUN npm install", "RUN go mod tidy", "go mod tidy &&")
 }

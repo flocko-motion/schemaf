@@ -148,7 +148,7 @@ app.SetFrontend(FrontendFS())
 
 `./schemaf.sh codegen` does two things for the frontend:
 
-1. **Scaffold** — if `frontend/` doesn't exist, creates a Vite + TypeScript setup with React (the default) and runs `npm install`
+1. **Scaffold** — if `frontend/` doesn't exist, creates a Vite + TypeScript setup with React (the default) and runs `npm install`, which writes `frontend/package-lock.json`. Commit it: `build` installs exactly what it pins (see [Lockfiles](INSTALL.md#lockfiles))
 2. **Generate** — creates `go/app/frontend.gen.go` (embeds `frontend/dist/` into the Go binary), `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec) and `frontend/src/api/generated/config.gen.ts` ([runtime config](#runtime-config-public_))
 
 If `frontend/` exists, codegen validates it: the required files must be present, and `vite.config.ts`, `index.html` and the entry file (`src/main.tsx` or `src/main.ts`) must contain the [runtime config](#runtime-config-public_) setup. If something is missing, codegen stops and prints what to add.
@@ -175,7 +175,7 @@ In [development mode](#development-mode), the Go server reverse-proxies all non-
 
 ### Production
 
-The generated `Dockerfile.gen` (built by `./schemaf.sh build`, see [Deployment](INSTALL.md#deployment)) includes a Node build stage that compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
+The generated `Dockerfile.gen` (built by `./schemaf.sh build`, see [Deployment](INSTALL.md#deployment)) includes a Node build stage that installs exactly what `frontend/package-lock.json` pins (`npm ci`) and compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
 
 ### Runtime config: `PUBLIC_*`
 
@@ -1890,6 +1890,7 @@ For work on schemaf itself. `make test <unit|db|e2e|all>` runs the test layers l
 
 1. unit tests (`go test ./...`) and the DB integration tests (`e2e/db-test.sh`), which start their containers through the selected runtime too;
 2. the onboarding e2e (`e2e/build-example.sh <head sha>`), which also runs
+   - the [lockfiles](INSTALL.md#lockfiles) (`e2e/deploy.sh`): `init`'s `frontend/package-lock.json` and `go/go.sum` are committed, and a `package.json` changed without its lockfile, or an emptied `go.sum`, stops `build` with the file and the fix;
    - the two-user deployment (`e2e/deploy.sh`) with **two real Unix users** the workflow creates (`useradd`): the build user clones the project and builds the artifact, the run user loads, runs, upgrades and rolls back. Under podman each has its own rootless store, so the image really crosses over as a file; under Docker both use the machine's one daemon, so the builder's image is removed before each load;
    - the data-volume check (`e2e/volumes.sh`) with real volumes: the other runtime holds `<name>-postgres-data` → `test` and `run` refuse; both runtimes hold it → they refuse; only the selected one → `test` starts. The `podman` job covers "Docker has it", the `docker` job "podman has it".
 

@@ -515,6 +515,7 @@ _schemaf_build() {
     ctx=$(_schemaf_mktemp)
     git archive HEAD | tar -x -C "$ctx"
   fi
+  _schemaf_check_lockfiles "$ctx" "$dirty" "$short"
   _schemaf_container build -f "$ctx/Dockerfile.gen" -t "$BUILT_IMAGE" \
     --label "schemaf.project=$PROJECT_NAME" \
     --label "schemaf.commit=$commit" \
@@ -524,6 +525,27 @@ _schemaf_build() {
     "$ctx"
   echo "Built $BUILT_IMAGE" >&2
   [ -z "$output" ] || _schemaf_write_artifact "$output" "$tag" "$commit" "$describe"
+}
+
+# _schemaf_check_lockfiles <ctx> <dirty> <short>
+# The image gets exactly what the lockfiles pin (npm ci, go build
+# -mod=readonly), so a missing one stops the build before the image build.
+# ctx is what the image is built from: the commit, or the working tree when dirty.
+# See INSTALL.md › Lockfiles.
+_schemaf_check_lockfiles() {
+  local ctx="$1" dirty="$2" short="$3" where="" hint
+  [ "$dirty" = true ] || where=" in commit $short"
+  _schemaf_lockfile_missing() {
+    hint=""
+    if [ "$dirty" = false ] && [ -e "$PROJECT_ROOT/$1" ]; then hint=" (is it gitignored?)"; fi
+    _die "$1 is missing$where$hint — build $2. Run $3 and commit $4"
+  }
+  [ -f "$ctx/go/go.sum" ] || _schemaf_lockfile_missing go/go.sum \
+    "compiles exactly what it pins (go build -mod=readonly)" "go mod tidy in go/" "go/go.mod and go/go.sum"
+  if [ -f "$ctx/frontend/package.json" ] && [ ! -f "$ctx/frontend/package-lock.json" ]; then
+    _schemaf_lockfile_missing frontend/package-lock.json \
+      "installs exactly what it pins (npm ci)" "npm install in frontend/" "frontend/package-lock.json"
+  fi
 }
 
 # The self-extracting header of a deployment artifact. Everything after the

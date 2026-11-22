@@ -249,7 +249,7 @@ schemaf collapses all of this into a single compiled binary:
 | What | How |
 |---|---|
 | HTTP server | `./myapp server` — runs inside the container |
-| Image build | `./schemaf.sh build` — builds `Dockerfile.gen` with the container runtime; no Go or Node on the host |
+| Image build | `./schemaf.sh build` — builds `Dockerfile.gen` with the container runtime, from the lockfiles exactly; no Go or Node on the host |
 | Compose orchestration | `./schemaf.sh run/dev` — runs `<runtime> compose` (podman by default), then exits |
 | Code generation | `./schemaf.sh codegen` — `go run`s the framework CLI, reads your files |
 | Database migrations | embedded SQL, applied automatically on server startup |
