@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 var semverRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
@@ -135,5 +137,31 @@ func TestOapiPinsFitSchemafGo(t *testing.T) {
 		if !seen[mod] {
 			t.Errorf("%s is missing from the module graph", mod)
 		}
+	}
+}
+
+// oapi-codegen runs with a config that generates models and client into
+// apiclient/client.gen.go (package apiclient) and prefixes every enum
+// constant with its type's name (TierMedium, not Medium), so no value can
+// collide with a type or another enum's value (#98). The option exists only
+// in the config file, under compatibility.
+func TestOapiConfig(t *testing.T) {
+	var cfg struct {
+		Package  string          `yaml:"package"`
+		Output   string          `yaml:"output"`
+		Generate map[string]bool `yaml:"generate"`
+		Compat   map[string]bool `yaml:"compatibility"`
+	}
+	if err := yaml.Unmarshal([]byte(oapiCodegenConfig), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Package != "apiclient" || cfg.Output != "apiclient/client.gen.go" {
+		t.Errorf("package %q, output %q; want apiclient, apiclient/client.gen.go", cfg.Package, cfg.Output)
+	}
+	if !cfg.Generate["models"] || !cfg.Generate["client"] || len(cfg.Generate) != 2 {
+		t.Errorf("generate = %v, want models and client", cfg.Generate)
+	}
+	if !cfg.Compat["always-prefix-enum-values"] {
+		t.Errorf("compatibility = %v, want always-prefix-enum-values: true", cfg.Compat)
 	}
 }
