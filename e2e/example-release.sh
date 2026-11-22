@@ -29,6 +29,10 @@ EXAMPLE_REPO="${EXAMPLE_REPO:-flocko-motion/schemaf-example}"
 EXAMPLE_NAME="${EXAMPLE_REPO##*/}"
 SCHEMAF_MODULE="github.com/flocko-motion/schemaf"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=gh-runs.sh
+source "$SCRIPT_DIR/gh-runs.sh"
+
 say() { echo "  · $*"; }
 fail() { echo "✗ example release: $*" >&2; exit 1; }
 
@@ -100,8 +104,8 @@ else
     sleep 5
   done
   [ -n "$run" ] || fail "no release run started for $TAG within 5 minutes: https://github.com/$EXAMPLE_REPO/actions"
-  gh run watch "$run" -R "$EXAMPLE_REPO" --exit-status >/dev/null \
-    || fail "the release run of $TAG failed: https://github.com/$EXAMPLE_REPO/actions/runs/$run"
+  conclusion=$(await_run "$EXAMPLE_REPO" "$run") || fail "could not follow the release run of $TAG (see above)"
+  [ "$conclusion" = success ] || fail "the release run of $TAG ended $conclusion: https://github.com/$EXAMPLE_REPO/actions/runs/$run"
 fi
 
 say "check the GitHub release"
@@ -147,7 +151,7 @@ for _ in $(seq 1 60); do
   sleep 5
 done
 [ -n "$run" ] || fail "the example pull did not start within 5 minutes: https://github.com/$SCHEMAF_REPO/actions/workflows/example-pull.yml"
-gh run watch "$run" -R "$SCHEMAF_REPO" --exit-status >/dev/null \
-  || fail "the example pull failed: https://github.com/$SCHEMAF_REPO/actions/runs/$run"
+conclusion=$(await_run "$SCHEMAF_REPO" "$run") || fail "could not follow the example pull (see above)"
+[ "$conclusion" = success ] || fail "the example pull ended $conclusion: https://github.com/$SCHEMAF_REPO/actions/runs/$run"
 
 echo "✓ example release $TAG: attested artifact, releases.json, and a new box that pulled v-1 and upgraded to it"
