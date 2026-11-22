@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,14 @@ func TestApitsNpxArgsArePinned(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("npx args %q don't run %s", args, want)
+	}
+}
+
+// Enums come out of the TypeScript client as unions of their values, not as
+// TS enums (EXTEND.md, Enums).
+func TestApitsUnionEnums(t *testing.T) {
+	if !slices.Contains(apitsArgs(), "--enum-style=union") {
+		t.Errorf("npx args %q lack --enum-style=union", apitsArgs())
 	}
 }
 

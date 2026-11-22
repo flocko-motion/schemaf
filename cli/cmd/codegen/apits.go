@@ -25,6 +25,9 @@ func apitsArgs() []string {
 		"-p", "gen/openapi.json",
 		"-o", "frontend/src/api/generated",
 		"--name", "api.gen.ts",
+		// Enums as unions of their values (type S = "a" | "b"), not TS
+		// enums: callers pass plain literals, and nothing exists at runtime.
+		"--enum-style=union",
 	}
 }
 

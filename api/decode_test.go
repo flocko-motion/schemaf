@@ -197,3 +197,74 @@ func TestParamsThroughEndpoint(t *testing.T) {
 		}
 	}
 }
+
+type decodePaging struct {
+	Limit  *int `query:"limit"`
+	Offset *int `query:"offset"`
+}
+
+type decodeDeep struct {
+	decodePaging
+	Sort string `query:"sort"`
+}
+
+type decodeTenant struct {
+	Tenant string `path:"tenant"`
+}
+
+type decodeListParams[S ~string] struct {
+	SortBy *S `query:"sortBy"`
+}
+
+type decodeSort string
+
+// An embedded struct's path and query fields are filled like the request
+// type's own, at any depth, through unexported and generic embeds.
+func TestDecodeEmbeddedParams(t *testing.T) {
+	var got struct {
+		decodeTenant
+		decodeDeep
+		decodeListParams[decodeSort]
+		Search *string `query:"search"`
+	}
+	mustDecode(t, paramReq("limit=10&offset=20&sort=name&sortBy=createdAt&search=bo", map[string]string{"tenant": "acme"}), &got)
+	if got.Tenant != "acme" || got.Limit == nil || *got.Limit != 10 || got.Offset == nil || *got.Offset != 20 ||
+		got.Sort != "name" || got.SortBy == nil || *got.SortBy != "createdAt" || got.Search == nil || *got.Search != "bo" {
+		t.Errorf("got %+v", got)
+	}
+	// A required param of an embed is still required.
+	var missing struct{ decodeDeep }
+	wantDecodeErr(t, paramReq("", nil), &missing, `query param "sort" is required`)
+}
+
+// A struct embedded with a json name is a nested body object: its tags are
+// not read as parameters.
+func TestDecodeJSONNamedEmbedNotParams(t *testing.T) {
+	var got struct {
+		decodePaging `json:"paging"`
+	}
+	mustDecode(t, paramReq("limit=10", nil), &got)
+	if got.Limit != nil {
+		t.Errorf("limit = %d, want nil", *got.Limit)
+	}
+}
+
+// An embedded pointer with parameters is an error (codegen refuses it): a
+// nil embed would leave its parameters with nowhere to go.
+func TestDecodePointerEmbedRefused(t *testing.T) {
+	var got struct {
+		*decodePaging
+	}
+	wantDecodeErr(t, paramReq("limit=1", nil), &got, "embedded pointer")
+}
+
+// A json tag without a name (`json:",omitempty"`) keeps an embed an embed.
+func TestDecodeEmbedWithUnnamedJSONTag(t *testing.T) {
+	var got struct {
+		decodePaging `json:",omitempty"`
+	}
+	mustDecode(t, paramReq("limit=10", nil), &got)
+	if got.Limit == nil || *got.Limit != 10 {
+		t.Errorf("limit = %v, want 10", got.Limit)
+	}
+}

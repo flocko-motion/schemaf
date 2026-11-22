@@ -537,7 +537,7 @@ type ListGamesReq struct {
 
 | Field | Path | Query | OpenAPI parameter |
 |---|---|---|---|
-| `string`, any integer type, `bool` (or a named type over one, e.g. `type Role string`) | ✓ | ✓ | `string` / `integer` / `boolean`, `required: true` |
+| `string`, any integer type, `bool` (or a named type over one, e.g. `type Role string`) | ✓ | ✓ | `string` / `integer` / `boolean`, `required: true`; a named string type with constants is an [enum](#enums) |
 | a pointer to one of those, e.g. `*string` | — | ✓ | the element's type, `required: false` |
 | a slice of one of those, e.g. `[]int` | — | ✓ | `array` of the element's type, `style: form`, `explode: true`, `required: false` |
 
@@ -557,6 +557,22 @@ A path segment is always there and holds one value, so path fields are never poi
 
 To make a query param optional, declare it as a pointer.
 
+**Shared parameters: embedded structs.** An embedded struct's `path` and `query` fields count as the request type's own, at any depth, as its JSON fields already do. Declare a common set once and embed it:
+
+```go
+type PageParams struct {
+    Limit  *int `query:"limit"`
+    Offset *int `query:"offset"`
+}
+
+type ListUsersReq struct {
+    PageParams
+    Search *string `query:"search"`
+}
+```
+
+The operation declares `limit`, `offset` and `search`, in field order (an embedded struct's parameters where it is embedded), and schemaf decodes all three. Embed by value: an embedded pointer with parameters is a codegen error. An embedded struct with a `json` name (`PageParams `json:"page"``) is a nested object, not an embed, so it can't carry parameters. Two parameters with the same name are an error naming both fields, even where Go would let the outer field hide the inner one. Generic structs embed the same way (`ListParams[UserSort]`).
+
 **No body.** Path and query fields are not part of the request body: they're left out of the body schema and the request's component schema, and a POST, PUT or PATCH request whose only fields are path and query fields has no `requestBody`. schemaf decodes the body first and applies the path and query values after it, so a body key can never overwrite a path or query field.
 
 **Codegen errors.** Each names the endpoint struct and the field, and says how to fix it:
@@ -564,9 +580,10 @@ To make a query param optional, declare it as a pointer.
 - a `path` or `query` field of an unsupported type (float, struct, map, pointer to a slice, a pointer or slice on a path field, …)
 - a `{name}` in `Path()` without a `path:"name"` field in the request type, or a `path:"name"` field without a `{name}` in `Path()`
 - a field tagged both `json` and `path`/`query`, or both `path` and `query`
-- two fields tagged with the same `path` name
+- two fields tagged with the same `path` name, or with the same `query` name — across the request type and its embedded structs
 - an unexported field tagged `path` or `query`
-- a `path` or `query` tag on a field of an embedded struct: parameters are read only from the request type's own fields
+- an embedded pointer to a struct with `path` or `query` fields: embed it by value
+- a struct with `path` or `query` fields embedded with a `json` name (or `json:"-"`): it is a nested object of the body (or no JSON at all), not part of the request type, so its parameters would never be read — remove the json name. A tag without a name (`json:",omitempty"`) keeps it an embed
 - a type with `path` or `query` fields used anywhere but as an endpoint's request type (a response, a stream event, a field or embedded struct of another type): its schema leaves those fields out, so it can't describe that JSON — declare a separate type
 - an exported field of a GET or DELETE request type with neither a `path` nor a `query` tag: these requests have no body, so the field could never be filled
 
@@ -577,6 +594,7 @@ These rules apply to typed endpoints and [stream endpoints](#stream-endpoints). 
 - A request without a required (non-pointer) query param now gets `400` instead of the zero value. Declare the field as a pointer to keep it optional.
 - Codegen fails on untagged fields in GET and DELETE request types, on `path` tags that don't match `Path()`, and on fields tagged both `json` and `path`/`query`. Each error names the field.
 - Path fields can be integers and bools now; their spec parameters carry the field's type instead of `string`.
+- Embedded structs can carry `path` and `query` fields now; codegen no longer refuses them.
 
 **OpenAPI generation:**
 The Go doc comment on the endpoint struct becomes the OpenAPI summary. The first line is the summary, subsequent lines become the description:
@@ -611,6 +629,8 @@ Codegen type-checks `go/api/` (its `*.gen.go` and `*_test.go` files ignored) and
 | `uuid.NullUUID` | `string` with format `uuid`, nullable |
 | `[]byte` | `string` with format `byte` (base64) |
 | slice, array / `map[K]V` | `array` / `object` with `additionalProperties` |
+| instance of a generic struct, e.g. `Page[obj.User]` | `$ref` to a schema named from its type arguments and the type's name (see [Generic types](#generic-types)) |
+| named string type with constants, e.g. `type UserSort string` | `$ref` to a schema named after the type: `string` with `enum` (see [Enums](#enums)) |
 | named non-struct type, e.g. `type Role string` | the underlying type |
 | type implementing `encoding.TextMarshaler`; field with `json:",string"` | `string` |
 | `any`, interface, `json.RawMessage` | any JSON value |
@@ -621,9 +641,65 @@ Codegen is strict, and each of these is a codegen error that names the type:
 
 - two types with the same name from different packages, e.g. `api.Address` and `obj.Address`: rename one
 - a type implementing `json.Marshaler` (other than the ones in the table): codegen can't know its JSON shape. If the type encodes as a JSON string (an enum, an ID), implement `encoding.TextMarshaler` instead: `encoding/json` then encodes it as a string, and its schema is `string`. Otherwise use a plain struct in the API
-- a type without a JSON shape (channel, function) or a generic type
+- a type without a JSON shape (channel, function)
+- a generic type instantiated with an unnamed type argument other than a basic type, e.g. `Page[[]obj.User]` or `Page[map[string]int]`: use a named type as the type argument
 - a POST, PUT or PATCH request type that is not a struct, e.g. `[]obj.User`: a request body is a JSON object
 - a type error in `go/api/` or a package it imports
+
+#### Generic types
+
+A generic struct gets one component schema per instantiation, named from its type arguments followed by the type's name:
+
+```go
+type Page[T any] struct {
+    Items []T `json:"items"`
+    Total int `json:"total"`
+}
+
+type ListUsersResp = Page[obj.User] // schema "UserPage"
+```
+
+| Type | Schema name |
+|---|---|
+| `Page[User]` | `UserPage` |
+| `Pair[A, B]` | `ABPair` |
+| `Page[*User]` | `UserPage` (a pointer is named after its element, so `Page[*User]` and `Page[User]` can't both be used: a pointer field is optional, so their schemas differ) |
+| `Page[Pair[A, B]]` | `ABPairPage` (nested instances, recursively) |
+| `Page[string]` | `StringPage` (a basic type, capitalised) |
+
+A name already taken is an error naming both types, as for plain types. Type arguments that are neither named nor basic (`[]User`, `map[string]int`) are an error: declare a named type. A generic type can be a request type too, with path and query fields.
+
+#### Enums
+
+A named string type with constants is an enum:
+
+```go
+type UserSort string
+
+const (
+    UserSortName      UserSort = "name"
+    UserSortCreatedAt UserSort = "createdAt"
+)
+
+type ListUsersReq struct {
+    SortBy *UserSort  `query:"sortBy"`
+    Filter []UserFilter `query:"filter"`
+}
+```
+
+It gets a component schema named after the type, `{"type": "string", "enum": ["name", "createdAt"]}`, and every use refers to it: query and path parameters, JSON fields, and the items of a slice. The generated TypeScript client has it as a union, `type UserSort = "name" | "createdAt"`; the Go client as a named string type with constants.
+
+- The values are those of the package-level constants of exactly that type in its declaring package, exported or not, in declaration order. Constants with the same value count once, so an alias (`UserSortDefault = UserSortName`) is fine.
+- A named string type without constants stays a plain `string`, inline.
+- A type implementing `encoding.TextMarshaler` stays a plain `string`: its constants aren't necessarily what it encodes to.
+- Only string types: named integer types with constants stay `integer`.
+- A received value outside the enum is not rejected by schemaf: checking it stays with the app.
+- The schema name follows the rules for plain types: two types with the same name are an error.
+
+#### Upgrading: generic types and enums
+
+- In the TypeScript client, a field or parameter of a named string type with constants is now a union of its values instead of `string`: code passing an arbitrary string no longer compiles. Pass one of the values, or convert where the value comes from outside.
+- Generic response and request types no longer need a non-generic copy per endpoint.
 
 **What codegen does:**
 - Scans all structs in `go/api/` that implement the endpoint interface

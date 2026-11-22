@@ -6,6 +6,7 @@ package codegen
 import (
 	"errors"
 	"fmt"
+	"go/constant"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -34,7 +35,7 @@ const schemaRefPrefix = "#/components/schemas/"
 // package that doesn't type-check, a type without a JSON shape and two
 // types sharing a schema name are errors.
 func loadSchemas(dir string, endpoints []endpointInfo) (components map[string]any, sources []string, err error) {
-	b := &schemaBuilder{components: map[string]any{}, owners: map[string]*types.TypeName{}, used: map[*types.Package]bool{}}
+	b := &schemaBuilder{components: map[string]any{}, owners: map[string]string{}, used: map[*types.Package]bool{}}
 	hasTyped := slices.ContainsFunc(endpoints, func(ep endpointInfo) bool { return !ep.IsRaw })
 	if !hasTyped {
 		return b.components, nil, nil
@@ -215,8 +216,8 @@ func handleTypes(pkg *types.Package, structName string, isStream bool) (req, res
 // schemaBuilder turns Go types into OpenAPI schemas following encoding/json.
 type schemaBuilder struct {
 	components map[string]any
-	owners     map[string]*types.TypeName // schema name → the type it was built from
-	used       map[*types.Package]bool    // packages declaring a type a schema depends on
+	owners     map[string]string       // schema name → the type it was built from (types.TypeString, full package paths)
+	used       map[*types.Package]bool // packages declaring a type a schema depends on
 	errs       []error
 	// requestRoot is set while building an endpoint's request schema, until
 	// the request struct itself is reached: the one place a struct with
@@ -304,6 +305,9 @@ func (b *schemaBuilder) schema(t types.Type, where string) map[string]any {
 		if _, isStruct := tt.Underlying().(*types.Struct); isStruct {
 			return b.ref(tt, where)
 		}
+		if ref := b.enumRef(tt); ref != nil {
+			return ref
+		}
 		return b.schema(tt.Underlying(), where)
 	case *types.Basic:
 		switch {
@@ -387,25 +391,113 @@ func copySchema(s map[string]any) map[string]any {
 }
 
 // ref returns a $ref to the component schema of named struct type n,
-// building it on first use. The schema name is the type's name; two types
-// with the same name are an error naming both.
+// building it on first use. The schema name is the type's name, for an
+// instance of a generic type prefixed by the names of its type arguments
+// (see schemaName); two types with the same name are an error naming both.
 func (b *schemaBuilder) ref(n *types.Named, where string) map[string]any {
-	obj := n.Origin().Obj()
-	name := obj.Name()
-	if n.TypeArgs().Len() > 0 {
-		b.errorf("%s: generic type %s has no OpenAPI schema name — declare a non-generic type", where, n)
+	name, ok := b.schemaName(n, where)
+	if !ok {
 		return map[string]any{}
 	}
-	if owner, ok := b.owners[name]; ok {
-		if owner != obj {
-			b.errorf("OpenAPI schema name %q is used by both %s and %s — rename one of the types", name, qualifiedName(owner), qualifiedName(obj))
-		}
-		return map[string]any{"$ref": schemaRefPrefix + name}
+	if b.claim(name, types.TypeString(n, nil)) {
+		b.components[name] = nil // placeholder: recursive types refer to it
+		b.components[name] = b.object(n.Underlying().(*types.Struct), name)
 	}
-	b.owners[name] = obj
-	b.components[name] = nil // placeholder: recursive types refer to it
-	b.components[name] = b.object(n.Underlying().(*types.Struct), name)
 	return map[string]any{"$ref": schemaRefPrefix + name}
+}
+
+// claim records that schema name belongs to the type identified by id and
+// reports whether it is new. A name already owned by another type is an
+// error naming both.
+func (b *schemaBuilder) claim(name, id string) bool {
+	if owner, ok := b.owners[name]; ok {
+		if owner != id {
+			b.errorf("OpenAPI schema name %q is used by both %s and %s — rename one of the types", name, owner, id)
+		}
+		return false
+	}
+	b.owners[name] = id
+	return true
+}
+
+// schemaName returns the component schema name of named type n: its name,
+// for an instance of a generic type preceded by the names of its type
+// arguments (Page[User] → UserPage, Pair[A, B] → ABPair). A type argument is
+// named by its own schema name, through pointers (*User → User); a basic
+// type is capitalised (string → String). Any other type argument (slice,
+// map, …) has no name: an error.
+func (b *schemaBuilder) schemaName(n *types.Named, where string) (string, bool) {
+	name := n.Origin().Obj().Name()
+	args := n.TypeArgs()
+	if args.Len() == 0 {
+		return name, true
+	}
+	var prefix strings.Builder
+	for i := 0; i < args.Len(); i++ {
+		arg := types.Unalias(args.At(i))
+		for {
+			p, ok := arg.(*types.Pointer)
+			if !ok {
+				break
+			}
+			arg = types.Unalias(p.Elem())
+		}
+		switch at := arg.(type) {
+		case *types.Named:
+			argName, ok := b.schemaName(at, where)
+			if !ok {
+				return "", false
+			}
+			prefix.WriteString(argName)
+		case *types.Basic:
+			prefix.WriteString(strings.ToUpper(at.Name()[:1]) + at.Name()[1:])
+		default:
+			b.errorf("%s: generic type %s has the type argument %s, which has no name — use a named type as the type argument", where, types.TypeString(n, nil), types.TypeString(args.At(i), nil))
+			return "", false
+		}
+	}
+	return prefix.String() + name, true
+}
+
+// enumRef returns a $ref to the enum component of n, a named string type
+// with constants, building it on first use; nil if n is no such type (not
+// over a string, without constants, generic, or implementing
+// encoding.TextMarshaler, whose constants needn't be what it encodes to).
+func (b *schemaBuilder) enumRef(n *types.Named) map[string]any {
+	bt, ok := n.Underlying().(*types.Basic)
+	if !ok || bt.Info()&types.IsString == 0 || n.TypeArgs().Len() > 0 || n.Obj().Pkg() == nil || hasMethod(n, "MarshalText") {
+		return nil
+	}
+	values := enumValues(n)
+	if len(values) == 0 {
+		return nil
+	}
+	b.note(n)
+	name := n.Obj().Name()
+	if b.claim(name, qualifiedName(n.Obj())) {
+		b.components[name] = map[string]any{"type": "string", "enum": values}
+	}
+	return map[string]any{"$ref": schemaRefPrefix + name}
+}
+
+// enumValues returns the values of the package-level constants of exactly
+// type n in n's package, exported or not, in declaration order, each once.
+func enumValues(n *types.Named) []string {
+	scope := n.Obj().Pkg().Scope()
+	var consts []*types.Const
+	for _, name := range scope.Names() {
+		if c, ok := scope.Lookup(name).(*types.Const); ok && types.Identical(c.Type(), n) && c.Val().Kind() == constant.String {
+			consts = append(consts, c)
+		}
+	}
+	slices.SortFunc(consts, func(a, b *types.Const) int { return int(a.Pos()) - int(b.Pos()) })
+	var values []string
+	for _, c := range consts {
+		if v := constant.StringVal(c.Val()); !slices.Contains(values, v) {
+			values = append(values, v)
+		}
+	}
+	return values
 }
 
 func qualifiedName(obj *types.TypeName) string {
