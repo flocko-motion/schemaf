@@ -73,7 +73,7 @@ func runAPIGo() error {
 	// The config is an implementation detail: a temp file, gone after the run.
 	cfg, err := os.CreateTemp("", "schemaf-oapi-codegen-*.yaml")
 	if err != nil {
-		return fmt.Errorf("writing the oapi-codegen config: %w", err)
+		return fmt.Errorf("creating the oapi-codegen config: %w", err)
 	}
 	defer os.Remove(cfg.Name())
 	_, err = cfg.WriteString(oapiCodegenConfig)
