@@ -38,6 +38,7 @@ type App struct {
 	hasDB       bool
 	subcommands []cli.SubcommandProvider
 	services    []func(context.Context)
+	beforeServe []func(context.Context) error
 
 	identityProviders  []api.IdentityProvider
 	onLogin            api.OnLoginFunc
@@ -90,12 +91,28 @@ func (a *App) AddSubcommand(provider cli.SubcommandProvider) {
 }
 
 // AddService registers a background function that runs as a goroutine when
-// the server starts (after DB init and migrations). The context is cancelled
-// when the server stops, and the server waits for the function to return.
+// the server starts (after DB init, migrations and the OnBeforeServe hooks).
+// The context is cancelled when the server stops, and the server waits for
+// the function to return.
 // Services are not started for CLI subcommands.
 // Wire up in Wire (go/app/app.go): app.AddService(myworker.Run)
 func (a *App) AddService(fn func(context.Context)) {
 	a.services = append(a.services, fn)
+}
+
+// OnBeforeServe registers a hook that runs on every server start, after the
+// database is opened and migrated and auth is initialised, and before the
+// services start and the server takes requests. Hooks run in registration
+// order; the first error aborts the start (Run and Start return it as
+// "before-serve hook: …") and nothing is served. It runs for the server
+// command and schemaftest.Start, never for codegen or subcommands. See
+// EXTEND.md, "Before-serve hook". Wire up in Wire (go/app/app.go):
+//
+//	app.OnBeforeServe(func(ctx context.Context) error {
+//	    return core.Bootstrap(ctx)
+//	})
+func (a *App) OnBeforeServe(fn func(ctx context.Context) error) {
+	a.beforeServe = append(a.beforeServe, fn)
 }
 
 // AddIdentityProvider registers a custom identity provider. Its login route is
