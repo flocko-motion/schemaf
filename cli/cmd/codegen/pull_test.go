@@ -681,9 +681,13 @@ const (
 	fakeLoginctl  = "#!/bin/sh\ncat \"$FAKE_STATE/linger\" 2>/dev/null || echo yes\n"
 )
 
+// fakeSystemdRun runs its command (after the options), unless
+// $FAKE_STATE/unit-no-runtime exists: then the runtime doesn't answer there.
+const fakeSystemdRun = "#!/bin/bash\necho \"systemd-run $*\" >> \"$FAKE_STATE/calls\"\n[ ! -f \"$FAKE_STATE/unit-no-runtime\" ] || exit 1\nwhile [ \"${1#--}\" != \"$1\" ]; do shift; done\nexec \"$@\"\n"
+
 func (h *pullHost) withSystemd() {
 	h.t.Helper()
-	for name, body := range map[string]string{"systemctl": fakeSystemctl, "loginctl": fakeLoginctl} {
+	for name, body := range map[string]string{"systemctl": fakeSystemctl, "loginctl": fakeLoginctl, "systemd-run": fakeSystemdRun} {
 		if err := os.WriteFile(filepath.Join(h.u.bin, name), []byte(body), 0755); err != nil {
 			h.t.Fatal(err)
 		}
@@ -716,6 +720,19 @@ func TestUpdaterEnableDisable(t *testing.T) {
 			t.Fatal("enable without systemd succeeded")
 		}
 		mustContain(t, "stderr", stderr, "systemctl --user does not answer")
+	})
+
+	t.Run("refused when the runtime doesn't answer inside the user's systemd", func(t *testing.T) {
+		h.touch("unit-no-runtime")
+		defer h.rm("unit-no-runtime")
+		_, stderr, code := h.sh("updater", "enable")
+		if code == 0 {
+			t.Fatal("enable succeeded although its units can't reach the runtime")
+		}
+		mustContain(t, "stderr", stderr, "podman doesn't answer inside", "where the updater's units run")
+		if _, err := os.Stat(filepath.Join(units, "schemaf-myapp-request.path")); err == nil {
+			t.Error("units were written anyway")
+		}
 	})
 
 	t.Run("enable writes and starts the units", func(t *testing.T) {

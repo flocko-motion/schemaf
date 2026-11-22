@@ -249,7 +249,10 @@ GO
   # exits non-zero on the foreign 0.5.0 and 0.7.0, but writes the list.
   for i in $(seq 1 180); do
     as_runner jq -e '.versions | map(.version) | index("0.8.0")' "$RUN_HOME/.${NAME}/updates/available.json" >/dev/null 2>&1 && break
-    [ "$i" -lt 180 ] || fail "pull flow: the updater's releases run did not list 0.8.0 in available.json"
+    if [ "$i" -ge 180 ]; then
+      as_user "$RUN_USER" journalctl --user -u "schemaf-${NAME}-releases.service" -n 60 --no-pager >&2 2>/dev/null || true
+      fail "pull flow: the updater's releases run did not list 0.8.0 in available.json (its journal above)"
+    fi
     sleep 1
   done
   rt_runner exec "${NAME}-backend" grep -q '"0.8.0"' /schemaf/updates/available.json \

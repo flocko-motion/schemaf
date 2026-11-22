@@ -1505,6 +1505,12 @@ _schemaf_updater_enable() {
   linger=$(loginctl show-user "$user" --property=Linger --value 2>/dev/null || true)
   [ "$linger" = yes ] || _die "lingering is off for $user, so the updater would stop when $user logs out — as root: loginctl enable-linger $user"
   [ -x "$script" ] || _die "$script is missing — the units call it (install a release first, or copy the repository's schemaf.sh there)"
+  # The units run in the user's systemd manager, which keeps the groups and
+  # environment it started with: the runtime must answer there, not only here.
+  if ! systemd-run --user --wait --quiet --collect --setenv=SCHEMAF_RUNTIME="${SCHEMAF_RUNTIME:-podman}" \
+      "${SCHEMAF_RUNTIME:-podman}" info >/dev/null 2>&1; then
+    _die "${SCHEMAF_RUNTIME:-podman} doesn't answer inside $user's systemd, where the updater's units run$([ "${SCHEMAF_RUNTIME:-podman}" = docker ] && echo " — if $user joined the docker group after its systemd started, restart it (as root): systemctl restart user@$(id -u).service") (try: systemd-run --user --wait ${SCHEMAF_RUNTIME:-podman} info)"
+  fi
   dir=$(_schemaf_unit_dir) prefix=$(_schemaf_unit_prefix)
   mkdir -p "$dir"
   _schemaf_updates_files || _die "could not create $UPDATES_DIR"

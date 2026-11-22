@@ -65,11 +65,13 @@ runs:
           # rootless podman needs subordinate IDs and a runtime dir (lingering)
           grep -q "^$u:" /etc/subuid || { echo "::error::useradd gave $u no /etc/subuid range"; exit 1; }
           grep -q "^$u:" /etc/subgid || { echo "::error::useradd gave $u no /etc/subgid range"; exit 1; }
+          # under Docker both users share the machine's daemon. Before lingering:
+          # the user's systemd manager keeps the groups it started with, so its
+          # units (the updater) reach Docker only if the user is in the group first.
+          if [ "$SCHEMAF_RUNTIME" = docker ]; then sudo usermod -aG docker "$u"; fi
           sudo loginctl enable-linger "$u"
           for _ in $(seq 1 30); do [ -d "/run/user/$uid" ] && break; sleep 1; done
           [ -d "/run/user/$uid" ] || { echo "::error::/run/user/$uid did not appear after enable-linger $u"; exit 1; }
-          # under Docker both users share the machine's daemon
-          if [ "$SCHEMAF_RUNTIME" = docker ]; then sudo usermod -aG docker "$u"; fi
         done
 
     # podman compose hands off to docker-compose, which talks to podman
