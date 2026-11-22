@@ -477,3 +477,47 @@ func TestReleaseFailsLoudlyWhenTheExampleReleaseFails(t *testing.T) {
 		t.Errorf("the tag must stay: %q", s.remoteTags())
 	}
 }
+
+// awaitRunGh fakes gh run view for e2e/gh-runs.sh: the first $NOT_FOUND calls
+// answer 404 (a run just created isn't visible yet), then the run is in
+// progress for $RUNNING status polls, then completed with $CONCLUSION.
+const awaitRunGh = `#!/usr/bin/env bash
+S="$STUB_STATE"; n=$(( $(cat "$S/n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$S/n"
+if [ "$n" -le "${NOT_FOUND:-0}" ]; then echo "failed to get run: HTTP 404: Not Found" >&2; exit 1; fi
+case "$*" in
+  *status,conclusion*)
+    if [ "$n" -le $(( ${NOT_FOUND:-0} + 1 + ${RUNNING:-0} )) ]; then echo "in_progress "; else echo "completed $CONCLUSION"; fi ;;
+  *) echo '{"status":"queued"}' ;;
+esac
+`
+
+// TestAwaitRun: the example release's post-release check decides by the
+// run's conclusion, and a run that 404s right after its dispatch is waited
+// for, not reported as failed (v1.22.0's false alarm).
+func TestAwaitRun(t *testing.T) {
+	bin, state := t.TempDir(), t.TempDir()
+	for name, body := range map[string]string{"gh": awaitRunGh, "sleep": "#!/usr/bin/env bash\nexit 0\n"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(env ...string) (string, string, error) {
+		_ = os.Remove(filepath.Join(state, "n"))
+		cmd := exec.Command("bash", "-c", `source "$1"; await_run acme/app 42`, "_", "../e2e/gh-runs.sh")
+		cmd.Env = append(os.Environ(), append([]string{"PATH=" + bin + ":" + os.Getenv("PATH"), "STUB_STATE=" + state}, env...)...)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		return strings.TrimSpace(stdout.String()), stderr.String(), err
+	}
+
+	if out, stderr, err := run("NOT_FOUND=3", "RUNNING=4", "CONCLUSION=success"); err != nil || out != "success" {
+		t.Errorf("a run that 404s at first, then succeeds: %q, %v\n%s", out, err, stderr)
+	}
+	if out, _, err := run("RUNNING=1", "CONCLUSION=failure"); err != nil || out != "failure" {
+		t.Errorf("a failed run: %q, %v (want it printed, the caller decides)", out, err)
+	}
+	if out, stderr, err := run("NOT_FOUND=1000", "CONCLUSION=success"); err == nil || !strings.Contains(stderr, "did not become visible within 2 minutes") {
+		t.Errorf("a run that never appears: %q, %v\n%s", out, err, stderr)
+	}
+}
