@@ -687,7 +687,7 @@ type ListUsersReq struct {
 }
 ```
 
-It gets a component schema named after the type, `{"type": "string", "enum": ["name", "createdAt"]}`, and every use refers to it: query and path parameters, JSON fields, and the items of a slice. The generated TypeScript client has it as a union, `type UserSort = "name" | "createdAt"`; the Go client as a named string type with constants.
+It gets a component schema named after the type, `{"type": "string", "enum": ["name", "createdAt"]}`, and every use refers to it: query and path parameters, JSON fields, and the items of a slice. The generated TypeScript client has it as a union, `type UserSort = "name" | "createdAt"`; the Go client as a named string type whose constants carry the type's name, `UserSortName` and `UserSortCreatedAt`, so a value can never collide with another type or with another enum's value.
 
 - The values are those of the package-level constants of exactly that type in its declaring package, exported or not, in declaration order. Constants with the same value count once, so an alias (`UserSortDefault = UserSortName`) is fine.
 - A named string type without constants stays a plain `string`, inline.
@@ -700,6 +700,10 @@ It gets a component schema named after the type, `{"type": "string", "enum": ["n
 
 - In the TypeScript client, a field or parameter of a named string type with constants is now a union of its values instead of `string`: code passing an arbitrary string no longer compiles. Pass one of the values, or convert where the value comes from outside.
 - Generic response and request types no longer need a non-generic copy per endpoint.
+
+#### Upgrading: Go client enum constants
+
+- In the generated Go client (`go/apiclient/client.gen.go`), enum constants are named `<Type><Value>`, e.g. `TierMedium`, instead of the bare value (`Medium`) as in v1.21.0, where a value equal to a type's name broke the build. Rename the uses of the bare names. The TypeScript client is unchanged.
 
 **What codegen does:**
 - Scans all structs in `go/api/` that implement the endpoint interface

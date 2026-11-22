@@ -215,7 +215,70 @@ export async function testParams(baseUrl: string) {
   if (badPath.status !== 400) throw new Error(`GET /api/echo/abc: expected 400, got ${badPath.status}`)
 }
 TS
+
+# #98: enum values that equal another type's name ("medium" vs type Medium)
+# or another enum's value ("medium" in Tier and Quality). The generated Go
+# client must name its constants <Type><Value>, or it doesn't compile.
+step "add enums whose values collide with a type name and with each other"
+cat > go/api/enums.go <<'GO'
+package api
+
+import (
+	"context"
+
+	schemafapi "github.com/flocko-motion/schemaf/api"
+)
+
+type Tier string
+
+const (
+	TierLow    Tier = "low"
+	TierMedium Tier = "medium"
+	TierHigh   Tier = "high"
+)
+
+type Medium string
+
+const (
+	MediumText  Medium = "text"
+	MediumAudio Medium = "audio"
+)
+
+type Quality string
+
+const (
+	QualityMedium Quality = "medium"
+	QualityBest   Quality = "best"
+)
+
+// EchoEnumsEndpoint answers with the enums it received.
+type EchoEnumsEndpoint struct{}
+
+func (EchoEnumsEndpoint) Method() string             { return "GET" }
+func (EchoEnumsEndpoint) Path() string               { return "/api/enums" }
+func (EchoEnumsEndpoint) Auth() schemafapi.AuthLevel { return schemafapi.AuthNone }
+func (EchoEnumsEndpoint) Handle(ctx context.Context, req EchoEnumsReq) (EchoEnumsResp, error) {
+	return EchoEnumsResp{Tier: req.Tier, Medium: MediumText, Quality: QualityMedium}, nil
+}
+
+type EchoEnumsReq struct {
+	Tier Tier `query:"tier"`
+}
+
+type EchoEnumsResp struct {
+	Tier    Tier    `json:"tier"`
+	Medium  Medium  `json:"medium"`
+	Quality Quality `json:"quality"`
+}
+GO
 ./schemaf.sh codegen
+
+step "the generated Go client prefixes enum constants and compiles"
+for c in 'TierMedium +Tier += "medium"' 'MediumText +Medium += "text"' 'QualityMedium +Quality += "medium"'; do
+  grep -Eq "^[[:space:]]*${c}\$" go/apiclient/client.gen.go || { echo "go/apiclient/client.gen.go lacks: ${c}" >&2; exit 1; }
+done
+( cd go && go build ./... )
+echo "    ✓ TierMedium, MediumText, QualityMedium; go build ./... passes"
 
 step "run the tests under ${RUNTIME} (each instance on its own database, no postgres in compose)"
 ./schemaf.sh test

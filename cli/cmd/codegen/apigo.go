@@ -27,6 +27,21 @@ const (
 	oapiRuntimeVersion = "v1.8.0" // go 1.24.0 (v1.9.0 needs go 1.26.0)
 )
 
+// oapiCodegenConfig is the oapi-codegen config codegen runs with (paths
+// relative to go/). always-prefix-enum-values names enum constants
+// <Type><Value> (TierMedium, not Medium): a bare value can collide with a type
+// or another enum's value and break the build (#98). It exists only in the
+// config file, not as a flag. oapi-codegen rejects unknown keys, so a typo
+// here fails codegen loudly.
+const oapiCodegenConfig = `package: apiclient
+generate:
+  models: true
+  client: true
+output: apiclient/client.gen.go
+compatibility:
+  always-prefix-enum-values: true
+`
+
 // oapiGetArgs are the `go get` arguments for the pinned generator and runtime.
 func oapiGetArgs() (codegen, runtime []string) {
 	return []string{"get", oapiCodegenPkg + "@" + oapiCodegenVersion},
@@ -55,12 +70,21 @@ func runAPIGo() error {
 		return fmt.Errorf("go get oapi-codegen: %w", err)
 	}
 
-	cmd := exec.Command("go", "run", oapiCodegenPkg,
-		"--package", "apiclient",
-		"--generate", "types,client",
-		"-o", "apiclient/client.gen.go",
-		"../gen/openapi.json",
-	)
+	// The config is an implementation detail: a temp file, gone after the run.
+	cfg, err := os.CreateTemp("", "schemaf-oapi-codegen-*.yaml")
+	if err != nil {
+		return fmt.Errorf("writing the oapi-codegen config: %w", err)
+	}
+	defer os.Remove(cfg.Name())
+	_, err = cfg.WriteString(oapiCodegenConfig)
+	if cerr := cfg.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("writing the oapi-codegen config: %w", err)
+	}
+
+	cmd := exec.Command("go", "run", oapiCodegenPkg, "-config", cfg.Name(), "../gen/openapi.json")
 	cmd.Dir = "go"
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
