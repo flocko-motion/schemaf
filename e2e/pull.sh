@@ -188,8 +188,10 @@ GO
   [ "$(number)" = 42 ] || fail "pull flow: after the rollback the number is $(number), want 42 (the backup)"
   [ "$(run_status | jq -r '.running + " " + .install.state')" = "0.2.0 rolled-back" ] \
     || fail "pull flow: status after the rollback: $(run_status)"
-  as_runner bash -c 'grep -q "deliberately broken" "$1"' _ "$(run_status | jq -r .install.log)" \
-    || fail "pull flow: the broken version's logs were not saved"
+  # The broken version's backend logs, saved before it was stopped (its
+  # failing health check is in /api/health's answer, not in the log).
+  as_runner bash -c 'grep -q "server mode" "$1"' _ "$(run_status | jq -r .install.log)" \
+    || fail "pull flow: the broken version's backend logs were not saved ($(run_status | jq -r .install.log))"
 
   say "pull: a wrong signer"
   run_env "flocko-motion/not-the-signer"
