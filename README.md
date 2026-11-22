@@ -82,6 +82,7 @@ schemaf is **batteries-included**. These are built-in, not optional:
   - Binds `/api/*` for your handlers + framework endpoints
   - Binds `/` for frontend (proxy in dev, embed in production)
   - Single exposed port (default 8000, configurable via schemaf.toml)
+- **Before-serve hook**: `app.OnBeforeServe` runs after migrations and before the server takes requests (seed data, first admin, ...), in production and in tests alike (see [Before-serve hook](EXTEND.md#before-serve-hook-onbeforeserve))
 - **Development mode**: opt-in, on only for `./schemaf.sh dev` and the other commands that use the dev env file; your app reads it with `api.DevMode()` and `/status` reports it (see [Development mode](EXTEND.md#development-mode))
 - **Authentication**: JWT-based auth, fully managed by the framework
   - Accepted from an HttpOnly session cookie or a Bearer token in the `Authorization` header

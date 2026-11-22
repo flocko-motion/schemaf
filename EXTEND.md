@@ -29,6 +29,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
   - [Applying migrations to another database](#applying-migrations-to-another-database)
   - [Queries](#queries)
 - [CLI Subcommands](#cli-subcommands)
+  - [Before-serve hook: `OnBeforeServe`](#before-serve-hook-onbeforeserve)
 - [Code Generation](#code-generation)
   - [Empty inputs](#empty-inputs)
 - [Testing](#testing)
@@ -62,6 +63,7 @@ func Wire(app *schemaf.App) {
     // optional: app.OnRequest(...) — see Per-request hook
     // optional: app.CanSeeErrorDetails(...) — see Error details
     // optional: app.SetUpdatesAuth(...) — see Updates
+    // optional: app.OnBeforeServe(...) — see Before-serve hook
     // optional: app.AddService(...) — see Services vs. subcommands
 }
 ```
@@ -1746,6 +1748,22 @@ Providers receive a `*cli.Context` with access to config, state, and HTTP utilit
 `app.AddService()` providers are **only started** when running `./myapp server` — codegen and subcommands never start services.
 
 A service gets a context that is cancelled when the server stops. On SIGINT or SIGTERM (Ctrl-C in `./schemaf.sh dev`, `docker stop`/`podman stop` in production) the server shuts down gracefully: it cancels the services' context, stops accepting connections and waits for in-flight requests (`http.Server.Shutdown`), waits for every service to return, then closes the database pool. All of that has 8 seconds, inside the 10 seconds a container runtime gives a container to stop. A service must return once its context is done; one that doesn't makes the shutdown fail loudly instead of hanging.
+
+### Before-serve hook: `OnBeforeServe`
+
+Work that must finish before the app takes requests (seeding a development database, promoting a configured admin, initialising telemetry) goes into an `OnBeforeServe` hook in `Wire`:
+
+```go
+// go/app/app.go
+app.OnBeforeServe(func(ctx context.Context) error {
+    // the database is open and migrated; nothing is served yet
+    return core.Bootstrap(ctx)
+})
+```
+
+- **Order**: database opened and migrated, auth initialised → `OnBeforeServe` hooks, in registration order → services → serving. `api.DevMode()` is already set, so the hook can branch on it.
+- **Refuse**: a returned error aborts the start: the later hooks don't run, no service starts and nothing is served. `Run` (the server command) and `Start` return the error as `before-serve hook: …`.
+- **Where it runs**: on every start of the server, `./myapp server` as well as [`schemaftest.Start`](#integration-tests-schemaftest), so tests see the same ready state as production. Codegen and subcommands never run it.
 
 ## Code Generation
 

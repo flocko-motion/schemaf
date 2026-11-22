@@ -46,10 +46,11 @@ type Server struct {
 // Start starts the app's server: it connects to opts.DSN and runs the
 // migrations, loads the signing key (generating it on first boot), starts the
 // session store and its cleanup, activates the identity providers and the
-// OnLogin and OnRequest hooks, starts the AddService services and serves on
-// opts.Listener. A wrong OnRequest registration fails it before anything
-// starts. The services and the session cleanup run on a context derived from
-// ctx, which Stop cancels. schemaftest marks ctx as isolated (internal/isolation):
+// OnLogin and OnRequest hooks, runs the OnBeforeServe hooks, starts the
+// AddService services and serves on opts.Listener. A failing OnBeforeServe
+// hook fails it before any service starts. A wrong OnRequest registration
+// fails it before anything starts. The services and the session cleanup run
+// on a context derived from ctx, which Stop cancels. schemaftest marks ctx as isolated (internal/isolation):
 // no OIDC environment providers, no backup scheduler, no frontend dev proxy.
 //
 // The server's state is process-wide, so only one server runs at a time: a
@@ -117,6 +118,12 @@ func (a *App) start(ctx context.Context, s *Server, opts ServerOptions) error {
 			names[i] = p.Name()
 		}
 		slog.Info("identity providers active", "providers", names)
+	}
+
+	for _, hook := range a.beforeServe {
+		if err := hook(ctx); err != nil {
+			return fmt.Errorf("before-serve hook: %w", err)
+		}
 	}
 
 	// Auto-start the backup scheduler if SFTP is configured.
