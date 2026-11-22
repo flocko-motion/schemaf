@@ -166,7 +166,7 @@ GO
   git add -A
   git -c user.name=e2e -c user.email=e2e@example.invalid -c commit.gpgsign=false commit -q -m "e2e: 0.3.0, broken"
   pull_release 0.3.0
-  git -c user.name=e2e -c user.email=e2e@example.invalid -c commit.gpgsign=false revert -q --no-edit HEAD
+  git -c user.name=e2e -c user.email=e2e@example.invalid -c commit.gpgsign=false revert --no-edit HEAD >/dev/null
 
   out=$(as_runner "$RUN_SH" releases) || fail "pull flow: releases failed"
   [ "$out" = "0.2.0"$'\n'"0.3.0" ] || fail "pull flow: releases printed '$out', want 0.2.0 and 0.3.0 (no prerelease on the stable channel)"
