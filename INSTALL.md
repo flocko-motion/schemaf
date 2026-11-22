@@ -341,7 +341,9 @@ Nothing is fixed up during the build. A lockfile that is missing or out of date 
 | `frontend/package-lock.json` out of sync with `frontend/package.json` | the frontend stage of the image build | `npm install` in `frontend/`, commit `frontend/package-lock.json` |
 | `go/go.mod` or `go/go.sum` out of date (a missing `require` or checksum) | the Go stage of the image build | `go mod tidy` in `go/`, commit `go/go.mod` and `go/go.sum` |
 
-`init` runs both installs, so a fresh project has both files; commit them with the rest.
+`init` runs both installs (`npm install`, and `go mod tidy` after codegen), so a fresh project has both files; commit them with the rest. `./schemaf.sh upgrade` runs `go mod tidy` after codegen too.
+
+**`go.work` hides a stale `go.sum` locally.** On your dev host, `go` runs in workspace mode (the project's `go.work`) and keeps missing checksums in `go.work.sum`, so `go build` and `./schemaf.sh test` pass while `go/go.sum` lacks entries. The image build sees only `go/`, without `go.work`. After adding a dependency, run `go mod tidy` in `go/` and commit `go/go.sum`; `GOWORK=off go build ./...` in `go/` shows what the image build will see.
 
 ### The artifact: `<name>-<tag>.run`
 

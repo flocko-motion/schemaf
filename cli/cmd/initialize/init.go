@@ -126,6 +126,19 @@ func runInit(name string) error {
 		return fmt.Errorf("writing App.tsx: %w", err)
 	}
 
+	// Complete go.mod and go.sum for what the code (and the generated code)
+	// imports: the image build compiles with -mod=readonly from go/ alone
+	// (INSTALL.md › Lockfiles). In module mode, so go.work's go.work.sum
+	// can't stand in for go.sum.
+	cli.Info("Tidying the Go module...")
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = goDir
+	tidy.Env = append(os.Environ(), "GOWORK=off")
+	tidy.Stdout, tidy.Stderr = os.Stdout, os.Stderr
+	if err := tidy.Run(); err != nil {
+		return fmt.Errorf("go mod tidy: %w", err)
+	}
+
 	cli.Success("Project %q created!", name)
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "  cd %s\n", name)

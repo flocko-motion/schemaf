@@ -1037,7 +1037,13 @@ case "$CMD" in
       echo "Synced framework docs → docs/schemaf/"
     fi
     echo "Running codegen..."
-    exec go run github.com/flocko-motion/schemaf/cmd/schemaf codegen
+    go run github.com/flocko-motion/schemaf/cmd/schemaf codegen
+    # go.mod and go.sum complete for what the code imports: build compiles
+    # with -mod=readonly from go/ alone (INSTALL.md › Lockfiles). Module mode,
+    # so go.work.sum can't stand in for go.sum.
+    echo "Tidying the Go module..."
+    (cd go && GOWORK=off go mod tidy)
+    echo "Commit go/go.mod and go/go.sum with the generated files."
     ;;
   *)
     SCHEMAF_CWD="$ORIG_PWD" exec go run "${PROJECT_ROOT}/go" "$CMD" "$@"

@@ -129,6 +129,10 @@ if grep -q postgres compose.test.gen.yml; then
 fi
 echo "    ✓ main.go only wires through app.Wire; the test stack has no postgres"
 
+step "lockfiles: go.mod and go.sum are complete without go.work (the image build has only go/)"
+( cd go && GOWORK=off go mod tidy -diff ) || { echo "init left go/go.mod or go/go.sum untidy (diff above) — the image build would fail" >&2; exit 1; }
+echo "    ✓ GOWORK=off go mod tidy -diff: nothing to change"
+
 step "compile"
 ( cd go && go build ./... )
 
