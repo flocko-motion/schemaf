@@ -105,6 +105,7 @@ func (a *App) start(ctx context.Context, s *Server, opts ServerOptions) error {
 	api.SetOnLogin(a.onLogin)
 	api.SetOnRequest(a.onRequest)
 	api.SetCanSeeErrorDetails(a.canSeeErrorDetails)
+	api.SetUpdatesAuth(a.updatesAuth)
 	if api.DevMode() {
 		slog.Info("server mode", "mode", "development")
 	} else {

@@ -117,7 +117,7 @@ cd "$DIR"
 
 # --- it should have produced a complete, configured project ---
 step "verify scaffold"
-for f in schemaf.toml schemaf.sh go/main.go go/app/app.go go/app/constants.gen.go go/app/frontend.gen.go go/tests/health_test.go; do
+for f in schemaf.toml schemaf.sh go/go.sum frontend/package-lock.json .github/workflows/release.gen.yml go/main.go go/app/app.go go/app/constants.gen.go go/app/frontend.gen.go go/tests/health_test.go; do
   [ -f "$f" ] || { echo "expected $f to exist after init" >&2; exit 1; }
   echo "    ✓ $f"
 done
@@ -128,6 +128,10 @@ if grep -q postgres compose.test.gen.yml; then
   echo "compose.test.gen.yml still has postgres; tests get their databases from schemaftest" >&2; exit 1
 fi
 echo "    ✓ main.go only wires through app.Wire; the test stack has no postgres"
+
+step "lockfiles: go.mod and go.sum are complete without go.work (the image build has only go/)"
+( cd go && GOWORK=off go mod tidy -diff ) || { echo "init left go/go.mod or go/go.sum untidy (diff above) — the image build would fail" >&2; exit 1; }
+echo "    ✓ GOWORK=off go mod tidy -diff: nothing to change"
 
 step "compile"
 ( cd go && go build ./... )

@@ -120,12 +120,20 @@ func newSandbox(t *testing.T) *sandbox {
 		s.copy(f, filepath.Join("scripts", f))
 	}
 	s.write(".gitignore", "")
+	s.write("e2e/example-release.sh", exampleStub)
 	s.git(s.work, "add", "-A")
 	s.git(s.work, "commit", "-q", "-m", "init")
 	s.git(s.work, "remote", "add", "origin", s.origin)
 	s.git(s.work, "push", "-q", "-u", "origin", "main")
 	return s
 }
+
+// exampleStub stands in for e2e/example-release.sh: it records its arguments
+// in $GH_STATE/example and fails when EXAMPLE_FAIL is set.
+const exampleStub = `#!/usr/bin/env bash
+echo "$*" > "$GH_STATE/example"
+[ -z "${EXAMPLE_FAIL:-}" ] || { echo "example: release run failed" >&2; exit 1; }
+`
 
 func (s *sandbox) copy(name, dst string) {
 	s.t.Helper()
@@ -355,6 +363,9 @@ func TestReleaseFromBranchMergesThenTags(t *testing.T) {
 	if !s.exists("ghstate/release") {
 		t.Error("no GitHub release was created")
 	}
+	if b, _ := os.ReadFile(filepath.Join(s.root, "ghstate/example")); strings.TrimSpace(string(b)) != "v1.3.0" {
+		t.Errorf("the example release ran with %q, want v1.3.0", b)
+	}
 	if b, _ := os.ReadFile(filepath.Join(s.root, "go.log")); strings.Count(string(b), "go test") != 1 {
 		t.Errorf("the fast checks should run once (in merge.sh), go log:\n%s", b)
 	}
@@ -367,8 +378,8 @@ func TestReleaseFromBranchRedGateTagsNothing(t *testing.T) {
 	if ok || !strings.Contains(out, "nothing tagged") {
 		t.Fatalf("release.sh must stop when the merge fails:\n%s", out)
 	}
-	if s.exists("ghstate/merged") || s.exists("ghstate/release") || s.remoteTags() != "" {
-		t.Errorf("merged, released or tagged on a red gate: tags %q\n%s", s.remoteTags(), out)
+	if s.exists("ghstate/merged") || s.exists("ghstate/release") || s.exists("ghstate/example") || s.remoteTags() != "" {
+		t.Errorf("merged, released, example-released or tagged on a red gate: tags %q\n%s", s.remoteTags(), out)
 	}
 }
 
@@ -446,5 +457,23 @@ func TestReleaseOnLinuxTagsOriginMain(t *testing.T) {
 	out, ok = s.run("scripts/release.sh", nil, "patch")
 	if ok || !strings.Contains(out, "nothing to release") {
 		t.Fatalf("release.sh must refuse with nothing since the last tag:\n%s", out)
+	}
+}
+
+// TestReleaseFailsLoudlyWhenTheExampleReleaseFails: the example release needs
+// the tag, so the tag stays; release.sh says so and exits non-zero.
+func TestReleaseFailsLoudlyWhenTheExampleReleaseFails(t *testing.T) {
+	s := newSandbox(t)
+	s.tagOriginMain("v1.2.3")
+	s.featureBranch()
+	out, ok := s.run("scripts/release.sh", []string{"GH_SCENARIO=green", "FAKE_UNAME=Linux", "EXAMPLE_FAIL=1"}, "patch")
+	if ok {
+		t.Fatalf("release.sh succeeded although the example release failed:\n%s", out)
+	}
+	if !strings.Contains(out, "release: v1.2.4 is released, but its example release failed (see above) — fix it and release a patch") {
+		t.Errorf("no clear message:\n%s", out)
+	}
+	if !strings.Contains(s.remoteTags(), "v1.2.4") {
+		t.Errorf("the tag must stay: %q", s.remoteTags())
 	}
 }

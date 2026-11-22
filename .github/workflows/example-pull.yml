@@ -1,0 +1,46 @@
+# The example pull (EXTEND.md › The example release): a new Linux box pulls the
+# real GitHub releases of flocko-motion/schemaf-example — it installs v-1, then
+# upgrades to the given version — under both runtimes. Started and watched by
+# e2e/example-release.sh (make release); by hand:
+#   gh workflow run example-pull.yml --ref <schemaf branch or tag> -f version=<X.Y.Z>
+# The script is the single source of truth; this workflow provisions the
+# runner (.github/actions/runner-setup) and calls it.
+name: example-pull
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The example release to upgrade to (X.Y.Z or X.Y.Z-<pre>)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: example-pull
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    name: ${{ matrix.runtime }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [podman, docker]
+    env:
+      SCHEMAF_RUNTIME: ${{ matrix.runtime }}
+      E2E_RUN_USER: schemaf-run
+      EXAMPLE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Compose provider, the run user, podman API sockets.
+      - uses: ./.github/actions/runner-setup
+
+      - name: a new box installs v-1, then upgrades to the version
+        run: e2e/example-pull.sh "$EXAMPLE_VERSION"

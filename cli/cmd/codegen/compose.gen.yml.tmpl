@@ -45,6 +45,7 @@ services:
       SCHEMAF_DEV: "" # production; beats a SCHEMAF_DEV in env_file
       DB_PASS: ${DB_PASS:-dev}
       PORT: "{{.Port}}"
+      SCHEMAF_IMAGE: ${SCHEMAF_IMAGE} # api.Updates: the running version
       BACKUP_SSH_HOST: ${BACKUP_SSH_HOST:-}
       BACKUP_SSH_PORT: ${BACKUP_SSH_PORT:-22}
       BACKUP_SSH_USER: ${BACKUP_SSH_USER:-}
@@ -54,6 +55,11 @@ services:
       BACKUP_HOUR: ${BACKUP_HOUR:-3}
     ports:
       - "{{.Port}}:{{.Port}}"
+    # The run host's updates (EXTEND.md › Updates): read-only, and the request
+    # file writable. schemaf.sh creates them before it starts the stack.
+    volumes:
+      - ${HOME}/.{{.Name}}/updates:/schemaf/updates:ro
+      - ${HOME}/.{{.Name}}/updates/request:/schemaf/updates/request
     secrets:
       - backup_key
     networks:

@@ -20,6 +20,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
   - [Activating Auth0](#activating-auth0)
   - [Sessions](#sessions)
   - [Per-request hook: `OnRequest`](#per-request-hook-onrequest)
+- [Updates](#updates) — the app shows new releases and requests an upgrade (`/api/updates`)
 - [Stream Endpoints](#stream-endpoints)
 - [Raw Endpoints](#raw-endpoints)
 - [Database](#database)
@@ -60,6 +61,7 @@ func Wire(app *schemaf.App) {
     // optional: app.OnLogin(...), app.AddIdentityProvider(...) — see Authentication
     // optional: app.OnRequest(...) — see Per-request hook
     // optional: app.CanSeeErrorDetails(...) — see Error details
+    // optional: app.SetUpdatesAuth(...) — see Updates
     // optional: app.AddService(...) — see Services vs. subcommands
 }
 ```
@@ -148,7 +150,7 @@ app.SetFrontend(FrontendFS())
 
 `./schemaf.sh codegen` does two things for the frontend:
 
-1. **Scaffold** — if `frontend/` doesn't exist, creates a Vite + TypeScript setup with React (the default) and runs `npm install`
+1. **Scaffold** — if `frontend/` doesn't exist, creates a Vite + TypeScript setup with React (the default) and runs `npm install`, which writes `frontend/package-lock.json`. Commit it: `build` installs exactly what it pins (see [Lockfiles](INSTALL.md#lockfiles))
 2. **Generate** — creates `go/app/frontend.gen.go` (embeds `frontend/dist/` into the Go binary), `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec) and `frontend/src/api/generated/config.gen.ts` ([runtime config](#runtime-config-public_))
 
 If `frontend/` exists, codegen validates it: the required files must be present, and `vite.config.ts`, `index.html` and the entry file (`src/main.tsx` or `src/main.ts`) must contain the [runtime config](#runtime-config-public_) setup. If something is missing, codegen stops and prints what to add.
@@ -175,7 +177,7 @@ In [development mode](#development-mode), the Go server reverse-proxies all non-
 
 ### Production
 
-The generated `Dockerfile.gen` (built by `./schemaf.sh build`, see [Deployment](INSTALL.md#deployment)) includes a Node build stage that compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
+The generated `Dockerfile.gen` (built by `./schemaf.sh build`, see [Deployment](INSTALL.md#deployment)) includes a Node build stage that installs exactly what `frontend/package-lock.json` pins (`npm ci`) and compiles the frontend, then embeds the output into the Go binary via `//go:embed`. No separate frontend container needed.
 
 ### Runtime config: `PUBLIC_*`
 
@@ -254,9 +256,10 @@ The framework provides these endpoints out of the box:
 - `/api/user/me` — current user info (requires auth)
 - `/api/auth/{provider}/login`, `/api/auth/logout`, `/api/auth/refresh` — login and sessions (see [Authentication](#authentication))
 - `/api/errors/{id}` — the details of a 5xx by its `id` (see [Error details](#error-details))
+- `/api/updates`, `/api/updates/request` — the instance's updates and the request to install one, closed until the app authorizes someone (see [Updates](#updates))
 - `/openapi.json` — OpenAPI 3.0 spec: exactly `gen/openapi.json`, compiled into the binary by codegen (see [Code Generation](#code-generation))
 
-All of them except `/openapi.json` are part of `openapi.json` (`GET /api/health`, `GET /api/status`, `GET /api/config`, `GET /api/user/me`, `GET /api/errors/{id}` and the auth routes), so the generated TypeScript and Go clients can call them with types, and the [route gate](#routing) lets them through. `/openapi.json` is the one route outside `/api/`.
+All of them except `/openapi.json` are part of `openapi.json` (`GET /api/health`, `GET /api/status`, `GET /api/config`, `GET /api/user/me`, `GET /api/errors/{id}`, `GET /api/updates`, `POST /api/updates/request` and the auth routes), so the generated TypeScript and Go clients can call them with types, and the [route gate](#routing) lets them through. `/openapi.json` is the one route outside `/api/`.
 
 ### Extending /api/health
 
@@ -1388,6 +1391,60 @@ app.OnRequest(core.Admit)
 - **Nothing else is hidden**: `api.Subject(ctx)` and `api.SessionID(ctx)` keep working in the handler. The guarantee comes from your caller type requiring an admission, not from hiding the subject.
 - The hook runs in [integration tests](#integration-tests-schemaftest) through `schemaftest.Start` as in production; schemaf offers no other way to obtain a valid admission.
 
+## Updates
+
+On a run host that [pulls releases](INSTALL.md#pulling-releases-linux) with the [updater](INSTALL.md#the-updater) enabled, the app can show what an upgrade would bring and ask for one: an instance admin starts an upgrade from inside the app, with no operator in the loop. **The app asks, the run side decides:** the app only writes a version string; the updater installs it only if it is a verified release on the host's channel that is newer than the running one. A compromised app can at most start an install of a genuine newer release: no image choice, no command, no downgrade, no channel switch.
+
+### The built-in endpoints
+
+Two endpoints are always live and always in `openapi.json` and the generated TypeScript and Go clients, whatever the configuration (like the [Auth0 login route](#activating-auth0)). Both need a signed-in caller ([`AuthRequired`](#auth-levels)):
+
+| Endpoint | Does |
+|---|---|
+| `GET /api/updates` | `api.Updates()` as JSON (below) |
+| `POST /api/updates/request` | body `{"version": "1.5.0"}`: `api.RequestUpgrade(version)`; answers `202` with `{"version": "1.5.0"}` |
+
+**Closed by default.** Until the app calls `app.SetUpdatesAuth` in `Wire`, both answer `403` with `updates: the app has not authorized anyone (app.SetUpdatesAuth)`. The authorizer decides for both endpoints. It runs after authentication and the [per-request hook](#per-request-hook-onrequest), so it sees the app's own caller; a returned error refuses the request and is answered in the [standard error shape](#error-responses) (an `api.Error(api.ErrForbidden, …)` is a 403, a plain error a 500):
+
+```go
+app.SetUpdatesAuth(func(ctx context.Context) error {
+    if !users.FromContext(ctx).IsAdmin {
+        return api.Error(api.ErrForbidden, "forbidden", "only admins manage updates")
+    }
+    return nil
+})
+```
+
+### The Go API
+
+```go
+state, err := api.Updates()          // api.UpdateState
+err = api.RequestUpgrade("1.5.0")
+```
+
+`api.Updates()` returns:
+
+| Field | Value |
+|---|---|
+| `Running` | the running version (the tag of the backend's image); empty in development |
+| `Status` | `updater not enabled`, `idle` or `installing` |
+| `Available` | the verified versions newer than the running one, oldest first, each with its release `Notes` (from [`releases.json`](INSTALL.md#releases-from-ci-releasegenyml)); refreshed by every `releases` run |
+| `Checked` | when `releases` last refreshed `Available` |
+| `Install` | the last or current install: `Version`, `From`, `State` (`installing`, `installed`, `rolled-back`, `failed`, `rollback-failed`), `Started`, `Finished`, `Message`; nil before the first one |
+| `Request` | the last request the updater handled: `Version`, `State` (`accepted`, `rejected`), `Message`, `Time`; nil before the first one |
+
+`api.RequestUpgrade(version)` writes the version to the updater's request file. It refuses, with typed errors to compare with `errors.Is`:
+
+| Error | When | HTTP |
+|---|---|---|
+| `api.ErrUpdaterNotEnabled` | no updater on this host: development, macOS, a host without `schemaf.sh updater enable` | 409 `updater_not_enabled` |
+| `api.ErrVersionNotAvailable` | the version isn't in `Available` | 422 `version_not_available` |
+| `api.ErrInstallRunning` | an install is running | 409 `install_running` |
+
+Without an updater, `api.Updates()` returns the running version, an empty `Available` and the status `updater not enabled`. Never a silent no-op: nothing is written without an updater to act on it. The updater checks the request again on its side (INSTALL.md › The updater), so these checks are for a clear answer, not for safety.
+
+**Where the files are.** The backend container sees the run host's `~/.<name>/updates/` at `/schemaf/updates/`: `available.json`, `status.json` and the marker `updater` read-only, and `request` writable (two separate mounts). The run side creates them before it starts the stack.
+
 ## Stream Endpoints
 
 A stream endpoint answers with [server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html). Define `Stream` instead of `Handle`: it returns a channel, and schemaf writes each value sent on it to the client as one event:
@@ -1733,14 +1790,17 @@ Codegen is fast, so it always runs every step; there are no single-step subcomma
    - Files matching `*.dev.yml` are dev/test only — not included in `compose.gen.yml` (prod)
    - Used by `./schemaf.sh run` (prod) and `./schemaf.sh dev` (dev)
 
-6. **Inputs → gen/inputs.sha256**
+6. **Release workflow → .github/workflows/release.gen.yml**
+   - A pushed tag `vX.Y.Z` (or `vX.Y.Z-<pre>`) builds the artifact, attests it with keyless Sigstore and publishes it with the app's `releases.json`. See [Releases from CI](INSTALL.md#releases-from-ci-releasegenyml)
+
+7. **Inputs → gen/inputs.sha256**
    - One SHA-256 over codegen's inputs: `go/api/*.go` (without `*.gen.go` and `*_test.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, the files matched by the globs in `gen/schema-sources` (without `*.gen.go` and `*_test.go`), and the schemaf version required in `go/go.mod`
    - So editing a type in another package that the API uses, e.g. a field of `obj.User`, makes the generated files stale, while editing a package the API doesn't use does not
    - Computed as: for each input file in byte-wise sorted path order, the line `<sha256 of the file>  <path>` (as `sha256sum` prints it); then the line `schemaf <version>`; the hash of that text is the file's content. Dotfiles are not inputs
    - `./schemaf.sh build` and `./schemaf.sh test` recompute it (with `sha256sum`, or `shasum -a 256` on macOS) and stop on a mismatch: `generated files are stale — run ./schemaf.sh codegen and commit`
    - `./schemaf.sh build --output` (a deployment artifact) recomputes it over the committed inputs instead: the input files of the commit (via `git ls-tree` / `git cat-file`), with the commit's `gen/schema-sources` and `go/go.mod`, compared with the commit's `gen/inputs.sha256`. Untracked and gitignored inputs are not part of that hash, so generated files that depend on one (e.g. a `compose.gen.yml` including a gitignored `compose/extra.yml`) are stale for the artifact. An input committed as a symlink stops it with its own error. Plain `build`, `run` and `test` hash the working tree (following symlinks). See [Generated files must be fresh](INSTALL.md#generated-files-must-be-fresh)
 
-7. **Empty inputs → gen/empty-inputs**
+8. **Empty inputs → gen/empty-inputs**
    - The list of empty inputs (see below), one line per input, written next to `gen/inputs.sha256`. An empty or missing file means nothing is empty
 
 ### Empty inputs
@@ -1890,7 +1950,9 @@ For work on schemaf itself. `make test <unit|db|e2e|all>` runs the test layers l
 
 1. unit tests (`go test ./...`) and the DB integration tests (`e2e/db-test.sh`), which start their containers through the selected runtime too;
 2. the onboarding e2e (`e2e/build-example.sh <head sha>`), which also runs
+   - the [lockfiles](INSTALL.md#lockfiles) (`e2e/deploy.sh`): `init`'s `frontend/package-lock.json` and `go/go.sum` are committed, and a `package.json` changed without its lockfile, or an emptied `go.sum`, stops `build` with the file and the fix;
    - the two-user deployment (`e2e/deploy.sh`) with **two real Unix users** the workflow creates (`useradd`): the build user clones the project and builds the artifact, the run user loads, runs, upgrades and rolls back. Under podman each has its own rootless store, so the image really crosses over as a file; under Docker both use the machine's one daemon, so the builder's image is removed before each load;
+   - the [pull flow](INSTALL.md#pulling-releases-linux) (`e2e/pull.sh`, run by `deploy.sh` on the same run user): the runner builds releases of the project and signs them for real with keyless Sigstore under the gate job's own identity (`id-token: write`; `SCHEMAF_SIGNER` is that full certificate identity), and serves a `releases.json` from a local HTTP server. The run user's box, set up as INSTALL.md instructs, does a first install on the empty box and an upgrade with its data kept; a deliberately broken release (its migration changes data, its health check fails) rolls back automatically, with the database restored and the previous version serving; an older version, a prerelease on the stable channel, a tampered artifact, a version that doesn't match its manifest and a wrong signer are refused; and with the [updater](INSTALL.md#the-updater) enabled (the run user's real systemd units), the backend container sees `available.json` read-only, and requests written as the app writes them (one from inside the backend container) are rejected when older, off the channel, unverified or not a version, while a valid one is installed;
    - the data-volume check (`e2e/volumes.sh`) with real volumes: the other runtime holds `<name>-postgres-data` → `test` and `run` refuse; both runtimes hold it → they refuse; only the selected one → `test` starts. The `podman` job covers "Docker has it", the `docker` job "podman has it".
 
 `gate` is green only if both jobs are.
@@ -1908,14 +1970,14 @@ It doesn't run on plain pushes to branches.
 
 **Caches**: downloads only — the Go module and build caches (keyed by `go.sum`) and the npm cache (keyed by `cli/cmd/codegen/scaffold/package.json.tmpl`, which decides what a new project installs; the repository has no `package-lock.json`). Never container volumes, the project's images, podman/Docker storage, database state, or anything else from a previous run.
 
-**The scripts are the single source of truth.** The workflow only provisions the runner (the two users, the compose provider) and calls `make test all`. It sets:
+**The scripts are the single source of truth.** The workflow only provisions the runner (the two users, the compose provider, the podman API sockets: the composite action `.github/actions/runner-setup`, shared with `example-pull.yml`) and calls `make test all`. It sets:
 
 | Variable | Effect |
 |---|---|
-| `E2E_REFERENCE=1` | this is the reference environment: a check that can't run fails instead of being skipped (e.g. `volumes.sh` without the other runtime, `deploy.sh` without two real users) |
+| `E2E_REFERENCE=1` | this is the reference environment: a check that can't run fails instead of being skipped (e.g. `volumes.sh` without the other runtime, `deploy.sh` without two real users, `pull.sh` without Linux or the OIDC token) |
 | `E2E_BUILD_USER`, `E2E_RUN_USER` | `deploy.sh` builds as the one and runs as the other, through `sudo`, instead of simulating the second user with its own `HOME` |
 
-Without them (a local run), `deploy.sh` simulates the second user — under podman on Linux with its own rootless store under that `HOME` — and `volumes.sh` skips loudly when the other runtime isn't usable. A local `make test all` is for debugging, e.g. on macOS; Docker locally is optional: `SCHEMAF_RUNTIME=docker make test e2e`.
+Without them (a local run), `deploy.sh` simulates the second user — under podman on Linux with its own rootless store under that `HOME` — and `volumes.sh` skips loudly when the other runtime isn't usable. The pull flow skips loudly outside GitHub Actions (it signs with the workflow's OIDC token) and on macOS (it is Linux only), so `make test all` and `make release` on a Mac don't cover it; CI does, on every PR. GitHub gives no OIDC token to a pull request from a fork, so such a PR can't pass the gate: push its branch to this repository and let the gate run there. A local `make test all` is for debugging, e.g. on macOS; Docker locally is optional: `SCHEMAF_RUNTIME=docker make test e2e`.
 
 **One-time repository setting (maintainer).** In the repository settings, a branch protection rule for `main` (Settings › Branches › Add rule, pattern `main`) with:
 
@@ -1946,7 +2008,30 @@ No local onboarding e2e, no tag. Issues named in `Closes #<n>` trailers go into 
 4. **On macOS**, the full local gate against the commit to release, by its full hash: `make test all` under podman (unit, `e2e/db-test.sh`, the onboarding e2e). It's the layer CI doesn't give: CI doesn't cover macOS. On Linux, the fast checks are enough locally: the commit already passed CI as part of its up-to-date PR.
 5. Green → tags `vX.Y.Z`, pushes the tag, creates the GitHub release, and closes the issues of the released range that are still open (`Released in vX.Y.Z.`). Red → tags nothing; a macOS-only break is fixed by a PR (`make merge`), then `make release` again.
 
+6. **The example release** (`e2e/example-release.sh vX.Y.Z`, below) of the new tag. It needs the tag, so it runs after it: a failure leaves the release in place and stops with `release: vX.Y.Z is released, but its example release failed (see above) — fix it and release a patch`.
+
 No prerelease tags: the only tag a release creates is `vX.Y.Z`. To merge without releasing, use `make merge`.
+
+### The example release
+
+The CI gate tests the release and pull machinery against itself. What it can't test is the real path through GitHub: a tag in a generated project, the release workflow it got from codegen, the attestation GitHub's Sigstore setup produces, and a box that pulls that release. A long-lived project tests it: the GitHub repository [`flocko-motion/schemaf-example`](https://github.com/flocko-motion/schemaf-example), made by `init` and **upgraded** from each schemaf release to the next, like a real app. (Creating a project from scratch is the onboarding e2e's job, on every PR.)
+
+`make release` runs `e2e/example-release.sh vX.Y.Z` after tagging:
+
+1. Clones the example and upgrades it to the new schemaf: `go get github.com/flocko-motion/schemaf@vX.Y.Z`, `./schemaf.sh codegen`, `GOWORK=off go mod tidy`.
+2. Commits, pushes `main`, tags the example `vX.Y.Z`, the same version as schemaf, and pushes the tag.
+3. Waits for the example's `release.gen.yml` run of that tag.
+4. Checks the result: the GitHub release has `schemaf-example-X.Y.Z.run` and its `.sigstore.json` bundle; the attestation verifies (`gh attestation verify --bundle`) as signed by the example's `release.gen.yml` on `refs/tags/vX.Y.Z`; the artifact's manifest names version `X.Y.Z`; `releases.json`, downloaded from its stable URL, has exactly one correct entry for it.
+5. **The example pull**: starts `.github/workflows/example-pull.yml` on the schemaf tag and waits for it. Under both runtimes, on a fresh `ubuntu-24.04` runner, `e2e/example-pull.sh X.Y.Z` sets up a new box exactly as INSTALL.md › Pulling releases instructs, as it would have been when v-1 (the example's release before `X.Y.Z`) was the newest: the env file with `SCHEMAF_SIGNER=flocko-motion/schemaf-example`, and the example's `schemaf.sh` at v-1's tag. Then `releases` and `install` put v-1 on the empty box (reading the real index as it was then: its entries up to v-1, served locally), and `releases` and `install X.Y.Z` upgrade it from the real `releases.json`, done by v-1's run-side script. So each release also proves that a box running the previous version can verify and install the next one.
+
+A version that is already released is only checked, never released again. A tag without a release (a failed run) stops it with the run's URL; delete the tag in the example and run it again. By hand, for a pushed branch or tag of schemaf (a branch needs the example's version, e.g. a prerelease): `e2e/example-release.sh <ref> [<version>]`. It pushes to the example repository and starts a workflow, so only on the maintainer's order. It needs `git`, `go`, `jq`, `curl` and `gh`, signed in with push access to the example. The example pull alone: `gh workflow run example-pull.yml --ref <schemaf branch or tag> -f version=<X.Y.Z>`.
+
+**One-time setup** (done by hand, once; not part of the test). The example needs a project and a first release with the pull flow, so that every later release has a v-1:
+
+1. In a clone of the empty repository: `go run github.com/flocko-motion/schemaf/cmd/schemaf@<full commit hash> init schemaf-example`, with a pushed schemaf commit that has the pull flow, then move the project's files into the clone's root, commit and push `main`.
+2. Tag the example `v0.0.1` and push the tag: its generated release workflow makes the first attested release and `releases.json`.
+
+From then on, `make release` upgrades it.
 
 ### e2e refs
 

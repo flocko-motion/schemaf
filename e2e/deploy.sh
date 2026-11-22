@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # deploy.sh — e2e for the two-user deployment (INSTALL.md › Deployment):
 # build an artifact, load it as a second user, run it, check the app responds,
-# upgrade to a second tag, roll back to the first.
+# upgrade to a second tag, roll back to the first. Then the pull flow on the
+# same run user (pull.sh).
 #
 # Usage: e2e/deploy.sh <project-dir>     (called by build-example.sh)
 #
@@ -131,9 +132,14 @@ else
   say "simulated second user: HOME=$RUN_HOME ($([ "$SEPARATE_STORE" = 1 ] && echo "its own rootless store" || echo "the machine's one store"))"
 fi
 
+# The pull flow (INSTALL.md › Pulling releases), run at the end.
+# shellcheck source=pull.sh
+source "$SCRIPT_DIR/pull.sh"
+
 cleanup() {
   rc=$?
   as_runner "$RUN_SH" stop >/dev/null 2>&1 || true
+  pull_cleanup
   for t in ${TAG1:-} ${TAG2:-}; do
     rt_runner image rm "${NAME}:${t}" >/dev/null 2>&1 || true
     rt_builder image rm "${NAME}:${t}" >/dev/null 2>&1 || true
@@ -201,6 +207,32 @@ git add -A
 git -c user.name=e2e -c user.email=e2e@example.invalid -c commit.gpgsign=false commit -q -m "e2e: initial" || true
 TAG1=$(git rev-parse --short HEAD)
 
+# INSTALL.md › Lockfiles: the image gets exactly what the lockfiles pin.
+say "init's lockfiles are committed"
+git ls-files --error-unmatch frontend/package-lock.json go/go.sum >/dev/null \
+  || fail "init's frontend/package-lock.json or go/go.sum is not in the commit (gitignored?)"
+
+say "stale lockfiles stop build, naming the file and the fix"
+# stale_build <what> <expected message>: the working tree has a stale lockfile;
+# a plain build (of the working tree) must fail with the message. Restores it.
+stale_build() {
+  local out
+  if out=$(./schemaf.sh build 2>&1); then
+    git checkout -q -- .
+    fail "$1: build accepted it"
+  fi
+  git checkout -q -- .
+  grep -qF "$2" <<<"$out" || { echo "$out" | tail -n 30 >&2; fail "$1: build failed without '$2'"; }
+}
+perl -0pi -e 's/"dependencies": \{/"dependencies": {\n    "left-pad": "1.3.0",/' frontend/package.json
+grep -q left-pad frontend/package.json || fail "could not add a dependency to frontend/package.json"
+stale_build "package.json changed without package-lock.json" \
+  "frontend/package-lock.json is out of sync with frontend/package.json — run npm install in frontend/ on your dev host and commit frontend/package-lock.json"
+: > go/go.sum
+stale_build "an emptied go.sum" \
+  "go/go.mod or go/go.sum is out of date — run go mod tidy in go/ on your dev host and commit go/go.mod and go/go.sum"
+[ -z "$(git status --porcelain)" ] || fail "stale-lockfile checks left the working tree dirty: $(git status --porcelain)"
+
 say "build user: ./schemaf.sh build --output (tag ${TAG1})"
 build_artifact "$TAG1"
 hand_over "$TAG1"
@@ -235,3 +267,6 @@ as_runner "$RUN_SH" run --image "$TAG1" -d --wait
 health "$TAG1"
 
 echo "  ✓ deploy: built, handed over, ran, upgraded and rolled back ($MODE users)"
+
+say "pull flow: releases and install on a fresh box (INSTALL.md › Pulling releases)"
+pull_flow

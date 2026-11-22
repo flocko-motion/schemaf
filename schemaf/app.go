@@ -42,6 +42,7 @@ type App struct {
 	identityProviders  []api.IdentityProvider
 	onLogin            api.OnLoginFunc
 	canSeeErrorDetails api.CanSeeErrorDetailsFunc
+	updatesAuth        api.UpdatesAuthFunc
 
 	// onRequest is the OnRequest hook; onRequestErr a wrong registration
 	// (twice, or nil), reported by Start.
@@ -151,6 +152,22 @@ func (a *App) OnRequest(fn func(ctx context.Context, adm *api.Admission) (contex
 //	})
 func (a *App) CanSeeErrorDetails(fn func(ctx context.Context, subject string) bool) {
 	a.canSeeErrorDetails = fn
+}
+
+// SetUpdatesAuth sets who may use the update endpoints, GET /api/updates and
+// POST /api/updates/request. Without it, nobody may: both answer 403. fn runs
+// after authentication and the OnRequest hook, so it sees the app's caller; a
+// returned error refuses the request (api.Error(api.ErrForbidden, …) is a
+// 403). See EXTEND.md, "Updates". Wire up in Wire (go/app/app.go):
+//
+//	app.SetUpdatesAuth(func(ctx context.Context) error {
+//	    if !users.FromContext(ctx).IsAdmin {
+//	        return api.Error(api.ErrForbidden, "forbidden", "only admins manage updates")
+//	    }
+//	    return nil
+//	})
+func (a *App) SetUpdatesAuth(fn func(ctx context.Context) error) {
+	a.updatesAuth = fn
 }
 
 // SetFrontend registers an embedded frontend filesystem for production serving.

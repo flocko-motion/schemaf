@@ -82,8 +82,8 @@ func openAPIErrorSchema() map[string]any {
 }
 
 // FrameworkOpenAPI returns the OpenAPI path items of the framework's routes
-// under /api/ (health, status, config, user/me, errors/{id} and the auth
-// routes) and the framework's component schemas (including the shared Error schema), as
+// under /api/ (health, status, config, user/me, errors/{id}, updates and the
+// auth routes) and the framework's component schemas (including the shared Error schema), as
 // plain JSON-shaped maps. Codegen merges them into gen/openapi.json (which
 // the server serves and enforces, see NewMux), so the generated clients
 // always have these routes and the error type, and the route gate lets them
@@ -156,6 +156,22 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 				"name": "id", "in": "path", "required": true,
 				"schema": map[string]any{"type": "string"},
 			}}, map[string]any{"200": jsonResp("OK", ref("SchemafErrorDetails"))}),
+		"/api/updates": getOp("getApiUpdates", "The instance's updates",
+			"The running version, the verified versions the app may request (with their release notes), and the last install and request. Status \"updater not enabled\" without an updater on the run host. 403 until the app authorizes callers (app.SetUpdatesAuth).",
+			AuthRequired, nil, map[string]any{"200": jsonResp("OK", ref("SchemafUpdateState"))}),
+		"/api/updates/request": map[string]any{
+			"post": map[string]any{
+				"operationId": "postApiUpdatesRequest",
+				"summary":     "Request the install of a version",
+				"description": "Asks the run host's updater to install one of the available versions; the updater checks it again and decides. 403 until the app authorizes callers (app.SetUpdatesAuth); 409 updater_not_enabled or install_running; 422 version_not_available.",
+				"security":    OpenAPISecurity(AuthRequired),
+				"requestBody": jsonBody(ref("SchemafUpdateRequest")),
+				"responses": map[string]any{
+					"202":     jsonResp("Requested", ref("SchemafUpdateRequest")),
+					"default": OpenAPIErrorResponse(),
+				},
+			},
+		},
 		"/api/auth/auth0/login": map[string]any{
 			"post": map[string]any{
 				"operationId": "postApiAuthAuth0Login",
@@ -230,6 +246,39 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 				"subject": map[string]any{"type": "string", "description": "The caller, if authenticated."},
 				"error":   map[string]any{"type": "string", "description": "The full error."},
 				"misuse":  map[string]any{"type": "string", "description": "The misuse of the error API, if any."},
+			},
+		},
+		"SchemafUpdateRequest": map[string]any{
+			"type": "object", "required": []any{"version"},
+			"properties": map[string]any{"version": str},
+		},
+		"SchemafUpdateState": map[string]any{
+			"type":     "object",
+			"required": []any{"running", "status", "available"},
+			"properties": map[string]any{
+				"running": map[string]any{"type": "string", "description": "The running version; empty in development."},
+				"status":  map[string]any{"type": "string", "enum": []any{"updater not enabled", "idle", "installing"}},
+				"available": map[string]any{"type": "array", "items": map[string]any{
+					"type": "object", "required": []any{"version", "notes"},
+					"properties": map[string]any{"version": str, "notes": str},
+				}},
+				"checked": str,
+				"install": map[string]any{
+					"type":     "object",
+					"required": []any{"version", "from", "state", "started", "finished", "message"},
+					"properties": map[string]any{
+						"version": str, "from": str, "started": str, "finished": str, "message": str,
+						"state": map[string]any{"type": "string", "enum": []any{"installing", "installed", "rolled-back", "failed", "rollback-failed"}},
+					},
+				},
+				"request": map[string]any{
+					"type":     "object",
+					"required": []any{"version", "state", "message", "time"},
+					"properties": map[string]any{
+						"version": str, "message": str, "time": str,
+						"state": map[string]any{"type": "string", "enum": []any{"accepted", "rejected"}},
+					},
+				},
 			},
 		},
 		"SchemafRefreshResponse": map[string]any{
