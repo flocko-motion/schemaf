@@ -536,8 +536,28 @@ func exprTypeName(expr ast.Expr) string {
 		return "[]" + exprTypeName(t.Elt)
 	case *ast.SelectorExpr:
 		return exprTypeName(t.X) + "." + t.Sel.Name
+	case *ast.IndexExpr: // a generic instance: Page[User]
+		return typeArgsName(t.X, []ast.Expr{t.Index})
+	case *ast.IndexListExpr: // Pair[A, B]
+		return typeArgsName(t.X, t.Indices)
 	}
 	return ""
+}
+
+// typeArgsName renders a generic instance "X[A, B]", or "" if any part has
+// no name.
+func typeArgsName(x ast.Expr, args []ast.Expr) string {
+	base := exprTypeName(x)
+	if base == "" {
+		return ""
+	}
+	names := make([]string, len(args))
+	for i, a := range args {
+		if names[i] = exprTypeName(a); names[i] == "" {
+			return ""
+		}
+	}
+	return base + "[" + strings.Join(names, ", ") + "]"
 }
 
 // splitDocComment splits a doc comment into summary (first line) and description (rest).

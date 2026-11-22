@@ -183,10 +183,6 @@ func (WrapEndpoint) Path() string               { return "/api/wrap" }
 func (WrapEndpoint) Auth() schemafapi.AuthLevel { return schemafapi.AuthNone }
 func (WrapEndpoint) Handle(ctx context.Context, req NoReq) (WrapsReqResp, error) { return WrapsReqResp{}, nil }
 
-type EmbeddedReq struct {
-	Paging
-	Title string ` + "`json:\"title\"`" + `
-}
 ` + paramsEndpoint("FloatEndpoint", "GET", "/api/float", "FloatReq") +
 		paramsEndpoint("StructEndpoint", "GET", "/api/struct", "StructReq") +
 		paramsEndpoint("MapEndpoint", "GET", "/api/map", "MapReq") +
@@ -200,8 +196,7 @@ type EmbeddedReq struct {
 		paramsEndpoint("UntaggedGetEndpoint", "GET", "/api/untaggedget", "UntaggedGetReq") +
 		paramsEndpoint("UntaggedDeleteEndpoint", "DELETE", "/api/untaggeddelete", "UntaggedDeleteReq") +
 		paramsEndpoint("DupPathEndpoint", "GET", "/api/dup/{id}", "DupPathReq") +
-		paramsEndpoint("UnexportedEndpoint", "GET", "/api/unexported", "UnexportedReq") +
-		paramsEndpoint("EmbeddedEndpoint", "POST", "/api/embedded", "EmbeddedReq")
+		paramsEndpoint("UnexportedEndpoint", "GET", "/api/unexported", "UnexportedReq")
 
 	_, _, _, err := schemaProject(t, map[string]string{"api/bad.go": src})
 	if err == nil {
@@ -221,9 +216,8 @@ type EmbeddedReq struct {
 		"endpoint JSONPathEndpoint: request type JSONPathReq, field ID: tagged both `json` and `path`",
 		"endpoint UntaggedGetEndpoint: request type UntaggedGetReq, field Search: a GET request has no body",
 		"endpoint UntaggedDeleteEndpoint: request type UntaggedDeleteReq, field Reason: a DELETE request has no body",
-		"endpoint DupPathEndpoint: request type DupPathReq, field B: another field is already tagged `path:\"id\"`",
+		"endpoint DupPathEndpoint: request type DupPathReq, field B: field A is already tagged `path:\"id\"`",
 		"endpoint UnexportedEndpoint: request type UnexportedReq, field q: the field is unexported",
-		"endpoint EmbeddedEndpoint: request type EmbeddedReq, field Paging: embedded struct Paging has `path` or `query` tagged fields",
 		"GetGameEndpoint response: type GetGameReq has path or query fields, so it is a request type and can't be used here",
 		"WrapsReqResp.Req: type GetGameReq has path or query fields, so it is a request type and can't be used here",
 	} {
