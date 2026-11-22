@@ -5,8 +5,9 @@
 # merge), then release the merge commit on origin/main without switching
 # branches. On macOS the full local gate (make test all under podman) runs
 # against the commit to release, which CI doesn't cover. Only if all pass: tag,
-# push the tag, create the GitHub release. See EXTEND.md › Merging and
-# releasing.
+# push the tag, create the GitHub release. Then the example release
+# (e2e/example-release.sh) checks the tag in a real generated project on
+# GitHub. See EXTEND.md › Merging and releasing.
 # Usage: scripts/release.sh <major|minor|patch>   (normally via `make release <bump>`)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -88,3 +89,12 @@ git push origin "$new"
 gh release create "$new" --title "$new" --generate-notes || echo "  (gh release create failed; tag $new is pushed — create the GitHub release manually if needed)"
 close_released "$new" $issues
 echo "  released $new"
+
+# The example release (EXTEND.md › The example release): the released tag in a
+# real generated project on GitHub — tag → release workflow → attested
+# artifact and releases.json. It needs the tag, so it runs after it.
+echo "▶ example release: $new"
+if ! ./e2e/example-release.sh "$new"; then
+	echo "release: $new is released, but its example release failed (see above) — fix it and release a patch" >&2
+	exit 1
+fi

@@ -18,7 +18,7 @@ func SubcommandProvider(ctx *cli.Context) []*cobra.Command {
 		Short: "Generate all code",
 		Long: `Checks go/app/app.go defines func Wire, then generates everything: constants,
 the frontend scaffold and FrontendFS, compose files and schemaf.sh, migrations,
-sqlc queries, endpoints and the OpenAPI spec, the TypeScript and Go API
+the release workflow, sqlc queries, endpoints and the OpenAPI spec, the TypeScript and Go API
 clients and the TypeScript test wrappers. Then it records the empty inputs
 (gen/empty-inputs) and the inputs hash (gen/inputs.sha256).`,
 		Args: cobra.NoArgs,
@@ -55,6 +55,9 @@ func runAll(ctx *cli.Context) error {
 		return err
 	}
 	if err := runComposeGen(); err != nil {
+		return err
+	}
+	if err := runReleaseGen(); err != nil {
 		return err
 	}
 	if err := runMigrationsGen(ctx); err != nil {

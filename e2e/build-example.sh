@@ -117,7 +117,7 @@ cd "$DIR"
 
 # --- it should have produced a complete, configured project ---
 step "verify scaffold"
-for f in schemaf.toml schemaf.sh go/go.sum frontend/package-lock.json go/main.go go/app/app.go go/app/constants.gen.go go/app/frontend.gen.go go/tests/health_test.go; do
+for f in schemaf.toml schemaf.sh go/go.sum frontend/package-lock.json .github/workflows/release.gen.yml go/main.go go/app/app.go go/app/constants.gen.go go/app/frontend.gen.go go/tests/health_test.go; do
   [ -f "$f" ] || { echo "expected $f to exist after init" >&2; exit 1; }
   echo "    ✓ $f"
 done

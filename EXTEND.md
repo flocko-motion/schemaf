@@ -1733,14 +1733,17 @@ Codegen is fast, so it always runs every step; there are no single-step subcomma
    - Files matching `*.dev.yml` are dev/test only — not included in `compose.gen.yml` (prod)
    - Used by `./schemaf.sh run` (prod) and `./schemaf.sh dev` (dev)
 
-6. **Inputs → gen/inputs.sha256**
+6. **Release workflow → .github/workflows/release.gen.yml**
+   - A pushed tag `vX.Y.Z` (or `vX.Y.Z-<pre>`) builds the artifact, attests it with keyless Sigstore and publishes it with the app's `releases.json`. See [Releases from CI](INSTALL.md#releases-from-ci-releasegenyml)
+
+7. **Inputs → gen/inputs.sha256**
    - One SHA-256 over codegen's inputs: `go/api/*.go` (without `*.gen.go` and `*_test.go`), the files in `go/db/migrations/` and `go/db/queries/`, `schemaf.toml`, `compose/*.yml`, the files matched by the globs in `gen/schema-sources` (without `*.gen.go` and `*_test.go`), and the schemaf version required in `go/go.mod`
    - So editing a type in another package that the API uses, e.g. a field of `obj.User`, makes the generated files stale, while editing a package the API doesn't use does not
    - Computed as: for each input file in byte-wise sorted path order, the line `<sha256 of the file>  <path>` (as `sha256sum` prints it); then the line `schemaf <version>`; the hash of that text is the file's content. Dotfiles are not inputs
    - `./schemaf.sh build` and `./schemaf.sh test` recompute it (with `sha256sum`, or `shasum -a 256` on macOS) and stop on a mismatch: `generated files are stale — run ./schemaf.sh codegen and commit`
    - `./schemaf.sh build --output` (a deployment artifact) recomputes it over the committed inputs instead: the input files of the commit (via `git ls-tree` / `git cat-file`), with the commit's `gen/schema-sources` and `go/go.mod`, compared with the commit's `gen/inputs.sha256`. Untracked and gitignored inputs are not part of that hash, so generated files that depend on one (e.g. a `compose.gen.yml` including a gitignored `compose/extra.yml`) are stale for the artifact. An input committed as a symlink stops it with its own error. Plain `build`, `run` and `test` hash the working tree (following symlinks). See [Generated files must be fresh](INSTALL.md#generated-files-must-be-fresh)
 
-7. **Empty inputs → gen/empty-inputs**
+8. **Empty inputs → gen/empty-inputs**
    - The list of empty inputs (see below), one line per input, written next to `gen/inputs.sha256`. An empty or missing file means nothing is empty
 
 ### Empty inputs
@@ -1947,7 +1950,20 @@ No local onboarding e2e, no tag. Issues named in `Closes #<n>` trailers go into 
 4. **On macOS**, the full local gate against the commit to release, by its full hash: `make test all` under podman (unit, `e2e/db-test.sh`, the onboarding e2e). It's the layer CI doesn't give: CI doesn't cover macOS. On Linux, the fast checks are enough locally: the commit already passed CI as part of its up-to-date PR.
 5. Green → tags `vX.Y.Z`, pushes the tag, creates the GitHub release, and closes the issues of the released range that are still open (`Released in vX.Y.Z.`). Red → tags nothing; a macOS-only break is fixed by a PR (`make merge`), then `make release` again.
 
+6. **The example release** (`e2e/example-release.sh vX.Y.Z`, below) of the new tag. It needs the tag, so it runs after it: a failure leaves the release in place and stops with `release: vX.Y.Z is released, but its example release failed (see above) — fix it and release a patch`.
+
 No prerelease tags: the only tag a release creates is `vX.Y.Z`. To merge without releasing, use `make merge`.
+
+### The example release
+
+The CI gate can't push a tag to GitHub and watch the [release workflow](INSTALL.md#releases-from-ci-releasegenyml) a project gets, so a real generated project does it: the GitHub repository [`flocko-motion/schemaf-example`](https://github.com/flocko-motion/schemaf-example). `make release` runs `e2e/example-release.sh vX.Y.Z` after tagging:
+
+1. Clones the example. If it is empty, creates it with `go run github.com/flocko-motion/schemaf/cmd/schemaf@vX.Y.Z init schemaf-example`; otherwise upgrades it (`go get github.com/flocko-motion/schemaf@vX.Y.Z`, `go mod tidy`, `./schemaf.sh codegen`).
+2. Commits, pushes `main`, tags the example `vX.Y.Z`, the same version as schemaf, and pushes the tag.
+3. Waits for the example's `release.gen.yml` run of that tag.
+4. Checks the result: the GitHub release has `schemaf-example-X.Y.Z.run` and its `.sigstore.json` bundle; the attestation verifies (`gh attestation verify --bundle`) as signed by the example's `release.gen.yml` on `refs/tags/vX.Y.Z`; the artifact's manifest names version `X.Y.Z`; `releases.json`, downloaded from its stable URL, has exactly one correct entry for it.
+
+A version that is already released is only checked, never released again. A tag without a release (a failed run) stops it with the run's URL; delete the tag in the example and run it again. By hand, for any ref (a branch needs the example's version, e.g. a prerelease): `e2e/example-release.sh <ref> [<version>]`. It pushes to the example repository, so only on the maintainer's order. It needs `git`, `go`, `npm`, `jq`, `curl` and `gh`, signed in with push access to the example.
 
 ### e2e refs
 

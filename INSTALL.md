@@ -18,6 +18,7 @@ Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
 - [Secrets](#secrets)
 - [Deployment](#deployment) — `build` an image, `run` it
   - [Separate build and run users](#separate-build-and-run-users)
+  - [Releases from CI](#releases-from-ci-releasegenyml) — a tag builds and signs the artifact
   - [What the run host provides](#what-the-run-host-provides)
 - [Container runtime](#container-runtime) — podman by default, Docker on request
 - [Migrating from Docker to podman](#migrating-from-docker-to-podman)
@@ -445,6 +446,47 @@ The first start creates the database volume.
 **Rollback**: `~/.myapp/bin/schemaf.sh run --image <older tag> -d`. Migrations are forward-only, so an older version runs against the newer schema; keep schema changes backward-compatible if you rely on rollback.
 
 **Pruning**: `~/.myapp/bin/schemaf.sh image ls`, then `image rm <tag>` for versions you no longer want to roll back to. The running tag can't be removed.
+
+### Releases from CI: `release.gen.yml`
+
+Codegen writes `.github/workflows/release.gen.yml`, a GitHub Actions workflow that turns a pushed tag into a release with a signed artifact. Commit it. It is regenerated on every codegen, so it always matches the schemaf version in `go/go.mod`, and it does nothing until you push a tag:
+
+```bash
+git tag v1.4.0 && git push origin v1.4.0          # a release
+git tag v2.0.0-dev.3 && git push origin v2.0.0-dev.3  # a prerelease
+```
+
+**Tags.** A tag `vX.Y.Z` is a release, a tag `vX.Y.Z-<pre>` (`<pre>`: letters, digits, `.` and `-`) a prerelease. The version is the tag without the `v`: `1.4.0`, `2.0.0-dev.3`. The workflow starts for every tag that begins with `v` and stops on any other one, e.g. `v1.4` or `v1.4.0+build.7`: `tag v1.4 is not a release tag — use vX.Y.Z or vX.Y.Z-<pre>`. Tags without the `v` don't start it.
+
+**What a tag produces**, on GitHub's `ubuntu-24.04` runner with Docker:
+
+1. `./schemaf.sh build --tag <version> --output <name>-<version>.run`: the [artifact](#the-artifact-nametagrun), its image tagged with the version.
+2. A keyless [Sigstore](https://www.sigstore.dev/) build-provenance attestation of the artifact (`actions/attest-build-provenance`), signed with the workflow's own identity: `https://github.com/<owner>/<repo>/.github/workflows/release.gen.yml` on the tag's ref. There is no key to keep. The bundle is saved as `<name>-<version>.run.sigstore.json`.
+3. Both files attached to the GitHub release of the tag. The workflow creates the release if it doesn't exist, marked as a prerelease for a `-<pre>` tag. If you created the release first (e.g. to write its notes), its notes stay and the files are added.
+4. `releases.json` rebuilt (below).
+
+**`releases.json`** is the app's release index: one per app, never shared between apps. It lists every release of the repository that has both files, prereleases included:
+
+```json
+[
+  {
+    "version": "1.4.0",
+    "prerelease": false,
+    "artifact": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run",
+    "attestation": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run.sigstore.json"
+  }
+]
+```
+
+`prerelease` is `true` exactly when the version has a `-<pre>` part. The index is the only file of a dedicated GitHub release tagged `schemaf-index`, which is never marked latest, so its URL is stable: `https://github.com/<owner>/<repo>/releases/download/schemaf-index/releases.json`. Each run rebuilds it from the repository's releases instead of appending to it, so it is always complete; runs never overlap (one at a time per repository). The index only lists files: whoever downloads an artifact verifies its attestation against the signer they expect, never against anything the index says.
+
+CI publishes files and never contacts a run host.
+
+**Requirements:**
+
+- The project is the root of a GitHub repository: GitHub only runs workflows from the root's `.github/workflows/`. For a project in a subdirectory of its repository, codegen still writes the file into the project and warns: `⚠ .github/workflows/release.gen.yml is in <dir>, not at the repository root <root> — GitHub won't run it`.
+- A **public** repository. Attestations of public repositories are signed by Sigstore's public instance, which anyone can verify without a GitHub account. Those of private repositories go to GitHub's own instance instead, which a run host can't verify.
+- GitHub Actions enabled. The workflow declares the permissions it needs itself (`contents: write`, `id-token: write`, `attestations: write`).
 
 ### What the run host provides
 
