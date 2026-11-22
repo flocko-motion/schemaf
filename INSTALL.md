@@ -19,6 +19,7 @@ Back to [README](README.md) | Next: [Extending Your Project](EXTEND.md)
 - [Deployment](#deployment) — `build` an image, `run` it
   - [Separate build and run users](#separate-build-and-run-users)
   - [Releases from CI](#releases-from-ci-releasegenyml) — a tag builds and signs the artifact
+  - [Pulling releases](#pulling-releases-linux) — a run host fetches, verifies and installs releases by itself (Linux)
   - [What the run host provides](#what-the-run-host-provides)
 - [Container runtime](#container-runtime) — podman by default, Docker on request
 - [Migrating from Docker to podman](#migrating-from-docker-to-podman)
@@ -353,7 +354,7 @@ Nothing is fixed up during the build. A lockfile that is missing or out of date 
 - the image (`<runtime> save`),
 - the commit's compose files (`compose.gen.yml` and the `compose/*.yml` it includes),
 - the run-side `schemaf.sh`,
-- a manifest: project name, tag, commit, `git describe`, schemaf version, image platform.
+- a manifest: project name, tag, commit, `git describe`, schemaf version, image platform, the app's port.
 
 It **never contains secrets**, so the same file can go to staging and to production. On the run host:
 
@@ -392,13 +393,15 @@ An image built for another platform (e.g. arm64 on an amd64 host) is refused too
 | `logs [compose logs flags]` | shows the stack's logs, e.g. `logs -f backend` |
 | `image ls` | the loaded tags with commit, `git describe`, size, and which one is running |
 | `image rm <tag>` | removes the image and `~/.<name>/deploy/<tag>/`; refuses while that tag is running |
+| `releases` | downloads and verifies the releases newer than the running one ([Pulling releases](#pulling-releases-linux), Linux only) |
+| `install <version>` | installs a verified release, with backup and automatic rollback ([Pulling releases](#pulling-releases-linux), Linux only) |
 | any other word: app subcommands (`db backup`, `db restore`, `db query`, your own `AddSubcommand` commands) | runs in the running backend container (`<runtime> exec <name>-backend /app <word> …`), i.e. exactly the deployed version; if the backend isn't running: `start it first: schemaf.sh run --image <tag>` |
 
 The run side can't list your app's subcommands, so the rule is: every word that isn't one of the commands above and isn't a refused developer command goes into the backend container. An unknown word therefore fails loudly with the app binary's own error and exit code.
 
 Developer commands (`codegen`, `test`, `dev`, `build`, `upgrade`) stop with `this host has no checkout; that command runs on a dev or build host`, and `server` with `the server runs in the backend container — start it with: schemaf.sh run --image <tag>`. Nothing on the run side needs Go.
 
-Old images are rollback targets, so nothing is ever pruned automatically; `image ls` and `image rm` are the tooling. The database lives in the named volume `<name>-postgres-data`, which outlives every version; migrations run when the server starts, as always.
+Old images are rollback targets, so nothing is pruned automatically, except by `install`'s [retention](#install); `image ls` and `image rm` are the tooling. The database lives in the named volume `<name>-postgres-data`, which outlives every version; migrations run when the server starts, as always.
 
 ### Single-user hosts: `run`
 
@@ -456,7 +459,7 @@ git tag v1.4.0 && git push origin v1.4.0          # a release
 git tag v2.0.0-dev.3 && git push origin v2.0.0-dev.3  # a prerelease
 ```
 
-**Tags.** A tag `vX.Y.Z` is a release, a tag `vX.Y.Z-<pre>` (`<pre>`: letters, digits, `.` and `-`) a prerelease. The version is the tag without the `v`: `1.4.0`, `2.0.0-dev.3`. The workflow starts for every tag that begins with `v` and stops on any other one, e.g. `v1.4` or `v1.4.0+build.7`: `tag v1.4 is not a release tag — use vX.Y.Z or vX.Y.Z-<pre>`. Tags without the `v` don't start it.
+**Tags.** A tag `vX.Y.Z` is a release, a tag `vX.Y.Z-<pre>` a prerelease (`<pre>`: dot-separated identifiers of letters, digits and `-`, e.g. `dev.3` or `rc-1`). The version is the tag without the `v`: `1.4.0`, `2.0.0-dev.3`. The workflow starts for every tag that begins with `v` and stops on any other one, e.g. `v1.4` or `v1.4.0+build.7`: `tag v1.4 is not a release tag — use vX.Y.Z or vX.Y.Z-<pre>`. Tags without the `v` don't start it.
 
 **What a tag produces**, on GitHub's `ubuntu-24.04` runner with Docker:
 
@@ -473,12 +476,13 @@ git tag v2.0.0-dev.3 && git push origin v2.0.0-dev.3  # a prerelease
     "version": "1.4.0",
     "prerelease": false,
     "artifact": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run",
-    "attestation": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run.sigstore.json"
+    "attestation": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run.sigstore.json",
+    "notes": "Fixes the login."
   }
 ]
 ```
 
-`prerelease` is `true` exactly when the version has a `-<pre>` part. The index is the only file of a dedicated GitHub release tagged `schemaf-index`, which is never marked latest, so its URL is stable: `https://github.com/<owner>/<repo>/releases/download/schemaf-index/releases.json`. Each run rebuilds it from the repository's releases instead of appending to it, so it is always complete; runs never overlap (one at a time per repository). The index only lists files: whoever downloads an artifact verifies its attestation against the signer they expect, never against anything the index says.
+`prerelease` is `true` exactly when the version has a `-<pre>` part. `notes` is the GitHub release's text (empty when it has none), so whoever reads the index sees what a version brings. The index is the only file of a dedicated GitHub release tagged `schemaf-index`, which is never marked latest, so its URL is stable: `https://github.com/<owner>/<repo>/releases/download/schemaf-index/releases.json`. Each run rebuilds it from the repository's releases instead of appending to it, so it is always complete; runs never overlap (one at a time per repository). The index only lists files: whoever downloads an artifact verifies its attestation against the signer they expect, never against anything the index says.
 
 CI publishes files and never contacts a run host.
 
@@ -488,13 +492,118 @@ CI publishes files and never contacts a run host.
 - A **public** repository. Attestations of public repositories are signed by Sigstore's public instance, which anyone can verify without a GitHub account. Those of private repositories go to GitHub's own instance instead, which a run host can't verify.
 - GitHub Actions enabled. The workflow declares the permissions it needs itself (`contents: write`, `id-token: write`, `attestations: write`).
 
+### Pulling releases (Linux)
+
+With [releases from CI](#releases-from-ci-releasegenyml), a run host can fetch and install released versions by itself: no build user, no file handover, no operator moving artifacts. The run user's `schemaf.sh` downloads the app's `releases.json`, verifies every artifact's attestation against the signer **you** configured, and installs a verified version with a database backup and an automatic rollback.
+
+```
+CI (tag vX.Y.Z)                              run user (container runtime + ~/.myapp/etc/env)
+───────────────                              ───────────────────────────────────────────────
+release.gen.yml → GitHub release
+  myapp-1.5.0.run + .sigstore.json
+  releases.json  ──────────────────────────►  schemaf.sh releases      (download + verify)
+                                              schemaf.sh install 1.5.0 (backup, switch, health check,
+                                                                        rollback on failure)
+```
+
+The pull flow runs on **Linux only**. On macOS `releases` and `install` stop with `the pull flow (releases, install) runs on Linux only — on macOS use build --output, load and run --image`.
+
+**Setting up a box** (once). The run user needs the container runtime ([Container runtime](#container-runtime)) and nothing else: no Go, no Node, no repository, no GitHub account, no `cosign`, `curl` or `jq` (they run in containers pinned by digest).
+
+1. Write `~/.<name>/etc/env` (mode `600`) with the app's secrets (see [What the run host provides](#what-the-run-host-provides)) and the three pull settings:
+
+   ```bash
+   SCHEMAF_RELEASES=https://github.com/acme/myapp/releases/download/schemaf-index/releases.json
+   SCHEMAF_SIGNER=acme/myapp
+   SCHEMAF_CHANNEL=stable
+   ```
+
+2. Install the run-side script: the generated `schemaf.sh` of the app's repository, at a release tag. It is the same script an artifact's `load` installs, and the only file on the box that is not verified, so take it from the repository you trust, over https:
+
+   ```bash
+   mkdir -p ~/.myapp/bin
+   curl -fsSL https://raw.githubusercontent.com/acme/myapp/v1.4.0/schemaf.sh -o ~/.myapp/bin/schemaf.sh
+   chmod 755 ~/.myapp/bin/schemaf.sh
+   ```
+
+3. Fetch and install the newest release on the channel:
+
+   ```bash
+   ~/.myapp/bin/schemaf.sh releases          # nothing runs yet: the newest version, verified: 1.4.0
+   ~/.myapp/bin/schemaf.sh install 1.4.0
+   ```
+
+From then on, `load` (run by `install`) keeps `~/.<name>/bin/schemaf.sh` current, and every later version is installed the same way: `releases`, then `install <version>`, by hand or from cron.
+
+**The settings**, all in `~/.<name>/etc/env` and all required by `releases` and `install`; a missing or invalid one stops them with its name:
+
+| Variable | Value |
+|---|---|
+| `SCHEMAF_RELEASES` | the URL of the app's `releases.json`, on any host (GitHub by default, a mirror, S3, ...). The run side never calls the GitHub API |
+| `SCHEMAF_SIGNER` | who must have signed the artifacts. `<owner>/<repo>` means the certificate identity `https://github.com/<owner>/<repo>/.github/workflows/release.gen.yml@refs/tags/v<version>` (the release workflow on exactly that version's tag) with the issuer `https://token.actions.githubusercontent.com` (GitHub Actions). A value starting with `https://` is a full certificate identity, matched exactly, for any other signing workflow; its issuer is `SCHEMAF_SIGNER_ISSUER`, by default GitHub Actions. The signer is never taken from the index |
+| `SCHEMAF_CHANNEL` | `stable` (releases only) or `prerelease` (releases and prereleases). Anything else is an error |
+
+#### `releases`
+
+```bash
+~/.<name>/bin/schemaf.sh releases
+```
+
+1. Downloads `SCHEMAF_RELEASES`. An index that isn't a JSON list of `{version, artifact, attestation}` entries with distinct `X.Y.Z` or `X.Y.Z-<pre>` versions is refused as a whole. Unknown fields are ignored. Whether an entry is a prerelease is decided by its version (a `-<pre>` part), never by its `prerelease` field.
+2. Keeps the versions on the channel that are newer than the running one (by semver precedence). When nothing runs (a new box), only the newest version on the channel.
+3. For each one not yet downloaded: downloads the artifact and its bundle, verifies the attestation with `cosign verify-blob-attestation` (SLSA provenance, the configured signer and issuer, the Sigstore public-good instance), and checks that the artifact's manifest names this project and exactly the entry's version. Only then it is kept, in `~/.<name>/releases/<version>/`. A failed check is reported loudly with the version and the reason, the files are deleted, the other versions are still processed, and `releases` exits non-zero.
+4. Prints the verified versions it kept, oldest first, one per line.
+
+Downloads are plain https (or http): integrity comes from the attestation, not from the transport.
+
+#### `install`
+
+```bash
+~/.<name>/bin/schemaf.sh install <version>
+```
+
+Accepts only a version that `releases` downloaded and verified (`~/.<name>/releases/<version>/`), that is on the channel and newer than the running one. Its attestation is verified again before anything changes. Migrations are forward-only, so there are no downgrades on this path; `run --image <older tag>` stays the operator's manual rollback. A running tag that isn't a version (e.g. a commit hash from a [handover](#separate-build-and-run-users)) can't be compared: `install` stops and names it.
+
+1. `load`s the new artifact while the running version keeps serving.
+2. Stops the backend (Postgres keeps running), then backs up the database: `pg_dump` in the Postgres container to `~/.<name>/var/backups/<running version>-<time>.dump`. No write lands after the backup. A failed backup starts the running version again and stops, with nothing changed.
+3. Starts the new version (`run --image <version> -d`) and waits up to 120 seconds for `GET /api/health` (on the port in its manifest) to answer `200` with `"status": "ok"`. The server applies its migrations before it serves, so a healthy server has applied them.
+4. **On failure it rolls back, always:** saves the new version's logs to `~/.<name>/var/installs/<time>-<version>.log`, stops the new backend, recreates the database from the backup, starts the previous version and checks its health the same way.
+5. If the rollback fails too, it stops the stack, records `rollback-failed` and exits non-zero. It never retries. Find the backup and the logs in the status (below).
+
+With nothing running (the first install on a box) there is nothing to back up or roll back to: on failure `install` stops the new version, records `failed`, and keeps the database volume.
+
+**One install at a time.** `install` holds a lock (the directory `~/.<name>/var/install.lock`, with its PID); a second `install` while one runs, from a shell or cron, is refused: `another install is running (PID …)`. A lock whose process is gone (e.g. after a reboot) is taken over.
+
+**What is recorded.** `~/.<name>/updates/status.json` holds the running version, the previous one, and the last install:
+
+```json
+{
+  "running": "1.5.0",
+  "previous": "1.4.0",
+  "install": {
+    "version": "1.5.0",
+    "from": "1.4.0",
+    "state": "installed",
+    "started": "2026-11-22T10:00:00Z",
+    "finished": "2026-11-22T10:01:12Z",
+    "message": "installed 1.5.0",
+    "backup": "/home/myapp/.myapp/var/backups/1.4.0-20261122T100003Z.dump",
+    "log": ""
+  }
+}
+```
+
+`state` is `installing`, `installed`, `rolled-back` (the new version failed, the previous one serves again), `failed` (a first install that failed, or a backup that failed) or `rollback-failed` (the stack is stopped). Every finished install also appends one line to `~/.<name>/var/installs.log`.
+
+**Retention.** After a successful install, `install` keeps the running and the previous version (their images, deploy directories and downloaded artifacts; the previous one is the rollback target) and the downloaded versions newer than the running one, and removes the other versions, plus the backups other than this install's. Tags that aren't versions, e.g. ones you loaded by hand, are never removed.
+
 ### What the run host provides
 
 The artifact is self-contained except for:
 
 | Provided by the run host | Examples |
 |---|---|
-| `~/.<name>/etc/env` | `DB_PASS`, `PUBLIC_*` (incl. `PUBLIC_AUTH0_*`), `BACKUP_*`, `SCHEMAF_RUNTIME` |
+| `~/.<name>/etc/env` | `DB_PASS`, `PUBLIC_*` (incl. `PUBLIC_AUTH0_*`), `BACKUP_*`, `SCHEMAF_RUNTIME`; for [pulling releases](#pulling-releases-linux) `SCHEMAF_RELEASES`, `SCHEMAF_SIGNER` (and `SCHEMAF_SIGNER_ISSUER`), `SCHEMAF_CHANNEL` |
 | Files the env refers to | the backup SSH key (`BACKUP_SSH_KEY_PATH`), if backups are set up |
 | Container runtime | podman (the default) or Docker, see [Container runtime](#container-runtime) |
 | Database volume | `<name>-postgres-data`, created by the runtime on first start, kept across versions |

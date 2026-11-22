@@ -158,7 +158,7 @@ func TestReleaseWorkflowTag(t *testing.T) {
 			t.Errorf("%s outputs:\n%s\nwant:\n%s", tag, got, want)
 		}
 	}
-	for _, tag := range []string{"v1.4", "v1.4.0+build.7", "v01.2.3", "v1.2.3-", "v1.2.3-a_b", "vX.Y.Z"} {
+	for _, tag := range []string{"v1.4", "v1.4.0+build.7", "v01.2.3", "v1.2.3-", "v1.2.3-a_b", "vX.Y.Z", "v1.2.0-rc.", "v1.2.0-rc..1", "v1.2.0-.rc"} {
 		_, out, err := runStep(t, wf, "version", map[string]string{"TAG": tag})
 		if err == nil {
 			t.Errorf("%s accepted", tag)
@@ -253,7 +253,7 @@ func runStepIn(t *testing.T, wf workflow, id string, env map[string]string, dir,
 
 // apiPages is what `gh api --paginate` prints: one JSON array per page.
 const apiPages = `[
- {"tag_name": "v1.4.0", "draft": false, "assets": [
+ {"tag_name": "v1.4.0", "draft": false, "body": "Fixes the login.", "assets": [
    {"name": "myapp-1.4.0.run", "browser_download_url": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run"},
    {"name": "myapp-1.4.0.run.sigstore.json", "browser_download_url": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run.sigstore.json"}]},
  {"tag_name": "schemaf-index", "draft": false, "assets": [{"name": "releases.json", "browser_download_url": "x"}]},
@@ -267,6 +267,8 @@ const apiPages = `[
    {"name": "myapp-2.0.0-dev.3.run.sigstore.json", "browser_download_url": "https://github.com/acme/myapp/releases/download/v2.0.0-dev.3/myapp-2.0.0-dev.3.run.sigstore.json"}]},
  {"tag_name": "v1.2", "draft": false, "assets": [
    {"name": "myapp-1.2.run", "browser_download_url": "a"}, {"name": "myapp-1.2.run.sigstore.json", "browser_download_url": "b"}]},
+ {"tag_name": "v1.2.0-rc.", "draft": false, "assets": [
+   {"name": "myapp-1.2.0-rc..run", "browser_download_url": "a"}, {"name": "myapp-1.2.0-rc..run.sigstore.json", "browser_download_url": "b"}]},
  {"tag_name": "v0.9.0", "draft": false, "assets": [
    {"name": "otherapp-0.9.0.run", "browser_download_url": "a"}, {"name": "otherapp-0.9.0.run.sigstore.json", "browser_download_url": "b"}]}
 ]
@@ -277,13 +279,15 @@ const wantIndex = `[
     "version": "1.4.0",
     "prerelease": false,
     "artifact": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run",
-    "attestation": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run.sigstore.json"
+    "attestation": "https://github.com/acme/myapp/releases/download/v1.4.0/myapp-1.4.0.run.sigstore.json",
+    "notes": "Fixes the login."
   },
   {
     "version": "2.0.0-dev.3",
     "prerelease": true,
     "artifact": "https://github.com/acme/myapp/releases/download/v2.0.0-dev.3/myapp-2.0.0-dev.3.run",
-    "attestation": "https://github.com/acme/myapp/releases/download/v2.0.0-dev.3/myapp-2.0.0-dev.3.run.sigstore.json"
+    "attestation": "https://github.com/acme/myapp/releases/download/v2.0.0-dev.3/myapp-2.0.0-dev.3.run.sigstore.json",
+    "notes": ""
   }
 ]
 `

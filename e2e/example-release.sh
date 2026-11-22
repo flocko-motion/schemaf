@@ -3,18 +3,24 @@
 # the GitHub repository flocko-motion/schemaf-example (EXTEND.md › Testing the
 # framework: the CI gate › The example release).
 #
-# Brings the example to schemaf <ref> (the first run creates it with init),
-# pushes it, tags v<version>, waits for its generated release.gen.yml run and
-# checks the result: the GitHub release with the artifact and its attestation
-# bundle, the attestation (signed by the example's release workflow on that
-# tag), the version in the artifact's manifest, and the entry in releases.json.
+# Upgrades the long-lived example project to schemaf <ref>, pushes it, tags
+# v<version>, waits for its generated release.gen.yml run and checks the
+# result: the GitHub release with the artifact and its attestation bundle, the
+# attestation (signed by the example's release workflow on that tag), the
+# version in the artifact's manifest, and the entry in releases.json. Then it
+# starts the example pull (.github/workflows/example-pull.yml on <ref>: a new
+# box installs v-1 and upgrades to v<version>) and waits for it.
+# The example and its first release are a one-time setup, not part of this
+# script (EXTEND.md › The example release).
 #
 # Usage: e2e/example-release.sh <schemaf-ref> [<version>]
 #   <schemaf-ref>  a release tag vX.Y.Z: <version> defaults to X.Y.Z;
-#                  or a full commit hash, branch or tag: <version> is required.
+#                  or a branch or tag of schemaf: <version> is required.
+#                  It must be pushed: the example pull runs on it.
 #   <version>      X.Y.Z or X.Y.Z-<pre>; the example's tag is v<version>.
 # A version that is already released is only checked, never released again.
-# Needs git, go, npm, gh (signed in, with push access to the example), jq, curl.
+# Needs git, go, gh (signed in, with push access to the example and the
+# right to start workflows in schemaf), jq, curl.
 # Runs as part of `make release` after the tag; it pushes to the example
 # repository, so run it by hand only on the maintainer's order.
 set -euo pipefail
@@ -39,14 +45,18 @@ TAG="v$VERSION"
 PRERELEASE=false
 case "$VERSION" in *-*) PRERELEASE=true ;; esac
 
-for tool in git go npm gh jq curl; do
+for tool in git go gh jq curl; do
   command -v "$tool" >/dev/null || fail "$tool is required"
 done
 gh auth status >/dev/null 2>&1 || fail "gh is not signed in: gh auth login"
 
+# The example pull is a workflow run on <ref>, so <ref> is a branch or tag.
+SCHEMAF_REPO="flocko-motion/schemaf"
+git ls-remote --exit-code --heads --tags "https://github.com/$SCHEMAF_REPO" "$REF" >/dev/null \
+  || fail "'$REF' is not a branch or tag of $SCHEMAF_REPO — push it first (the example pull runs on it)"
 # A moving ref may be served stale by the module proxy: only schemaf bypasses
-# it (as in build-example.sh). Release tags and full hashes come through it.
-if [[ ! "$REF" =~ ^v$num\.$num\.$num$ ]] && [[ ! "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+# it (as in build-example.sh). Release tags come through it.
+if [[ ! "$REF" =~ ^v$num\.$num\.$num$ ]]; then
   export GOPRIVATE="$SCHEMAF_MODULE"
 fi
 
@@ -65,17 +75,10 @@ else
   if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
     fail "the tag $TAG exists in $EXAMPLE_REPO but has no release — its release run failed: see https://github.com/$EXAMPLE_REPO/actions, delete the tag (git push origin :refs/tags/$TAG) and run again"
   fi
-  if ! git rev-parse -q --verify HEAD >/dev/null; then
-    git symbolic-ref HEAD refs/heads/main
-    say "empty repository: go run ${SCHEMAF_MODULE}/cmd/schemaf@${REF} init ${EXAMPLE_NAME}"
-    mkdir "$WORK/init"
-    ( cd "$WORK/init" && go run "${SCHEMAF_MODULE}/cmd/schemaf@${REF}" init "$EXAMPLE_NAME" )
-    cp -R "$WORK/init/$EXAMPLE_NAME/." "$CLONE/"
-  else
-    say "upgrade to schemaf $REF"
-    ( cd go && go get "${SCHEMAF_MODULE}@${REF}" && go mod tidy )
-    ./schemaf.sh codegen
-  fi
+  [ -f schemaf.toml ] || fail "$EXAMPLE_REPO has no project yet — set it up once (EXTEND.md › The example release › One-time setup)"
+  say "upgrade to schemaf $REF"
+  ( cd go && go get "${SCHEMAF_MODULE}@${REF}" && go mod tidy )
+  ./schemaf.sh codegen
   [ -f .github/workflows/release.gen.yml ] || fail "codegen wrote no .github/workflows/release.gen.yml"
 
   say "commit, push main, tag $TAG"
@@ -128,4 +131,20 @@ jq -e --arg v "$VERSION" --argjson pre "$PRERELEASE" --arg art "$base/$ART" --ar
   'map(select(.version == $v and .prerelease == $pre and .artifact == $art and .attestation == $att)) | length == 1' \
   <<<"$index" >/dev/null || fail "releases.json has no correct entry for $VERSION: $index"
 
-echo "✓ example release $TAG: attested artifact, releases.json"
+say "the example pull: a new box installs v-1, then upgrades to $VERSION"
+# The new run is the one with an ID above every run that existed before.
+pull_runs() { gh run list -R "$SCHEMAF_REPO" --workflow example-pull.yml -L 20 --json databaseId,headBranch "$@"; }
+before=$(pull_runs -q 'map(.databaseId) | max // 0') || fail "could not list the example-pull runs"
+gh workflow run example-pull.yml -R "$SCHEMAF_REPO" --ref "$REF" -f version="$VERSION" \
+  || fail "could not start example-pull.yml on $REF"
+run=""
+for _ in $(seq 1 60); do
+  run=$(pull_runs -q "map(select(.databaseId > $before and .headBranch == \"$REF\")) | min_by(.databaseId).databaseId // empty" 2>/dev/null || true)
+  [ -n "$run" ] && break
+  sleep 5
+done
+[ -n "$run" ] || fail "the example pull did not start within 5 minutes: https://github.com/$SCHEMAF_REPO/actions/workflows/example-pull.yml"
+gh run watch "$run" -R "$SCHEMAF_REPO" --exit-status >/dev/null \
+  || fail "the example pull failed: https://github.com/$SCHEMAF_REPO/actions/runs/$run"
+
+echo "✓ example release $TAG: attested artifact, releases.json, and a new box that pulled v-1 and upgraded to it"

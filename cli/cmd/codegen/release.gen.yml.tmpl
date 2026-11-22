@@ -36,8 +36,8 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          num='(0|[1-9][0-9]*)'
-          if [[ ! "$TAG" =~ ^v$num\.$num\.$num(-[0-9A-Za-z.-]+)?$ ]]; then
+          num='(0|[1-9][0-9]*)' id='[0-9A-Za-z-]+'
+          if [[ ! "$TAG" =~ ^v$num\.$num\.$num(-$id(\.$id)*)?$ ]]; then
             echo "::error::tag $TAG is not a release tag — use vX.Y.Z or vX.Y.Z-<pre>"
             exit 1
           fi
@@ -97,7 +97,7 @@ jobs:
             (add // [])
             | map(
                 select(.draft | not)
-                | select(.tag_name | test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"))
+                | select(.tag_name | test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"))
                 | (.tag_name | ltrimstr("v")) as $v
                 | ([.assets[] | {key: .name, value: .browser_download_url}] | from_entries) as $a
                 | select($a["\($name)-\($v).run"] and $a["\($name)-\($v).run.sigstore.json"])
@@ -105,7 +105,8 @@ jobs:
                     version: $v,
                     prerelease: ($v | contains("-")),
                     artifact: $a["\($name)-\($v).run"],
-                    attestation: $a["\($name)-\($v).run.sigstore.json"]
+                    attestation: $a["\($name)-\($v).run.sigstore.json"],
+                    notes: (.body // "")
                   })' > releases.json
           echo "releases.json lists $(jq length releases.json) release(s)"
           if ! gh release view schemaf-index >/dev/null 2>&1; then

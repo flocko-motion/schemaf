@@ -1,0 +1,161 @@
+# The runner setup the e2e workflows share (gate.yml, example-pull.yml): the
+# compose provider for both runtimes, real Unix users (E2E_RUN_USER, and
+# E2E_BUILD_USER if set) with rootless podman or the docker group, and the
+# podman API sockets of the runner and the run user. The calling job sets
+# SCHEMAF_RUNTIME, E2E_RUN_USER and optionally E2E_BUILD_USER in its env.
+name: runner-setup
+description: Compose provider, real users and podman API sockets for schemaf's e2e
+runs:
+  using: composite
+  steps:
+    - name: Container runtimes
+      shell: bash
+      run: |
+        set -euo pipefail
+        # podman compose must hand off to docker-compose (Compose v2). The
+        # image ships it as Docker's CLI plugin; put it on PATH for podman.
+        plugin=/usr/libexec/docker/cli-plugins/docker-compose
+        if ! command -v docker-compose >/dev/null; then
+          [ -x "$plugin" ] || { echo "::error::docker-compose is neither on PATH nor at $plugin"; exit 1; }
+          sudo ln -s "$plugin" /usr/local/bin/docker-compose
+        fi
+        podman version
+        docker version
+        for rt in podman docker; do
+          out=$($rt compose version 2>&1) || true
+          case "$out" in
+            *"Docker Compose version"*) echo "$rt compose: $out" ;;
+            *) echo "::error::$rt compose is not docker-compose: $out"; exit 1 ;;
+          esac
+        done
+
+    - name: Real users (run, and build if E2E_BUILD_USER is set)
+      shell: bash
+      run: |
+        set -euo pipefail
+        # /etc/environment on the runner holds two per-user entries of the
+        # runner itself: XDG_CONFIG_HOME=/home/runner/.config (runner-images'
+        # configure-environment.sh, $HOME expanded by its post-gen script)
+        # and XDG_RUNTIME_DIR=/run/user/1001 (added by the hosting platform).
+        # pam_env applies them to every user sudo switches to and to every
+        # user's systemd manager: the created users read podman's config from
+        # the runner's home, and their podman.service crash-looped on the
+        # runner's runtime dir. A real server has neither: remove both before
+        # any user or user manager exists. (The runner's own job environment
+        # was set at startup and keeps its values.)
+        sudo sed -i -E '/^XDG_(CONFIG_HOME|RUNTIME_DIR)=/d' /etc/environment
+        if grep -E '^XDG_(CONFIG_HOME|RUNTIME_DIR)=' /etc/environment; then
+          echo "::error::/etc/environment still sets XDG_CONFIG_HOME or XDG_RUNTIME_DIR (above) after removing them"; exit 1
+        fi
+        for u in ${E2E_BUILD_USER:-} "$E2E_RUN_USER"; do   # the build user is optional
+          sudo useradd --create-home --shell /bin/bash "$u"
+          home=$(getent passwd "$u" | cut -d: -f6)
+          uid=$(id -u "$u")
+          env_of_u=$(sudo -H -u "$u" env)
+          xdg=$(sed -n 's/^XDG_CONFIG_HOME=//p' <<<"$env_of_u")
+          case "$xdg" in
+            "" | "$home" | "$home"/*) ;;
+            *) echo "::error::$u gets XDG_CONFIG_HOME=$xdg, outside its home $home (from /etc/environment?)"; exit 1 ;;
+          esac
+          rundir=$(sed -n 's/^XDG_RUNTIME_DIR=//p' <<<"$env_of_u")
+          case "$rundir" in
+            "" | "/run/user/$uid") ;;
+            *) echo "::error::$u gets XDG_RUNTIME_DIR=$rundir, not its own /run/user/$uid (from /etc/environment?)"; exit 1 ;;
+          esac
+          # rootless podman needs subordinate IDs and a runtime dir (lingering)
+          grep -q "^$u:" /etc/subuid || { echo "::error::useradd gave $u no /etc/subuid range"; exit 1; }
+          grep -q "^$u:" /etc/subgid || { echo "::error::useradd gave $u no /etc/subgid range"; exit 1; }
+          sudo loginctl enable-linger "$u"
+          for _ in $(seq 1 30); do [ -d "/run/user/$uid" ] && break; sleep 1; done
+          [ -d "/run/user/$uid" ] || { echo "::error::/run/user/$uid did not appear after enable-linger $u"; exit 1; }
+          # under Docker both users share the machine's daemon
+          if [ "$SCHEMAF_RUNTIME" = docker ]; then sudo usermod -aG docker "$u"; fi
+        done
+
+    # podman compose hands off to docker-compose, which talks to podman
+    # through the user's API socket (INSTALL.md › Prerequisites). Started for
+    # every user that runs compose: the runner (test, dev, instances) and the
+    # run user. Not the build user: build and load don't use compose.
+    - name: podman API sockets (runner, run user)
+      if: env.SCHEMAF_RUNTIME == 'podman'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo loginctl enable-linger "$USER"
+        # socket_diagnostics <user>: everything that explains a dead socket.
+        socket_diagnostics() {
+          local u=$1 uid
+          uid=$(id -u "$u")
+          echo "::group::podman socket diagnostics for $u (uid $uid)"
+          if [ "$u" = "$USER" ]; then
+            env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user status podman.socket podman.service --no-pager || true
+            env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user show-environment || true
+          else
+            sudo systemctl --user -M "$u@" status podman.socket podman.service --no-pager || true
+            sudo systemctl --user -M "$u@" show-environment || true
+          fi
+          systemctl status "user@$uid.service" --no-pager || true
+          sudo journalctl --no-pager -n 100 _UID="$uid" || true
+          sudo journalctl --no-pager -n 50 "_SYSTEMD_USER_UNIT=podman.service" _UID="$uid" || true
+          sudo ls -la "/run/user/$uid" "/run/user/$uid/podman" || true
+          echo "-- $u's environment through sudo -H (HOME, XDG_*):"
+          sudo -H -u "$u" env | grep -E '^(HOME|XDG_)' || true
+          echo "-- where a leaked XDG_RUNTIME_DIR could come from:"
+          env | grep -E '^XDG_' || true
+          grep -E '^XDG_' /etc/environment || true
+          sudo grep -rhE '^[[:space:]]*Defaults' /etc/sudoers /etc/sudoers.d 2>/dev/null || true
+          sudo sudo -V | sed -n '/Environment variables to preserve/,/^$/p' || true
+          echo "::endgroup::"
+        }
+
+        # wait_socket <user> <systemctl...>: podman.socket is active (bounded)
+        wait_socket() {
+          local u=$1
+          shift
+          for _ in $(seq 1 15); do "$@" is-active --quiet podman.socket && return 0; sleep 1; done
+          echo "::error::podman.socket of $u is not active after enable --now"
+          socket_diagnostics "$u"
+          exit 1
+        }
+
+        # ping_socket <user> <cmd prefix...>: podman's API socket of <user>
+        # answers. A few tries: the first connection starts podman.service.
+        ping_socket() {
+          local u=$1 run
+          shift
+          run=/run/user/$(id -u "$u")
+          for _ in 1 2 3 4 5; do
+            if "$@" env XDG_RUNTIME_DIR="$run" podman --remote --url "unix://$run/podman/podman.sock" version >/dev/null; then
+              echo "podman API socket answers for $u: unix://$run/podman/podman.sock"
+              return 0
+            fi
+            sleep 2
+          done
+          echo "::error::podman's API socket for $u doesn't answer at unix://$run/podman/podman.sock"
+          socket_diagnostics "$u"
+          exit 1
+        }
+
+        # The runner: its user systemd is reachable through its own bus.
+        run=/run/user/$(id -u)
+        for _ in $(seq 1 30); do [ -S "$run/bus" ] && break; sleep 1; done
+        [ -S "$run/bus" ] || { echo "::error::$run/bus did not appear: no user systemd for $USER (lingering?)"; exit 1; }
+        as_runner_systemd=(env XDG_RUNTIME_DIR="$run" DBUS_SESSION_BUS_ADDRESS="unix:path=$run/bus" systemctl --user)
+        "${as_runner_systemd[@]}" enable --now podman.socket
+        wait_socket "$USER" "${as_runner_systemd[@]}"
+        ping_socket "$USER"
+
+        # The run user: through systemd's machine transport (systemd >= 248),
+        # once lingering has started its user@<uid>.service. Its manager
+        # started after /etc/environment was cleaned (previous step), so it
+        # needs no restart.
+        u=$E2E_RUN_USER
+        svc="user@$(id -u "$u").service"
+        for _ in $(seq 1 30); do systemctl is-active --quiet "$svc" && break; sleep 1; done
+        systemctl is-active --quiet "$svc" || { echo "::error::$svc is not active: no user systemd for $u (lingering?)"; systemctl status "$svc" --no-pager || true; exit 1; }
+        sudo systemctl --user --machine="$u@" enable --now podman.socket
+        wait_socket "$u" sudo systemctl --user --machine="$u@"
+        ping_socket "$u" sudo -H -u "$u"   # -H: its own HOME (podman reads ~/.config/containers)
+
+        # the runner's own podman and systemctl find its runtime dir from here on
+        echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"

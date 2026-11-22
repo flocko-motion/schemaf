@@ -1895,6 +1895,7 @@ For work on schemaf itself. `make test <unit|db|e2e|all>` runs the test layers l
 2. the onboarding e2e (`e2e/build-example.sh <head sha>`), which also runs
    - the [lockfiles](INSTALL.md#lockfiles) (`e2e/deploy.sh`): `init`'s `frontend/package-lock.json` and `go/go.sum` are committed, and a `package.json` changed without its lockfile, or an emptied `go.sum`, stops `build` with the file and the fix;
    - the two-user deployment (`e2e/deploy.sh`) with **two real Unix users** the workflow creates (`useradd`): the build user clones the project and builds the artifact, the run user loads, runs, upgrades and rolls back. Under podman each has its own rootless store, so the image really crosses over as a file; under Docker both use the machine's one daemon, so the builder's image is removed before each load;
+   - the [pull flow](INSTALL.md#pulling-releases-linux) (`e2e/pull.sh`, run by `deploy.sh` on the same run user): the runner builds releases of the project and signs them for real with keyless Sigstore under the gate job's own identity (`id-token: write`; `SCHEMAF_SIGNER` is that full certificate identity), and serves a `releases.json` from a local HTTP server. The run user's box, set up as INSTALL.md instructs, does a first install on the empty box and an upgrade with its data kept; a deliberately broken release (its migration changes data, its health check fails) rolls back automatically, with the database restored and the previous version serving; and an older version, a prerelease on the stable channel, a tampered artifact, a version that doesn't match its manifest and a wrong signer are refused;
    - the data-volume check (`e2e/volumes.sh`) with real volumes: the other runtime holds `<name>-postgres-data` → `test` and `run` refuse; both runtimes hold it → they refuse; only the selected one → `test` starts. The `podman` job covers "Docker has it", the `docker` job "podman has it".
 
 `gate` is green only if both jobs are.
@@ -1912,14 +1913,14 @@ It doesn't run on plain pushes to branches.
 
 **Caches**: downloads only — the Go module and build caches (keyed by `go.sum`) and the npm cache (keyed by `cli/cmd/codegen/scaffold/package.json.tmpl`, which decides what a new project installs; the repository has no `package-lock.json`). Never container volumes, the project's images, podman/Docker storage, database state, or anything else from a previous run.
 
-**The scripts are the single source of truth.** The workflow only provisions the runner (the two users, the compose provider) and calls `make test all`. It sets:
+**The scripts are the single source of truth.** The workflow only provisions the runner (the two users, the compose provider, the podman API sockets: the composite action `.github/actions/runner-setup`, shared with `example-pull.yml`) and calls `make test all`. It sets:
 
 | Variable | Effect |
 |---|---|
-| `E2E_REFERENCE=1` | this is the reference environment: a check that can't run fails instead of being skipped (e.g. `volumes.sh` without the other runtime, `deploy.sh` without two real users) |
+| `E2E_REFERENCE=1` | this is the reference environment: a check that can't run fails instead of being skipped (e.g. `volumes.sh` without the other runtime, `deploy.sh` without two real users, `pull.sh` without Linux or the OIDC token) |
 | `E2E_BUILD_USER`, `E2E_RUN_USER` | `deploy.sh` builds as the one and runs as the other, through `sudo`, instead of simulating the second user with its own `HOME` |
 
-Without them (a local run), `deploy.sh` simulates the second user — under podman on Linux with its own rootless store under that `HOME` — and `volumes.sh` skips loudly when the other runtime isn't usable. A local `make test all` is for debugging, e.g. on macOS; Docker locally is optional: `SCHEMAF_RUNTIME=docker make test e2e`.
+Without them (a local run), `deploy.sh` simulates the second user — under podman on Linux with its own rootless store under that `HOME` — and `volumes.sh` skips loudly when the other runtime isn't usable. The pull flow skips loudly outside GitHub Actions (it signs with the workflow's OIDC token) and on macOS (it is Linux only), so `make test all` and `make release` on a Mac don't cover it; CI does, on every PR. GitHub gives no OIDC token to a pull request from a fork, so such a PR can't pass the gate: push its branch to this repository and let the gate run there. A local `make test all` is for debugging, e.g. on macOS; Docker locally is optional: `SCHEMAF_RUNTIME=docker make test e2e`.
 
 **One-time repository setting (maintainer).** In the repository settings, a branch protection rule for `main` (Settings › Branches › Add rule, pattern `main`) with:
 
@@ -1956,14 +1957,24 @@ No prerelease tags: the only tag a release creates is `vX.Y.Z`. To merge without
 
 ### The example release
 
-The CI gate can't push a tag to GitHub and watch the [release workflow](INSTALL.md#releases-from-ci-releasegenyml) a project gets, so a real generated project does it: the GitHub repository [`flocko-motion/schemaf-example`](https://github.com/flocko-motion/schemaf-example). `make release` runs `e2e/example-release.sh vX.Y.Z` after tagging:
+The CI gate tests the release and pull machinery against itself. What it can't test is the real path through GitHub: a tag in a generated project, the release workflow it got from codegen, the attestation GitHub's Sigstore setup produces, and a box that pulls that release. A long-lived project tests it: the GitHub repository [`flocko-motion/schemaf-example`](https://github.com/flocko-motion/schemaf-example), made by `init` and **upgraded** from each schemaf release to the next, like a real app. (Creating a project from scratch is the onboarding e2e's job, on every PR.)
 
-1. Clones the example. If it is empty, creates it with `go run github.com/flocko-motion/schemaf/cmd/schemaf@vX.Y.Z init schemaf-example`; otherwise upgrades it (`go get github.com/flocko-motion/schemaf@vX.Y.Z`, `go mod tidy`, `./schemaf.sh codegen`).
+`make release` runs `e2e/example-release.sh vX.Y.Z` after tagging:
+
+1. Clones the example and upgrades it to the new schemaf: `go get github.com/flocko-motion/schemaf@vX.Y.Z`, `go mod tidy`, `./schemaf.sh codegen`.
 2. Commits, pushes `main`, tags the example `vX.Y.Z`, the same version as schemaf, and pushes the tag.
 3. Waits for the example's `release.gen.yml` run of that tag.
 4. Checks the result: the GitHub release has `schemaf-example-X.Y.Z.run` and its `.sigstore.json` bundle; the attestation verifies (`gh attestation verify --bundle`) as signed by the example's `release.gen.yml` on `refs/tags/vX.Y.Z`; the artifact's manifest names version `X.Y.Z`; `releases.json`, downloaded from its stable URL, has exactly one correct entry for it.
+5. **The example pull**: starts `.github/workflows/example-pull.yml` on the schemaf tag and waits for it. Under both runtimes, on a fresh `ubuntu-24.04` runner, `e2e/example-pull.sh X.Y.Z` sets up a new box exactly as INSTALL.md › Pulling releases instructs, as it would have been when v-1 (the example's release before `X.Y.Z`) was the newest: the env file with `SCHEMAF_SIGNER=flocko-motion/schemaf-example`, and the example's `schemaf.sh` at v-1's tag. Then `releases` and `install` put v-1 on the empty box (reading the real index as it was then: its entries up to v-1, served locally), and `releases` and `install X.Y.Z` upgrade it from the real `releases.json`, done by v-1's run-side script. So each release also proves that a box running the previous version can verify and install the next one.
 
-A version that is already released is only checked, never released again. A tag without a release (a failed run) stops it with the run's URL; delete the tag in the example and run it again. By hand, for any ref (a branch needs the example's version, e.g. a prerelease): `e2e/example-release.sh <ref> [<version>]`. It pushes to the example repository, so only on the maintainer's order. It needs `git`, `go`, `npm`, `jq`, `curl` and `gh`, signed in with push access to the example.
+A version that is already released is only checked, never released again. A tag without a release (a failed run) stops it with the run's URL; delete the tag in the example and run it again. By hand, for a pushed branch or tag of schemaf (a branch needs the example's version, e.g. a prerelease): `e2e/example-release.sh <ref> [<version>]`. It pushes to the example repository and starts a workflow, so only on the maintainer's order. It needs `git`, `go`, `jq`, `curl` and `gh`, signed in with push access to the example. The example pull alone: `gh workflow run example-pull.yml --ref <schemaf branch or tag> -f version=<X.Y.Z>`.
+
+**One-time setup** (done by hand, once; not part of the test). The example needs a project and a first release with the pull flow, so that every later release has a v-1:
+
+1. In a clone of the empty repository: `go run github.com/flocko-motion/schemaf/cmd/schemaf@<full commit hash> init schemaf-example`, with a pushed schemaf commit that has the pull flow, then move the project's files into the clone's root, commit and push `main`.
+2. Tag the example `v0.0.1` and push the tag: its generated release workflow makes the first attested release and `releases.json`.
+
+From then on, `make release` upgrades it.
 
 ### e2e refs
 

@@ -116,6 +116,7 @@ type shUser struct {
 	home  string
 	state string
 	bin   string
+	env   []string // extra environment for every run
 }
 
 func newShUser(t *testing.T) *shUser {
@@ -136,7 +137,7 @@ func newShUser(t *testing.T) *shUser {
 // socket check) on every OS, so a Mac runs what CI runs. Other uname calls
 // (uname -m for the image platform) go to the real one.
 const fakeUname = `#!/bin/sh
-[ $# -eq 0 ] && { echo Linux; exit 0; }
+[ $# -eq 0 ] && { echo "${FAKE_UNAME:-Linux}"; exit 0; }
 for u in /usr/bin/uname /bin/uname; do [ -x "$u" ] && exec "$u" "$@"; done
 echo "fake uname: no real uname for: $*" >&2; exit 1
 `
@@ -154,6 +155,7 @@ func (u *shUser) run(dir, script string, args ...string) (string, string, int) {
 		"FAKE_STATE=" + u.state,
 		"FAKE_PLATFORM=linux/" + runtime.GOARCH,
 	}
+	cmd.Env = append(cmd.Env, u.env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -761,7 +763,7 @@ func TestArtifactLoadAndRunSide(t *testing.T) {
 			t.Error("deploy dir contains a dev-only compose file")
 		}
 		mustContain(t, "manifest", readFile(t, filepath.Join(deploy, "manifest")),
-			"name=myapp", "tag=v1", "commit="+commit1, "schemaf_version=v1.11.0", "platform=linux/"+runtime.GOARCH, "describe=")
+			"name=myapp", "tag=v1", "commit="+commit1, "schemaf_version=v1.11.0", "platform=linux/"+runtime.GOARCH, "describe=", "port=8000")
 		if info, err := os.Stat(runSide); err != nil || info.Mode()&0111 == 0 {
 			t.Fatalf("run-side schemaf.sh not installed: %v", err)
 		}

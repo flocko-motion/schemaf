@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # deploy.sh — e2e for the two-user deployment (INSTALL.md › Deployment):
 # build an artifact, load it as a second user, run it, check the app responds,
-# upgrade to a second tag, roll back to the first.
+# upgrade to a second tag, roll back to the first. Then the pull flow on the
+# same run user (pull.sh).
 #
 # Usage: e2e/deploy.sh <project-dir>     (called by build-example.sh)
 #
@@ -131,9 +132,14 @@ else
   say "simulated second user: HOME=$RUN_HOME ($([ "$SEPARATE_STORE" = 1 ] && echo "its own rootless store" || echo "the machine's one store"))"
 fi
 
+# The pull flow (INSTALL.md › Pulling releases), run at the end.
+# shellcheck source=pull.sh
+source "$SCRIPT_DIR/pull.sh"
+
 cleanup() {
   rc=$?
   as_runner "$RUN_SH" stop >/dev/null 2>&1 || true
+  pull_cleanup
   for t in ${TAG1:-} ${TAG2:-}; do
     rt_runner image rm "${NAME}:${t}" >/dev/null 2>&1 || true
     rt_builder image rm "${NAME}:${t}" >/dev/null 2>&1 || true
@@ -261,3 +267,6 @@ as_runner "$RUN_SH" run --image "$TAG1" -d --wait
 health "$TAG1"
 
 echo "  ✓ deploy: built, handed over, ran, upgraded and rolled back ($MODE users)"
+
+say "pull flow: releases and install on a fresh box (INSTALL.md › Pulling releases)"
+pull_flow
