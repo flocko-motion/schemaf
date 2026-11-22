@@ -762,6 +762,7 @@ usage: ~/.${PROJECT_NAME}/bin/schemaf.sh <command>   (run side: no checkout on t
   image rm <tag>              remove a loaded tag (not the running one)
   releases                    download and verify the releases newer than the running one (Linux)
   install <version>           install a verified release, with backup and rollback (Linux)
+  updater enable|disable|status   the units that let the app request an upgrade (Linux)
   <app subcommand> ...        run in the backend container, e.g. db backup
 See INSTALL.md › Deployment.
 EOF
@@ -792,6 +793,7 @@ _schemaf_start_image() {
   _schemaf_check_volume
   img="${PROJECT_NAME}:${tag}"
   dest="$DEPLOY_DIR/$tag"
+  _schemaf_updates_files || _die "could not create $UPDATES_DIR (the backend mounts it)"
   _schemaf_image_exists "$img" || _die "$img is not loaded — load its artifact first (./${PROJECT_NAME}-${tag}.run load); loaded tags: schemaf.sh image ls"
   [ -f "$dest/compose.gen.yml" ] && [ -f "$dest/manifest" ] || _die "$dest/ is missing — load the artifact again (./${PROJECT_NAME}-${tag}.run load)"
   labelled=$(_schemaf_image_label "$img" schemaf.commit)
@@ -889,6 +891,9 @@ _schemaf_runside() {
       ;;
     install)
       _schemaf_install "$@"
+      ;;
+    updater)
+      _schemaf_updater "$@"
       ;;
     image)
       _schemaf_check_runtime
@@ -1093,6 +1098,7 @@ _schemaf_releases() {
   _schemaf_pull_linux_only
   _schemaf_pull_config
   _schemaf_check_runtime
+  _schemaf_clear_stale_install
   running=$(_schemaf_running_version) || exit 1
   index="$(_schemaf_mktemp)/releases.json"
   echo "Fetching $SCHEMAF_RELEASES (channel $SCHEMAF_CHANNEL, running ${running:-nothing})" >&2
@@ -1111,7 +1117,9 @@ _schemaf_releases() {
     fi
     wanted="$wanted$v"$'\n'
   done <<< "$entries"
-  printf '%s' "$wanted" | _schemaf_sort_versions
+  wanted=$(printf '%s' "$wanted" | _schemaf_sort_versions)
+  _schemaf_write_available "$index" "$wanted" || _die "could not write $UPDATES_DIR/available.json"
+  [ -z "$wanted" ] || echo "$wanted"
   [ "$failed" = 0 ] || _die "some releases failed their checks (see above)"
 }
 
@@ -1134,34 +1142,55 @@ _schemaf_state_get() { # <key>
 }
 
 # _schemaf_record <running> <previous> <version> <from> <state> <started>
-#   <finished> <message> <backup> <log> — writes the state and status.json.
+#   <finished> <message> <backup> <log> — records the versions and the
+#   install, and rewrites status.json.
 _schemaf_record() {
-  local tmp
-  mkdir -p "$VAR_DIR" "$UPDATES_DIR"
+  local a i=0
+  # One line per value in the state files: no newlines inside.
+  for a in "$@"; do i=$((i + 1)); set -- "$@" "${a//$'\n'/ }"; done
+  shift "$i"
+  mkdir -p "$VAR_DIR"
   printf 'running=%s\nprevious=%s\n' "$1" "$2" > "$VAR_DIR/state.tmp"
   mv "$VAR_DIR/state.tmp" "$VAR_DIR/state"
-  tmp="$UPDATES_DIR/.status.json.tmp"
-  {
-    echo "{"
-    echo "  \"running\": $(_schemaf_json_str "$1"),"
-    echo "  \"previous\": $(_schemaf_json_str "$2"),"
-    echo "  \"install\": {"
-    echo "    \"version\": $(_schemaf_json_str "$3"),"
-    echo "    \"from\": $(_schemaf_json_str "$4"),"
-    echo "    \"state\": $(_schemaf_json_str "$5"),"
-    echo "    \"started\": $(_schemaf_json_str "$6"),"
-    echo "    \"finished\": $(_schemaf_json_str "$7"),"
-    echo "    \"message\": $(_schemaf_json_str "$8"),"
-    echo "    \"backup\": $(_schemaf_json_str "$9"),"
-    echo "    \"log\": $(_schemaf_json_str "${10}")"
-    echo "  }"
-    echo "}"
-  } > "$tmp"
-  chmod 644 "$tmp"
-  mv "$tmp" "$UPDATES_DIR/status.json"
+  printf 'version=%s\nfrom=%s\nstate=%s\nstarted=%s\nfinished=%s\nmessage=%s\nbackup=%s\nlog=%s\n' \
+    "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" > "$VAR_DIR/install.tmp"
+  mv "$VAR_DIR/install.tmp" "$VAR_DIR/install"
+  _schemaf_write_status
   if [ "$5" != installing ]; then
     echo "$7 $3 from=${4:--} $5 $8" >> "$VAR_DIR/installs.log"
   fi
+}
+
+# _schemaf_status_field <file> <key> — a JSON member of a state file's value.
+_schemaf_status_field() {
+  local v=""
+  [ ! -f "$VAR_DIR/$1" ] || v=$(_schemaf_manifest_get "$VAR_DIR/$1" "$2")
+  printf '"%s": %s' "$2" "$(_schemaf_json_str "$v")"
+}
+
+# _schemaf_write_status — ~/.<name>/updates/status.json from the state files
+# (var/state, var/install, var/request), atomically.
+_schemaf_write_status() {
+  local tmp="$UPDATES_DIR/.status.json.tmp" k sep
+  mkdir -p "$UPDATES_DIR"
+  {
+    echo "{"
+    echo "  $(_schemaf_status_field state running),"
+    echo "  $(_schemaf_status_field state previous),"
+    echo "  \"install\": {"
+    sep=""
+    for k in version from state started finished message backup log; do
+      printf '%s    %s' "$sep" "$(_schemaf_status_field install "$k")"; sep=$',\n'
+    done
+    printf '\n  },\n  "request": {\n'
+    sep=""
+    for k in version state message time; do
+      printf '%s    %s' "$sep" "$(_schemaf_status_field request "$k")"; sep=$',\n'
+    done
+    printf '\n  }\n}\n'
+  } > "$tmp"
+  chmod 644 "$tmp"
+  mv "$tmp" "$UPDATES_DIR/status.json"
 }
 
 _schemaf_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -1341,6 +1370,236 @@ _schemaf_install() {
   _die "$msg"
 }
 
+# --- updater (run side, Linux): systemd user units, the app's request --------
+# See INSTALL.md › The updater.
+
+_schemaf_unit_dir() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"; }
+_schemaf_unit_prefix() { echo "schemaf-${PROJECT_NAME}"; }
+
+# _schemaf_updates_files — what the backend container mounts must exist before
+# the stack starts: a missing bind-mount source would become a directory.
+_schemaf_updates_files() {
+  mkdir -p "$UPDATES_DIR" || return 1
+  [ -f "$UPDATES_DIR/request" ] || : > "$UPDATES_DIR/request" || return 1
+  chmod 755 "$UPDATES_DIR" && chmod 644 "$UPDATES_DIR/request"
+}
+
+# _schemaf_write_available <index file> <versions, oldest first, one per line>
+# — ~/.<name>/updates/available.json: the versions with their release notes.
+_schemaf_write_available() {
+  local index="$1" keep="[" v sep="" tmp="$UPDATES_DIR/.available.json.tmp"
+  while read -r v; do
+    [ -n "$v" ] || continue
+    keep="$keep$sep\"$v\"" sep="," # versions are checked: no quotes inside
+  done <<< "$2"
+  keep="$keep]"
+  mkdir -p "$UPDATES_DIR"
+  _schemaf_jq --argjson keep "$keep" --arg checked "$(_schemaf_now)" '. as $all
+    | {checked: $checked, versions: [$keep[] as $v | ($all[] | select(.version == $v))
+        | {version, notes: ((.notes // "") | if type == "string" then . else tojson end)}]}' \
+    < "$index" > "$tmp" 2>"$tmp.err" || { cat "$tmp.err" >&2; rm -f "$tmp" "$tmp.err"; return 1; }
+  rm -f "$tmp.err"
+  chmod 644 "$tmp"
+  mv "$tmp" "$UPDATES_DIR/available.json"
+}
+
+# _schemaf_record_request <version> <state> <message> — the last request the
+# updater handled, in status.json.
+_schemaf_record_request() {
+  mkdir -p "$VAR_DIR"
+  printf 'version=%s\nstate=%s\nmessage=%s\ntime=%s\n' "${1//$'\n'/ }" "$2" "${3//$'\n'/ }" "$(_schemaf_now)" > "$VAR_DIR/request.tmp"
+  mv "$VAR_DIR/request.tmp" "$VAR_DIR/request"
+  _schemaf_write_status
+  echo "request $1: $2 — $3" >&2
+}
+
+# _schemaf_clear_stale_install — an install recorded as installing whose
+# process is gone (a reboot, a kill) is recorded as failed, so the app's
+# update API doesn't report "installing" forever.
+_schemaf_clear_stale_install() {
+  local v
+  [ "$(_schemaf_state_get_file install state)" = installing ] || return 0
+  ! _schemaf_install_running || return 0
+  v=$(_schemaf_state_get_file install version)
+  _schemaf_record "$(_schemaf_running_tag)" "$(_schemaf_state_get previous)" "$v" \
+    "$(_schemaf_state_get_file install from)" failed "$(_schemaf_state_get_file install started)" "$(_schemaf_now)" \
+    "the install of $v was interrupted (its process is gone) — check the stack: schemaf.sh status" \
+    "$(_schemaf_state_get_file install backup)" ""
+  echo "  recorded the interrupted install of $v as failed" >&2
+}
+
+_schemaf_state_get_file() { # <file> <key>
+  [ -f "$VAR_DIR/$1" ] || return 0
+  _schemaf_manifest_get "$VAR_DIR/$1" "$2"
+}
+
+# _schemaf_install_running — an install holds the lock (a live PID).
+_schemaf_install_running() {
+  local pid
+  pid=$(cat "$VAR_DIR/install.lock/pid" 2>/dev/null || true)
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# _schemaf_take_request — prints the request file's content and empties it.
+_schemaf_take_request() {
+  local req
+  [ -f "$UPDATES_DIR/request" ] || return 0
+  req=$(head -c 256 "$UPDATES_DIR/request" | tr -d '\r') || true
+  : > "$UPDATES_DIR/request" # in place: it is a bind mount
+  printf '%s' "$req" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed '/^$/d'
+}
+
+# _schemaf_updater_request — run by the path unit when the app writes the
+# request: untrusted input, one version string. Rejections are recorded and
+# exit 0 (a failing path-triggered service would hit systemd's start limit).
+_schemaf_updater_request() {
+  local req running
+  _schemaf_pull_linux_only
+  _schemaf_pull_config
+  _schemaf_clear_stale_install
+  req=$(_schemaf_take_request)
+  [ -n "$req" ] || return 0 # the empty file after a read: nothing asked
+  if [[ "$req" == *$'\n'* ]] || ! _schemaf_is_version "$req"; then
+    _schemaf_record_request "$(printf '%s' "$req" | head -n 1 | cut -c1-40)" rejected "not a version (X.Y.Z or X.Y.Z-<pre>)"
+    return 0
+  fi
+  if _schemaf_install_running; then
+    _schemaf_record_request "$req" rejected "an install is running; request again when it has finished"
+    return 0
+  fi
+  if ! _schemaf_on_channel "$req"; then
+    _schemaf_record_request "$req" rejected "a prerelease, and this host's channel is stable"
+    return 0
+  fi
+  if ! running=$(_schemaf_running_version 2>/dev/null); then
+    _schemaf_record_request "$req" rejected "the running tag is not a release version"
+    return 0
+  fi
+  if [ -n "$running" ] && ! _schemaf_newer "$req" "$running"; then
+    _schemaf_record_request "$req" rejected "not newer than the running $running"
+    return 0
+  fi
+  if [ ! -f "$RELEASES_DIR/$req/${PROJECT_NAME}-${req}.run" ] || [ ! -f "$RELEASES_DIR/$req/${PROJECT_NAME}-${req}.run.sigstore.json" ]; then
+    _schemaf_record_request "$req" rejected "not downloaded and verified on this host"
+    return 0
+  fi
+  _schemaf_record_request "$req" accepted "installing $req"
+  # Its own process: install's lock and clean-up belong to it. Its outcome is
+  # in status.json either way.
+  bash "$0" install "$req" || true
+  # A request that arrived meanwhile is rejected, not queued.
+  req=$(_schemaf_take_request)
+  if [ -n "$req" ]; then
+    _schemaf_record_request "$(printf '%s' "$req" | head -n 1 | cut -c1-40)" rejected "arrived while an install was running; request again"
+  fi
+  return 0
+}
+
+_schemaf_updater_enable() {
+  local dir prefix script="$USER_DIR/bin/schemaf.sh" user linger
+  _schemaf_pull_linux_only
+  _schemaf_pull_config
+  user=$(id -un)
+  command -v systemctl >/dev/null 2>&1 || _die "the updater needs systemd (systemctl), and this host has none — run releases and install from cron instead"
+  systemctl --user show-environment >/dev/null 2>&1 || _die "systemctl --user does not answer for $user — the updater needs the user's systemd instance (is XDG_RUNTIME_DIR set? log in as $user, or enable lingering: loginctl enable-linger $user)"
+  linger=$(loginctl show-user "$user" --property=Linger --value 2>/dev/null || true)
+  [ "$linger" = yes ] || _die "lingering is off for $user, so the updater would stop when $user logs out — as root: loginctl enable-linger $user"
+  [ -x "$script" ] || _die "$script is missing — the units call it (install a release first, or copy the repository's schemaf.sh there)"
+  dir=$(_schemaf_unit_dir) prefix=$(_schemaf_unit_prefix)
+  mkdir -p "$dir"
+  _schemaf_updates_files || _die "could not create $UPDATES_DIR"
+  cat > "$dir/$prefix-releases.service" <<EOF
+# Written by schemaf.sh updater enable (INSTALL.md › The updater).
+[Unit]
+Description=schemaf: fetch and verify ${PROJECT_NAME}'s releases
+
+[Service]
+Type=oneshot
+ExecStart=$script releases
+EOF
+  cat > "$dir/$prefix-releases.timer" <<EOF
+# Written by schemaf.sh updater enable (INSTALL.md › The updater).
+[Unit]
+Description=schemaf: fetch and verify ${PROJECT_NAME}'s releases, hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
+  cat > "$dir/$prefix-request.service" <<EOF
+# Written by schemaf.sh updater enable (INSTALL.md › The updater).
+[Unit]
+Description=schemaf: handle ${PROJECT_NAME}'s update request
+# No start limit: a burst of requests must never stop the path unit for good.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=$script updater request
+EOF
+  cat > "$dir/$prefix-request.path" <<EOF
+# Written by schemaf.sh updater enable (INSTALL.md › The updater).
+[Unit]
+Description=schemaf: watch ${PROJECT_NAME}'s update request
+
+[Path]
+PathModified=$UPDATES_DIR/request
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$prefix-releases.timer" "$prefix-request.path" >/dev/null 2>&1 \
+    || _die "systemctl --user enable --now $prefix-releases.timer $prefix-request.path failed — see: systemctl --user status $prefix-releases.timer $prefix-request.path"
+  echo "enabled $(_schemaf_now)" > "$UPDATES_DIR/updater"
+  chmod 644 "$UPDATES_DIR/updater"
+  systemctl --user start --no-block "$prefix-releases.service"
+  echo "Updater enabled: $prefix-releases.timer (hourly releases), $prefix-request.path (the app's requests). Units in $dir" >&2
+}
+
+_schemaf_updater_disable() {
+  local dir prefix u
+  _schemaf_pull_linux_only
+  dir=$(_schemaf_unit_dir) prefix=$(_schemaf_unit_prefix)
+  rm -f "$UPDATES_DIR/updater"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now "$prefix-releases.timer" "$prefix-request.path" >/dev/null 2>&1 || true
+    systemctl --user stop "$prefix-releases.service" "$prefix-request.service" >/dev/null 2>&1 || true
+  fi
+  for u in releases.service releases.timer request.service request.path; do
+    rm -f "${dir:?}/$prefix-$u"
+  done
+  if command -v systemctl >/dev/null 2>&1; then systemctl --user daemon-reload || true; fi
+  echo "Updater disabled; the app's update API answers \"updater not enabled\"" >&2
+}
+
+_schemaf_updater_status() {
+  local prefix
+  _schemaf_pull_linux_only
+  prefix=$(_schemaf_unit_prefix)
+  if [ -f "$UPDATES_DIR/updater" ]; then echo "updater: $(cat "$UPDATES_DIR/updater")"; else echo "updater: not enabled"; fi
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user status "$prefix-releases.timer" "$prefix-request.path" --no-pager 2>&1 || true
+    if systemctl --user is-failed --quiet "$prefix-request.path" 2>/dev/null; then
+      echo "ERROR: $prefix-request.path has failed: the app's requests are not handled — run: schemaf.sh updater enable" >&2
+      return 1
+    fi
+  fi
+}
+
+_schemaf_updater() {
+  case "${1:-}" in
+    enable) _schemaf_updater_enable ;;
+    disable) _schemaf_updater_disable ;;
+    status) _schemaf_updater_status ;;
+    request) _schemaf_updater_request ;; # run by the path unit
+    *) _die "usage: schemaf.sh updater enable | disable | status" ;;
+  esac
+}
+
 # --- dispatch -----------------------------------------------------------------
 
 CMD="${1:-}"
@@ -1437,6 +1696,7 @@ case "$CMD" in
       echo "Stopping dev services before production start..." >&2
       _schemaf_container compose -f compose.gen.yml -f compose.dev.gen.yml down
     fi
+    _schemaf_updates_files || _die "could not create $UPDATES_DIR (the backend mounts it)"
     _schemaf_container --exec compose -f compose.gen.yml up "$@"
     ;;
   dev)

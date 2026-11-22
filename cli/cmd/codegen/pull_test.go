@@ -672,3 +672,231 @@ func TestJSONString(t *testing.T) {
 		t.Errorf("_schemaf_json_str gave %s (%q, %v)", out, s, err)
 	}
 }
+
+// fakeSystemctl logs every call; `--user show-environment` fails when
+// $FAKE_STATE/no-user-systemd exists. fakeLoginctl answers Linger from
+// $FAKE_STATE/linger (default yes).
+const (
+	fakeSystemctl = "#!/bin/sh\necho \"systemctl $*\" >> \"$FAKE_STATE/calls\"\ncase \"$*\" in *show-environment*) [ ! -f \"$FAKE_STATE/no-user-systemd\" ] ;; esac\n"
+	fakeLoginctl  = "#!/bin/sh\ncat \"$FAKE_STATE/linger\" 2>/dev/null || echo yes\n"
+)
+
+func (h *pullHost) withSystemd() {
+	h.t.Helper()
+	for name, body := range map[string]string{"systemctl": fakeSystemctl, "loginctl": fakeLoginctl} {
+		if err := os.WriteFile(filepath.Join(h.u.bin, name), []byte(body), 0755); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	h.u.env = append(h.u.env, "XDG_CONFIG_HOME="+filepath.Join(h.u.home, ".config"))
+}
+
+func TestUpdaterEnableDisable(t *testing.T) {
+	h := newPullHost(t)
+	h.withSystemd()
+	units := filepath.Join(h.u.home, ".config", "systemd", "user")
+
+	t.Run("refused without lingering", func(t *testing.T) {
+		if err := os.WriteFile(h.state("linger"), []byte("no\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		defer h.rm("linger")
+		_, stderr, code := h.sh("updater", "enable")
+		if code == 0 {
+			t.Fatal("enable without lingering succeeded")
+		}
+		mustContain(t, "stderr", stderr, "lingering is off for", "as root: loginctl enable-linger")
+	})
+
+	t.Run("refused without the user's systemd", func(t *testing.T) {
+		h.touch("no-user-systemd")
+		defer h.rm("no-user-systemd")
+		_, stderr, code := h.sh("updater", "enable")
+		if code == 0 {
+			t.Fatal("enable without systemd succeeded")
+		}
+		mustContain(t, "stderr", stderr, "systemctl --user does not answer")
+	})
+
+	t.Run("enable writes and starts the units", func(t *testing.T) {
+		_, stderr, code := h.sh("updater", "enable")
+		if code != 0 {
+			t.Fatalf("enable failed:\n%s", stderr)
+		}
+		mustContain(t, "releases.service", readFile(t, filepath.Join(units, "schemaf-myapp-releases.service")), "ExecStart="+h.script+" releases")
+		mustContain(t, "releases.timer", readFile(t, filepath.Join(units, "schemaf-myapp-releases.timer")), "OnUnitActiveSec=1h", "WantedBy=timers.target")
+		mustContain(t, "request.service", readFile(t, filepath.Join(units, "schemaf-myapp-request.service")), "ExecStart="+h.script+" updater request", "StartLimitIntervalSec=0")
+		mustContain(t, "request.path", readFile(t, filepath.Join(units, "schemaf-myapp-request.path")), "PathModified="+filepath.Join(h.u.home, ".myapp/updates/request"))
+		mustContain(t, "calls", h.u.calls(), "systemctl --user daemon-reload",
+			"systemctl --user enable --now schemaf-myapp-releases.timer schemaf-myapp-request.path",
+			"systemctl --user start --no-block schemaf-myapp-releases.service")
+		if !h.exists("updates/updater") || !h.exists("updates/request") {
+			t.Error("the marker or the request file is missing")
+		}
+	})
+
+	t.Run("disable removes them", func(t *testing.T) {
+		_, stderr, code := h.sh("updater", "disable")
+		if code != 0 {
+			t.Fatalf("disable failed:\n%s", stderr)
+		}
+		if h.exists("updates/updater") {
+			t.Error("the marker is still there")
+		}
+		if left, _ := filepath.Glob(filepath.Join(units, "schemaf-myapp-*")); len(left) != 0 {
+			t.Errorf("units left: %v", left)
+		}
+		mustContain(t, "calls", h.u.calls(), "systemctl --user disable --now schemaf-myapp-releases.timer schemaf-myapp-request.path")
+	})
+}
+
+// request writes the app's request and runs what the path unit runs.
+func (h *pullHost) request(content string) (string, int) {
+	h.t.Helper()
+	if err := os.WriteFile(filepath.Join(h.u.home, ".myapp/updates/request"), []byte(content), 0644); err != nil {
+		h.t.Fatal(err)
+	}
+	_, stderr, code := h.sh("updater", "request")
+	return stderr, code
+}
+
+func (h *pullHost) requestState() (string, string, string) {
+	h.t.Helper()
+	r, _ := h.status()["request"].(map[string]any)
+	return r["version"].(string), r["state"].(string), r["message"].(string)
+}
+
+func TestUpdaterRequest(t *testing.T) {
+	h := newPullHost(t)
+	h.publish("1.4.0", "", "", false)
+	if _, stderr, code := h.sh("releases"); code != 0 {
+		t.Fatalf("releases:\n%s", stderr)
+	}
+	if _, stderr, code := h.sh("install", "1.4.0"); code != 0 {
+		t.Fatalf("install 1.4.0:\n%s", stderr)
+	}
+	h.publish("1.5.0", "", "", false)
+	h.index[len(h.index)-1]["notes"] = "Faster search."
+	h.publish("1.6.0-rc.1", "", "", false)
+	h.writeIndex()
+	if _, stderr, code := h.sh("releases"); code != 0 {
+		t.Fatalf("releases:\n%s", stderr)
+	}
+
+	t.Run("releases writes available.json with the notes", func(t *testing.T) {
+		var av struct {
+			Checked  string `json:"checked"`
+			Versions []struct{ Version, Notes string }
+		}
+		if err := json.Unmarshal([]byte(readFile(t, filepath.Join(h.u.home, ".myapp/updates/available.json"))), &av); err != nil {
+			t.Fatal(err)
+		}
+		if av.Checked == "" || len(av.Versions) != 1 || av.Versions[0].Version != "1.5.0" || av.Versions[0].Notes != "Faster search." {
+			t.Errorf("available.json = %+v, want 1.5.0 with its notes", av)
+		}
+	})
+
+	t.Run("the stack's start created the request file", func(t *testing.T) {
+		if !h.exists("updates/request") {
+			t.Error("no updates/request")
+		}
+	})
+
+	for _, c := range []struct{ content, version, want string }{
+		{"rm -rf /\n", "rm -rf /", "not a version"},
+		{"1.5.0\n1.6.0\n", "1.5.0", "not a version"},
+		{"1.3.0\n", "1.3.0", "not newer than the running 1.4.0"},
+		{"1.6.0-rc.1", "1.6.0-rc.1", "a prerelease, and this host's channel is stable"},
+		{"1.9.0", "1.9.0", "not downloaded and verified on this host"},
+	} {
+		stderr, code := h.request(c.content)
+		if code != 0 {
+			t.Errorf("request %q: exit %d (rejections exit 0):\n%s", c.content, code, stderr)
+		}
+		v, state, msg := h.requestState()
+		if v != c.version || state != "rejected" || !strings.Contains(msg, c.want) {
+			t.Errorf("request %q: %q %q %q, want rejected: %s", c.content, v, state, msg, c.want)
+		}
+		if b, _ := os.ReadFile(filepath.Join(h.u.home, ".myapp/updates/request")); len(b) != 0 {
+			t.Errorf("request %q: the file was not emptied: %q", c.content, b)
+		}
+	}
+	if h.read("backend") != "true myapp:1.4.0" {
+		t.Fatalf("a rejected request changed the stack: %q", h.read("backend"))
+	}
+
+	t.Run("rejected while an install runs", func(t *testing.T) {
+		lock := filepath.Join(h.u.home, ".myapp", "var", "install.lock")
+		if err := os.MkdirAll(lock, 0755); err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(lock)
+		if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+			t.Fatal(err)
+		}
+		h.request("1.5.0")
+		if _, state, msg := h.requestState(); state != "rejected" || !strings.Contains(msg, "an install is running") {
+			t.Errorf("%s: %s", state, msg)
+		}
+	})
+
+	t.Run("an empty request does nothing", func(t *testing.T) {
+		before := readFile(t, filepath.Join(h.u.home, ".myapp/updates/status.json"))
+		if _, code := h.request(""); code != 0 {
+			t.Error("exit != 0")
+		}
+		if readFile(t, filepath.Join(h.u.home, ".myapp/updates/status.json")) != before {
+			t.Error("an empty request changed status.json")
+		}
+	})
+
+	t.Run("a valid request installs", func(t *testing.T) {
+		stderr, code := h.request("1.5.0\n")
+		if code != 0 {
+			t.Fatalf("exit %d:\n%s", code, stderr)
+		}
+		if v, state, _ := h.requestState(); v != "1.5.0" || state != "accepted" {
+			t.Errorf("request: %s %s", v, state)
+		}
+		if h.read("backend") != "true myapp:1.5.0" || h.installState() != "installed" {
+			t.Errorf("backend %q, install %q", h.read("backend"), h.installState())
+		}
+	})
+}
+
+func TestComposeMountsUpdates(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeMinimalProject(t)
+	if err := runComposeGen(); err != nil {
+		t.Fatal(err)
+	}
+	s := readFile(t, "compose.gen.yml")
+	backend := s[strings.Index(s, "  backend:"):]
+	backend = backend[:strings.Index(backend, "\n\n")]
+	mustContain(t, "backend service", backend,
+		"- ${HOME}/.myapp/updates:/schemaf/updates:ro",
+		"- ${HOME}/.myapp/updates/request:/schemaf/updates/request\n",
+		"SCHEMAF_IMAGE: ${SCHEMAF_IMAGE}")
+}
+
+func TestInterruptedInstallIsRecordedAsFailed(t *testing.T) {
+	h := newPullHost(t)
+	h.publish("1.4.0", "", "", false)
+	if _, stderr, code := h.sh("releases"); code != 0 {
+		t.Fatalf("releases:\n%s", stderr)
+	}
+	if _, stderr, code := h.sh("install", "1.4.0"); code != 0 {
+		t.Fatalf("install:\n%s", stderr)
+	}
+	// An install of 1.5.0 that died: recorded as installing, no live lock.
+	install := filepath.Join(h.u.home, ".myapp/var/install")
+	if err := os.WriteFile(install, []byte("version=1.5.0\nfrom=1.4.0\nstate=installing\nstarted=s\nfinished=\nmessage=installing 1.5.0\nbackup=\nlog=\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, _ := h.sh("releases")
+	mustContain(t, "stderr", stderr, "recorded the interrupted install of 1.5.0 as failed")
+	in := h.status()["install"].(map[string]any)
+	if in["state"] != "failed" || !strings.Contains(in["message"].(string), "was interrupted") {
+		t.Errorf("install = %v", in)
+	}
+}

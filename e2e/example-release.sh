@@ -77,8 +77,11 @@ else
   fi
   [ -f schemaf.toml ] || fail "$EXAMPLE_REPO has no project yet — set it up once (EXTEND.md › The example release › One-time setup)"
   say "upgrade to schemaf $REF"
-  ( cd go && go get "${SCHEMAF_MODULE}@${REF}" && go mod tidy )
+  # As ./schemaf.sh upgrade does: go get, codegen, then tidy in module mode
+  # (the image build has only go/, no go.work).
+  ( cd go && go get "${SCHEMAF_MODULE}@${REF}" )
   ./schemaf.sh codegen
+  ( cd go && GOWORK=off go mod tidy )
   [ -f .github/workflows/release.gen.yml ] || fail "codegen wrote no .github/workflows/release.gen.yml"
 
   say "commit, push main, tag $TAG"

@@ -395,6 +395,7 @@ An image built for another platform (e.g. arm64 on an amd64 host) is refused too
 | `image rm <tag>` | removes the image and `~/.<name>/deploy/<tag>/`; refuses while that tag is running |
 | `releases` | downloads and verifies the releases newer than the running one ([Pulling releases](#pulling-releases-linux), Linux only) |
 | `install <version>` | installs a verified release, with backup and automatic rollback ([Pulling releases](#pulling-releases-linux), Linux only) |
+| `updater enable \| disable \| status` | the systemd user units that refresh the available releases and install what the app requests ([The updater](#the-updater), Linux only) |
 | any other word: app subcommands (`db backup`, `db restore`, `db query`, your own `AddSubcommand` commands) | runs in the running backend container (`<runtime> exec <name>-backend /app <word> …`), i.e. exactly the deployed version; if the backend isn't running: `start it first: schemaf.sh run --image <tag>` |
 
 The run side can't list your app's subcommands, so the rule is: every word that isn't one of the commands above and isn't a refused developer command goes into the backend container. An unknown word therefore fails loudly with the app binary's own error and exit code.
@@ -533,7 +534,7 @@ The pull flow runs on **Linux only**. On macOS `releases` and `install` stop wit
    ~/.myapp/bin/schemaf.sh install 1.4.0
    ```
 
-From then on, `load` (run by `install`) keeps `~/.<name>/bin/schemaf.sh` current, and every later version is installed the same way: `releases`, then `install <version>`, by hand or from cron.
+From then on, `load` (run by `install`) keeps `~/.<name>/bin/schemaf.sh` current, and every later version is installed the same way: `releases`, then `install <version>`, by hand, from cron, or [requested by the app](#the-updater) through the updater.
 
 **The settings**, all in `~/.<name>/etc/env` and all required by `releases` and `install`; a missing or invalid one stops them with its name:
 
@@ -552,7 +553,7 @@ From then on, `load` (run by `install`) keeps `~/.<name>/bin/schemaf.sh` current
 1. Downloads `SCHEMAF_RELEASES`. An index that isn't a JSON list of `{version, artifact, attestation}` entries with distinct `X.Y.Z` or `X.Y.Z-<pre>` versions is refused as a whole. Unknown fields are ignored. Whether an entry is a prerelease is decided by its version (a `-<pre>` part), never by its `prerelease` field.
 2. Keeps the versions on the channel that are newer than the running one (by semver precedence). When nothing runs (a new box), only the newest version on the channel.
 3. For each one not yet downloaded: downloads the artifact and its bundle, verifies the attestation with `cosign verify-blob-attestation` (SLSA provenance, the configured signer and issuer, the Sigstore public-good instance), and checks that the artifact's manifest names this project and exactly the entry's version. Only then it is kept, in `~/.<name>/releases/<version>/`. A failed check is reported loudly with the version and the reason, the files are deleted, the other versions are still processed, and `releases` exits non-zero.
-4. Prints the verified versions it kept, oldest first, one per line.
+4. Prints the verified versions it kept, oldest first, one per line, and writes them with their release notes to `~/.<name>/updates/available.json` (what the app shows, see [The updater](#the-updater)), even when some versions failed.
 
 Downloads are plain https (or http): integrity comes from the attestation, not from the transport.
 
@@ -572,7 +573,7 @@ Accepts only a version that `releases` downloaded and verified (`~/.<name>/relea
 
 With nothing running (the first install on a box) there is nothing to back up or roll back to: on failure `install` stops the new version, records `failed`, and keeps the database volume.
 
-**One install at a time.** `install` holds a lock (the directory `~/.<name>/var/install.lock`, with its PID); a second `install` while one runs, from a shell or cron, is refused: `another install is running (PID …)`. A lock whose process is gone (e.g. after a reboot) is taken over.
+**One install at a time.** `install` holds a lock (the directory `~/.<name>/var/install.lock`, with its PID); a second `install` while one runs, from a shell, cron or the updater, is refused: `another install is running (PID …)`. A lock whose process is gone (e.g. after a reboot) is taken over.
 
 **What is recorded.** `~/.<name>/updates/status.json` holds the running version, the previous one, and the last install:
 
@@ -595,7 +596,30 @@ With nothing running (the first install on a box) there is nothing to back up or
 
 `state` is `installing`, `installed`, `rolled-back` (the new version failed, the previous one serves again), `failed` (a first install that failed, or a backup that failed) or `rollback-failed` (the stack is stopped). Every finished install also appends one line to `~/.<name>/var/installs.log`.
 
+`status.json` also holds the last [request](#the-updater) the updater handled, as `"request": {"version", "state", "message", "time"}`.
+
 **Retention.** After a successful install, `install` keeps the running and the previous version (their images, deploy directories and downloaded artifacts; the previous one is the rollback target) and the downloaded versions newer than the running one, and removes the other versions, plus the backups other than this install's. Tags that aren't versions, e.g. ones you loaded by hand, are never removed.
+
+#### The updater
+
+```bash
+~/.<name>/bin/schemaf.sh updater enable | disable | status
+```
+
+The updater lets the app see new releases and ask for an upgrade ([EXTEND.md › Updates](EXTEND.md#updates)). It is opt-in: without it, `releases` and `install` work as above, and the app's update API answers `updater not enabled`. **Installs happen only on request**; there is no automatic install.
+
+`enable` writes systemd **user** units for the run user to `~/.config/systemd/user/` and enables them:
+
+| Unit | Does |
+|---|---|
+| `schemaf-<name>-releases.timer` (+ `.service`) | runs `schemaf.sh releases` 5 minutes after boot and then every hour, which refreshes `~/.<name>/updates/available.json`; `enable` runs it once right away |
+| `schemaf-<name>-request.path` (+ `.service`) | watches `~/.<name>/updates/request` and runs `schemaf.sh updater request` when the app writes to it |
+
+The units call `~/.<name>/bin/schemaf.sh`, which `load` keeps current. `enable` refuses without systemd (`systemctl --user` must answer) and without lingering, naming the fix: `loginctl enable-linger <user>` (as root), so the units run while the user isn't logged in. It also needs the [pull settings](#pulling-releases-linux). `disable` stops and removes the units; `status` shows them.
+
+**`request` is untrusted input.** It is written by the app. `updater request` (run by the path unit) reads it, empties it, and starts `install <version>` only if it holds exactly one version that is downloaded and verified, on the configured channel and newer than the running one, while no install runs. Anything else is recorded in `status.json` as a rejected request with the reason, e.g. `rejected 1.3.0: not newer than the running 1.4.0`; nothing is queued. The channel is run-host config only: the app sees and can request only versions on it.
+
+**The app's view.** The backend container gets `~/.<name>/updates/` read-only at `/schemaf/updates/` (`available.json`, `status.json`, the marker `updater` that `enable` writes) and `request` writable, as two separate mounts. The run side creates these files before it starts the stack.
 
 ### What the run host provides
 

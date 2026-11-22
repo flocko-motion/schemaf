@@ -1205,6 +1205,10 @@ func TestCheckoutRunBuildsThenStarts(t *testing.T) {
 	if build < 0 || up < 0 || build > up {
 		t.Errorf("run must build, then start the built image:\n%s", calls)
 	}
+	// The backend mounts the updates files: they exist before compose up.
+	if _, err := os.Stat(filepath.Join(u.home, ".myapp", "updates", "request")); err != nil {
+		t.Errorf("run did not create ~/.myapp/updates/request: %v", err)
+	}
 }
 
 func TestCheckoutRunBuildSeesOnlyRuntime(t *testing.T) {

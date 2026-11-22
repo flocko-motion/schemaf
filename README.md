@@ -113,6 +113,7 @@ schemaf is **batteries-included**. These are built-in, not optional:
 - **Project entrypoint**: `schemaf.sh codegen`, `schemaf.sh test`, `schemaf.sh build`, `schemaf.sh run`, `schemaf.sh dev`, `schemaf.sh instances`
 - **Parallel dev instances**: `dev --instance <n>` runs a second, fully separate dev stack (own ports, database, session cookie) next to the default one — see [Parallel dev instances](INSTALL.md#parallel-dev-instances)
 - **Deployment**: `build` turns a commit into an image, optionally packed with its compose files into one self-extracting `<name>-<tag>.run` file; `run` starts an image. Build and run can be different users on the same host, so the user that runs third-party build code never reaches the database — see [Deployment](INSTALL.md#deployment)
+- **Pulled updates**: a Linux run host fetches, verifies and installs signed releases by itself, with a database backup and automatic rollback; with the opt-in updater, an admin starts an upgrade from inside the app through built-in endpoints (`/api/updates`), closed until the app authorizes someone — see [Pulling releases](INSTALL.md#pulling-releases-linux) and [Updates](EXTEND.md#updates)
 - **Releases from CI**: a generated GitHub workflow turns a pushed tag `vX.Y.Z` into a release whose artifact is built from the lockfiles exactly and signed with keyless Sigstore, plus the app's release index `releases.json` — see [Releases from CI](INSTALL.md#releases-from-ci-releasegenyml)
 
 ## What You Add

@@ -13,7 +13,11 @@
 #     serving;
 #   - refusals: an older version, a prerelease on the stable channel, a
 #     tampered artifact, a version that doesn't match the artifact's manifest,
-#     a wrong signer.
+#     a wrong signer;
+#   - the updater (real user only: its systemd units): available.json seen by
+#     the backend, requests written by the app (one from inside the backend
+#     container) — older, off the channel, unverified, garbage rejected — and a
+#     valid one installed.
 # Needs Linux and the OIDC token; without them it is skipped loudly, except
 # with E2E_REFERENCE=1, where that is a failure.
 #
@@ -33,6 +37,7 @@ pull_skip() {
 
 # pull_cleanup — called from deploy.sh's cleanup.
 pull_cleanup() {
+  as_runner "$RUN_SH" updater disable >/dev/null 2>&1 || true
   [ -z "$PULL_SERVER" ] || kill "$PULL_SERVER" 2>/dev/null || true
   for t in $PULL_TAGS; do
     rt_runner image rm "${NAME}:${t}" >/dev/null 2>&1 || true
@@ -97,6 +102,27 @@ expect_fail() {
 number() { curl -fsS "http://127.0.0.1:${PORT}/api/number" | jq -r .number; }
 
 run_status() { as_runner cat "$RUN_HOME/.${NAME}/updates/status.json"; }
+
+# wait_for <what> <seconds> <jq filter on status.json, true when done>
+wait_for() {
+  local what="$1" secs="$2" filter="$3" i
+  for i in $(seq 1 "$secs"); do
+    if run_status 2>/dev/null | jq -e "$filter" >/dev/null 2>&1; then return 0; fi
+    sleep 1
+  done
+  run_status >&2 || true
+  as_user "$RUN_USER" journalctl --user -n 50 --no-pager >&2 2>/dev/null || true
+  fail "pull flow: $what within ${secs}s"
+}
+
+# request_rejected <version> <reason>: the app's request <version> (written
+# to the request file as the run user) is rejected for <reason>.
+request_rejected() {
+  as_runner bash -c 'printf "%s\n" "$2" > "$1"' _ "$RUN_HOME/.${NAME}/updates/request" "$1"
+  wait_for "a rejection of the request $1" 60 ".request.version == \"$1\" and .request.state == \"rejected\""
+  run_status | jq -r .request.message | grep -qF -- "$2" || fail "pull flow: request $1 was rejected, but not for '$2': $(run_status | jq -r .request.message)"
+  say "request $1 rejected: $2"
+}
 
 pull_flow() {
   [ "$(uname)" = Linux ] || { pull_skip "the pull flow runs on Linux only"; return 0; }
@@ -212,5 +238,39 @@ GO
   done
   health 0.2.0
 
-  echo "  ✓ pull: first install, upgrade, rollback with the database restored, refusals ($MODE users, $RUNTIME)"
+  if [ "$MODE" != users ]; then
+    pull_skip "the updater needs a real run user with its own systemd (E2E_RUN_USER)"
+    return 0
+  fi
+  say "pull: the updater — a healthy 0.8.0, and the app's requests"
+  pull_release 0.8.0
+  as_runner "$RUN_SH" updater enable || fail "pull flow: updater enable failed"
+  # Its first releases run (started by enable) lists 0.8.0 for the app; it
+  # exits non-zero on the foreign 0.5.0 and 0.7.0, but writes the list.
+  for i in $(seq 1 180); do
+    as_runner jq -e '.versions | map(.version) | index("0.8.0")' "$RUN_HOME/.${NAME}/updates/available.json" >/dev/null 2>&1 && break
+    [ "$i" -lt 180 ] || fail "pull flow: the updater's releases run did not list 0.8.0 in available.json"
+    sleep 1
+  done
+  rt_runner exec "${NAME}-backend" grep -q '"0.8.0"' /schemaf/updates/available.json \
+    || fail "pull flow: the backend container does not see available.json"
+  if rt_runner exec "${NAME}-backend" sh -c 'echo x > /schemaf/updates/status.json' 2>/dev/null; then
+    fail "pull flow: the backend container can write status.json (it must be read-only)"
+  fi
+  # A request written from inside the backend, as the app writes it.
+  rt_runner exec "${NAME}-backend" sh -c 'echo 0.1.0 > /schemaf/updates/request' \
+    || fail "pull flow: the backend container cannot write the request"
+  wait_for "a rejection of the app's request 0.1.0" 60 '.request.version == "0.1.0" and .request.state == "rejected"'
+  say "the app's request 0.1.0 (from the container) rejected: $(run_status | jq -r .request.message)"
+  request_rejected 0.4.0-rc.1 "a prerelease, and this host's channel is stable"
+  request_rejected 0.9.9 "not downloaded and verified on this host"
+  request_rejected "0.8.0; rm -rf /" "not a version"
+  as_runner bash -c 'printf "0.8.0\n" > "$1"' _ "$RUN_HOME/.${NAME}/updates/request"
+  wait_for "the requested install of 0.8.0" 300 '.install.version == "0.8.0" and .install.state == "installed"'
+  health 0.8.0
+  [ "$(number)" = 42 ] || fail "pull flow: the requested upgrade lost the data ($(number), want 42)"
+  [ "$(run_status | jq -r '.request.version + " " + .request.state')" = "0.8.0 accepted" ] || fail "pull flow: request state: $(run_status)"
+  as_runner "$RUN_SH" updater disable
+
+  echo "  ✓ pull: first install, upgrade, rollback with the database restored, refusals, the updater's requests ($MODE users, $RUNTIME)"
 }

@@ -25,7 +25,9 @@ const frameworkSpec = `{"openapi":"3.0.3","paths":{
 "/api/auth/{provider}/login":{"post":{}},
 "/api/auth/logout":{"post":{}},
 "/api/auth/refresh":{"post":{}},
-"/api/errors/{id}":{"get":{}}}}`
+"/api/errors/{id}":{"get":{}},
+"/api/updates":{"get":{}},
+"/api/updates/request":{"post":{}}}}`
 
 // isolatedCtx starts servers the way schemaftest does.
 var isolatedCtx = isolation.Context(context.Background())

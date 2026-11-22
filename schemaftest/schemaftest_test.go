@@ -62,6 +62,8 @@ const testSpec = `{"openapi":"3.0.3","paths":{
 "/api/auth/logout":{"post":{}},
 "/api/auth/refresh":{"post":{}},
 "/api/errors/{id}":{"get":{}},
+"/api/updates":{"get":{}},
+"/api/updates/request":{"post":{}},
 "/api/widgets/count":{"get":{}}}}`
 
 // wire is the test app's Wire.
