@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // The run host's ~/.<name>/updates/, as the backend container sees it:
@@ -22,7 +23,8 @@ import (
 // writable (INSTALL.md › The updater). A variable for tests.
 var updatesDir = "/schemaf/updates"
 
-// Errors of RequestUpgrade; compare with errors.Is. See EXTEND.md, "Updates".
+// Errors of RequestUpgrade and CheckForUpdates; compare with errors.Is. See
+// EXTEND.md, "Updates".
 var (
 	ErrUpdaterNotEnabled = Error(ErrConflict, "updater_not_enabled",
 		"updates: the updater is not enabled on this host (run host: schemaf.sh updater enable)")
@@ -30,6 +32,20 @@ var (
 		"updates: this version is not available — request one of the versions api.Updates() lists")
 	ErrInstallRunning = Error(ErrConflict, "install_running",
 		"updates: an install is running — request again when it has finished")
+	ErrCheckRunning = Error(ErrConflict, "check_running",
+		"updates: a check for new releases is running — see api.Updates() for its outcome")
+	// ErrCheckTooSoon: CheckForUpdates returns an error that matches it
+	// (errors.Is) and says how long to wait.
+	ErrCheckTooSoon = Error(ErrTooManyRequests, "check_too_soon",
+		"updates: the last check finished less than a minute ago")
+)
+
+// checkInterval is the least time between two checks, the run side's limit
+// too (INSTALL.md › The updater). A check that started more than checkStale
+// ago and is still recorded as checking was interrupted.
+const (
+	checkInterval = time.Minute
+	checkStale    = 30 * time.Minute
 )
 
 // UpdateState is what api.Updates returns and GET /api/updates answers.
@@ -39,7 +55,8 @@ type UpdateState struct {
 	Available []AvailableRelease `json:"available"` // verified versions newer than Running, oldest first
 	Checked   string             `json:"checked,omitempty"`
 	Install   *InstallState      `json:"install,omitempty"` // the last or current install
-	Request   *RequestState      `json:"request,omitempty"` // the last request the updater handled
+	Request   *RequestState      `json:"request,omitempty"` // the last install request the updater handled
+	Check     *CheckState        `json:"check,omitempty"`   // the last or current check for new releases
 }
 
 // AvailableRelease is a verified version the app may request.
@@ -66,11 +83,22 @@ type RequestState struct {
 	Time    string `json:"time"`
 }
 
+// CheckState is the last or current check for new releases (a releases run)
+// on the run host.
+type CheckState struct {
+	State    string `json:"state"`   // checking, checked, failed, rejected
+	Trigger  string `json:"trigger"` // timer, app, operator
+	Started  string `json:"started"`
+	Finished string `json:"finished"`
+	Message  string `json:"message"`
+}
+
 // Update statuses.
 const (
 	UpdatesNotEnabled = "updater not enabled"
 	UpdatesIdle       = "idle"
 	UpdatesInstalling = "installing"
+	UpdatesChecking   = "checking"
 )
 
 // runningVersion is the tag of the backend's image (SCHEMAF_IMAGE, set by
@@ -184,6 +212,7 @@ func Updates() (UpdateState, error) {
 		Running string        `json:"running"`
 		Install *InstallState `json:"install"`
 		Request *RequestState `json:"request"`
+		Check   *CheckState   `json:"check"`
 	}
 	if err := readUpdatesFile("status.json", &status); err != nil {
 		return st, err
@@ -207,7 +236,84 @@ func Updates() (UpdateState, error) {
 	if status.Request != nil && status.Request.Version != "" {
 		st.Request = status.Request
 	}
+	if status.Check != nil && status.Check.State != "" {
+		st.Check = status.Check
+		if st.Status == UpdatesIdle && checkRunning(st.Check) {
+			st.Status = UpdatesChecking
+		}
+	}
 	return st, nil
+}
+
+// checkRunning reports whether c is a check that runs: recorded as checking,
+// started less than checkStale ago.
+func checkRunning(c *CheckState) bool {
+	if c.State != "checking" {
+		return false
+	}
+	started, err := time.Parse(time.RFC3339, c.Started)
+	return err == nil && now().Sub(started) < checkStale
+}
+
+// lastCheckFinished is when the last check that ran finished: a finished or
+// failed check record (an interrupted one has no Finished), or the last
+// refresh of available.json, whichever is later. Zero if neither is known.
+func lastCheckFinished(st UpdateState) time.Time {
+	var last time.Time
+	if c := st.Check; c != nil && (c.State == "checked" || c.State == "failed") {
+		if t, err := time.Parse(time.RFC3339, c.Finished); err == nil {
+			last = t
+		}
+	}
+	if t, err := time.Parse(time.RFC3339, st.Checked); err == nil && t.After(last) {
+		last = t
+	}
+	return last
+}
+
+// checkTooSoonError matches ErrCheckTooSoon and says how long to wait.
+type checkTooSoonError struct{ err error }
+
+func (e checkTooSoonError) Error() string        { return e.err.Error() }
+func (e checkTooSoonError) Is(target error) bool { return target == ErrCheckTooSoon }
+func (e checkTooSoonError) Unwrap() error        { return e.err }
+
+// ceilSeconds is d in whole seconds, rounded up.
+func ceilSeconds(d time.Duration) int64 {
+	return int64((d + time.Second - 1) / time.Second)
+}
+
+// CheckForUpdates asks the run host's updater to look for new releases now:
+// it writes the word check to the request file. The updater runs releases
+// (fetch and verify, never install) and enforces the same limits on its side.
+// Poll Updates for the outcome. Errors: ErrUpdaterNotEnabled,
+// ErrInstallRunning, ErrCheckRunning, ErrCheckTooSoon. See EXTEND.md,
+// "Updates".
+func CheckForUpdates() error {
+	if !updaterEnabled() {
+		return ErrUpdaterNotEnabled
+	}
+	st, err := Updates()
+	if err != nil {
+		return err
+	}
+	switch st.Status {
+	case UpdatesInstalling:
+		return ErrInstallRunning
+	case UpdatesChecking:
+		return ErrCheckRunning
+	}
+	if last := lastCheckFinished(st); !last.IsZero() {
+		since := now().Sub(last)
+		if wait := checkInterval - since; wait > 0 {
+			if since < 0 {
+				since, wait = 0, checkInterval // a clock ahead of ours
+			}
+			msg := fmt.Sprintf("updates: the last check finished %ds ago — check again in %ds", int64(since/time.Second), ceilSeconds(wait))
+			return RetryAfter(checkTooSoonError{Error(ErrTooManyRequests, "check_too_soon", msg)}, wait)
+		}
+	}
+	return writeRequest("check")
 }
 
 var numericIdentifier = regexp.MustCompile(`^[0-9]+$`)
@@ -238,12 +344,17 @@ func RequestUpgrade(version string) error {
 	if !found {
 		return ErrVersionNotAvailable
 	}
+	return writeRequest(version)
+}
+
+// writeRequest writes line to the updater's request file.
+func writeRequest(line string) error {
 	// The request file is a bind mount: write it in place, never replace it.
 	f, err := os.OpenFile(filepath.Join(updatesDir, "request"), os.O_WRONLY|os.O_TRUNC, 0)
 	if err != nil {
 		return fmt.Errorf("updates: writing the request: %w", err)
 	}
-	if _, err := io.WriteString(f, version+"\n"); err != nil {
+	if _, err := io.WriteString(f, line+"\n"); err != nil {
 		f.Close()
 		return fmt.Errorf("updates: writing the request: %w", err)
 	}
@@ -258,8 +369,8 @@ type UpdatesAuthFunc func(ctx context.Context) error
 
 var updatesAuth UpdatesAuthFunc
 
-// SetUpdatesAuth sets the authorizer of GET /api/updates and POST
-// /api/updates/request. nil means nobody may. Called by the schemaf app at
+// SetUpdatesAuth sets the authorizer of GET /api/updates, POST
+// /api/updates/request and POST /api/updates/check. nil means nobody may. Called by the schemaf app at
 // server start (see app.SetUpdatesAuth).
 func SetUpdatesAuth(fn UpdatesAuthFunc) {
 	updatesAuth = fn
@@ -318,5 +429,19 @@ func updatesRequestHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(map[string]string{"version": body.Version})
+	})
+}
+
+// updatesCheckHandler serves POST /api/updates/check. It has no body.
+func updatesCheckHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !updatesAuthorized(w, r) {
+			return
+		}
+		if err := CheckForUpdates(); err != nil {
+			WriteError(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
 	})
 }

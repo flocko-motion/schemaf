@@ -273,7 +273,29 @@ GO
   health 0.8.0
   [ "$(number)" = 42 ] || fail "pull flow: the requested upgrade lost the data ($(number), want 42)"
   [ "$(run_status | jq -r '.request.version + " " + .request.state')" = "0.8.0 accepted" ] || fail "pull flow: request state: $(run_status)"
+  say "pull: the app asks for a check — a release published after the last releases run"
+  pull_release 0.9.0
+  wait_for "the end of the last releases run" 180 '.check.state != "checking"'
+  if as_runner jq -e '.versions | map(.version) | index("0.9.0")' "$RUN_HOME/.${NAME}/updates/available.json" >/dev/null 2>&1; then
+    fail "pull flow: available.json lists 0.9.0 before the app's check"
+  fi
+  # The limit counts from the end of the last check.
+  local end
+  end=$(( $(date -d "$(run_status | jq -r .check.finished)" +%s) + 61 ))
+  while [ "$(date +%s)" -lt "$end" ]; do sleep 1; done
+  rt_runner exec "${NAME}-backend" sh -c 'echo check > /schemaf/updates/request' \
+    || fail "pull flow: the backend container cannot write the check request"
+  # It ends failed: the index still lists the foreign 0.5.0 and 0.7.0.
+  wait_for "the app's check" 180 '.check.trigger == "app" and (.check.state == "checked" or .check.state == "failed")'
+  as_runner jq -e '.versions | map(.version) | index("0.9.0")' "$RUN_HOME/.${NAME}/updates/available.json" >/dev/null \
+    || fail "pull flow: the app's check did not list 0.9.0 in available.json: $(run_status | jq -c .check)"
+  rt_runner exec "${NAME}-backend" sh -c 'echo check > /schemaf/updates/request'
+  wait_for "a rejection of the second check" 60 '.check.state == "rejected"'
+  run_status | jq -r .check.message | grep -qF "check again in" || fail "pull flow: the second check was rejected, but not for the limit: $(run_status | jq -r .check.message)"
+  [ "$(run_status | jq -r .install.version)" = 0.8.0 ] || fail "pull flow: a check installed something: $(run_status | jq -c .install)"
+  health 0.8.0
+  say "the app's check listed 0.9.0, a second one within a minute was rejected, nothing installed"
   as_runner "$RUN_SH" updater disable
 
-  echo "  ✓ pull: first install, upgrade, rollback with the database restored, refusals, the updater's requests ($MODE users, $RUNTIME)"
+  echo "  ✓ pull: first install, upgrade, rollback with the database restored, refusals, the updater's requests and checks ($MODE users, $RUNTIME)"
 }

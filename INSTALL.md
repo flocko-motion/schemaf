@@ -367,6 +367,7 @@ It **never contains secrets**, so the same file can go to staging and to product
 - loads the image into **that user's** container store,
 - unpacks the compose files into `~/.<name>/deploy/<tag>/`,
 - installs `~/.<name>/bin/schemaf.sh`, or replaces it (see below),
+- when it replaced the script and the [updater](#the-updater) is enabled, rewrites the updater's units from the new script and reloads them (`systemctl --user daemon-reload`), so the units always match the installed script. A failed reload is printed as a warning naming the fix (`schemaf.sh updater enable`) and doesn't fail the load,
 - prints the tag.
 
 **The run-side script is never downgraded: newest wins.** `load` replaces `~/.<name>/bin/schemaf.sh` only when the artifact's schemaf version (from its manifest) is equal to or newer than the installed script's (its `SCHEMAF_VER="…"` line). An older artifact keeps the installed script and prints one line: `keeping run-side schemaf.sh v1.13.0 (artifact has v1.12.1)`. The run-side script runs the deploy directories of older artifacts too, so a rollback is `run --image <older tag>` with the newest script. An installed script without a readable version is refused: remove it, then load again. Artifacts built by a schemaf release older than this rule replace the script unconditionally, because their own `schemaf.sh` performs the load.
@@ -550,6 +551,8 @@ From then on, `load` (run by `install`) keeps `~/.<name>/bin/schemaf.sh` current
 ~/.<name>/bin/schemaf.sh releases
 ```
 
+One `releases` runs at a time: it holds a lock (the directory `~/.<name>/var/releases.lock`, with its PID, taken over when its process is gone, like the [install lock](#install)); a second one is refused: `another releases run is going on (PID …)`. Every run is recorded as the `check` in `status.json` (below): `checking` while it runs, then `checked`, or `failed` with the error.
+
 1. Downloads `SCHEMAF_RELEASES`. An index that isn't a JSON list of `{version, artifact, attestation}` entries with distinct `X.Y.Z` or `X.Y.Z-<pre>` versions is refused as a whole. Unknown fields are ignored. Whether an entry is a prerelease is decided by its version (a `-<pre>` part), never by its `prerelease` field.
 2. Keeps the versions on the channel that are newer than the running one (by semver precedence). When nothing runs (a new box), only the newest version on the channel.
 3. For each one not yet downloaded: downloads the artifact and its bundle, verifies the attestation with `cosign verify-blob-attestation` (SLSA provenance, the configured signer and issuer, the Sigstore public-good instance), and checks that the artifact's manifest names this project and exactly the entry's version. Only then it is kept, in `~/.<name>/releases/<version>/`. A failed check is reported loudly with the version and the reason, the files are deleted, the other versions are still processed, and `releases` exits non-zero.
@@ -596,7 +599,7 @@ With nothing running (the first install on a box) there is nothing to back up or
 
 `state` is `installing`, `installed`, `rolled-back` (the new version failed, the previous one serves again), `failed` (a first install that failed, or a backup that failed) or `rollback-failed` (the stack is stopped). Every finished install also appends one line to `~/.<name>/var/installs.log`.
 
-`status.json` also holds the last [request](#the-updater) the updater handled, as `"request": {"version", "state", "message", "time"}`.
+`status.json` also holds the last install [request](#the-updater) the updater handled, as `"request": {"version", "state", "message", "time"}`, and the last or current check for new releases, as `"check": {"state", "trigger", "started", "finished", "message"}`: `state` is `checking`, `checked`, `failed` or `rejected` (a check the app asked for that the updater refused, with the reason); `trigger` is `timer`, `app` or `operator` (`releases` run by hand).
 
 **Retention.** After a successful install, `install` keeps the running and the previous version (their images, deploy directories and downloaded artifacts; the previous one is the rollback target) and the downloaded versions newer than the running one, and removes the other versions, plus the backups other than this install's. Tags that aren't versions, e.g. ones you loaded by hand, are never removed.
 
@@ -612,12 +615,16 @@ The updater lets the app see new releases and ask for an upgrade ([EXTEND.md ›
 
 | Unit | Does |
 |---|---|
-| `schemaf-<name>-releases.timer` (+ `.service`) | runs `schemaf.sh releases` 5 minutes after boot and then every hour, which refreshes `~/.<name>/updates/available.json`; `enable` runs it once right away |
+| `schemaf-<name>-releases.timer` (+ `.service`) | runs `schemaf.sh releases` 5 minutes after boot and then once a day, at a random point within an hour of that (`RandomizedDelaySec=1h`, so hosts don't all fetch the index at once), which refreshes `~/.<name>/updates/available.json`; `enable` runs it once right away. To look now, the app [asks for a check](EXTEND.md#updates) |
 | `schemaf-<name>-request.path` (+ `.service`) | watches `~/.<name>/updates/request` and runs `schemaf.sh updater request` when the app writes to it |
 
-The units call `~/.<name>/bin/schemaf.sh`, which `load` keeps current. `enable` refuses without systemd (`systemctl --user` must answer), without lingering, naming the fix: `loginctl enable-linger <user>` (as root), so the units run while the user isn't logged in, and when the container runtime doesn't answer inside the user's systemd. That manager keeps the groups it started with: with Docker, add the user to the `docker` group **before** enabling lingering, or restart it afterwards (as root: `systemctl restart user@<uid>.service`). It also needs the [pull settings](#pulling-releases-linux). `disable` stops and removes the units; `status` shows them.
+The units call `~/.<name>/bin/schemaf.sh`, which `load` keeps current; `load` also rewrites the units when it replaces the script, so a host enabled with an older schemaf gets the current units with its next install. `enable` refuses without systemd (`systemctl --user` must answer), without lingering, naming the fix: `loginctl enable-linger <user>` (as root), so the units run while the user isn't logged in, and when the container runtime doesn't answer inside the user's systemd. That manager keeps the groups it started with: with Docker, add the user to the `docker` group **before** enabling lingering, or restart it afterwards (as root: `systemctl restart user@<uid>.service`). It also needs the [pull settings](#pulling-releases-linux). `disable` stops and removes the units; `status` shows them.
 
-**`request` is untrusted input.** It is written by the app. `updater request` (run by the path unit) reads it, empties it, and starts `install <version>` only if it holds exactly one version that is downloaded and verified, on the configured channel and newer than the running one, while no install runs. Anything else is recorded in `status.json` as a rejected request with the reason, e.g. `rejected 1.3.0: not newer than the running 1.4.0`; nothing is queued. The channel is run-host config only: the app sees and can request only versions on it.
+**`request` is untrusted input.** It is written by the app. `updater request` (run by the path unit) reads it, empties it, and starts `install <version>` only if it holds exactly one version that is downloaded and verified, on the configured channel and newer than the running one, while no install runs. Anything else is recorded in `status.json` as a rejected request with the reason, e.g. `rejected 1.3.0: not newer than the running 1.4.0`; nothing is queued.
+
+**A check.** The request `check` (exactly that word) runs `releases` right away, recorded with the trigger `app`. A check only fetches and verifies, it never installs. It is rejected, recorded as the `check` with `state` `rejected` and the reason, and nothing is queued, when an install runs or when the last check finished less than 60 seconds ago, whatever triggered it. While a `releases` runs (from the timer, an operator or an earlier check), a check is rejected too, but only in the journal: the record of the running check stays, and its outcome answers the request. An interrupted check (its process gone, e.g. after a reboot) is recorded as `failed` without a `finished` time and doesn't count for the limit. So a compromised app can make the host fetch the index at most once a minute.
+
+**Requests during a run.** A request that arrives while an install or a check runs is rejected when it ends, not queued: a version as a rejected request, a `check` during an install as a rejected check. A `check` during a check only goes to the journal, for the same reason as above. The channel is run-host config only: the app sees and can request only versions on it.
 
 **The app's view.** The backend container gets `~/.<name>/updates/` read-only at `/schemaf/updates/` (`available.json`, `status.json`, the marker `updater` that `enable` writes) and `request` writable, as two separate mounts. The run side creates these files before it starts the stack.
 

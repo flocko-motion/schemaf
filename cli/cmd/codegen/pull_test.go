@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 //	http/<path>      served for http://fake/<path>
 //	unhealthy-<tag>  that tag fails its health check
 //	backup-fail, restore-fail, up-fail-<tag>  make that step fail
+//	on-fetch-request  written to the app's request when releases.json is fetched
 const fakePullRuntime = `#!/bin/bash
 set -u
 S="${FAKE_STATE:?}"
@@ -56,6 +58,7 @@ case "${1:-}" in
             echo '{"db":"ok","status":"ok"}'; exit 0 ;;
           http://fake/*)
             f="$S/http/${url#http://fake/}"; [ -f "$f" ] || { echo "curl: (22) 404" >&2; exit 22; }
+            if [ "$url" = http://fake/releases.json ] && [ -f "$S/on-fetch-request" ]; then cat "$S/on-fetch-request" > "$HOME/.myapp/updates/request"; fi
             cat "$f"; exit 0 ;;
         esac
         echo "fake curl: unhandled $url" >&2; exit 6 ;;
@@ -741,7 +744,8 @@ func TestUpdaterEnableDisable(t *testing.T) {
 			t.Fatalf("enable failed:\n%s", stderr)
 		}
 		mustContain(t, "releases.service", readFile(t, filepath.Join(units, "schemaf-myapp-releases.service")), "ExecStart="+h.script+" releases")
-		mustContain(t, "releases.timer", readFile(t, filepath.Join(units, "schemaf-myapp-releases.timer")), "OnUnitActiveSec=1h", "WantedBy=timers.target")
+		mustContain(t, "releases.service", readFile(t, filepath.Join(units, "schemaf-myapp-releases.service")), "Environment=_SCHEMAF_CHECK_TRIGGER=timer")
+		mustContain(t, "releases.timer", readFile(t, filepath.Join(units, "schemaf-myapp-releases.timer")), "OnBootSec=5min\nOnUnitActiveSec=1d\nRandomizedDelaySec=1h\n", "WantedBy=timers.target")
 		mustContain(t, "request.service", readFile(t, filepath.Join(units, "schemaf-myapp-request.service")), "ExecStart="+h.script+" updater request", "StartLimitIntervalSec=0")
 		mustContain(t, "request.path", readFile(t, filepath.Join(units, "schemaf-myapp-request.path")), "PathModified="+filepath.Join(h.u.home, ".myapp/updates/request"))
 		mustContain(t, "calls", h.u.calls(), "systemctl --user daemon-reload",
@@ -916,4 +920,211 @@ func TestInterruptedInstallIsRecordedAsFailed(t *testing.T) {
 	if in["state"] != "failed" || !strings.Contains(in["message"].(string), "was interrupted") {
 		t.Errorf("install = %v", in)
 	}
+}
+
+func (h *pullHost) check() map[string]any {
+	h.t.Helper()
+	c, _ := h.status()["check"].(map[string]any)
+	return c
+}
+
+// setCheckLast moves the end of the last check back by secs seconds.
+func (h *pullHost) setCheckLast(secs int64) {
+	h.t.Helper()
+	p := filepath.Join(h.u.home, ".myapp/var/check")
+	lines := strings.Split(strings.TrimSpace(readFile(h.t, p)), "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(l, "last=") {
+			n, err := strconv.ParseInt(strings.TrimPrefix(l, "last="), 10, 64)
+			if err != nil {
+				h.t.Fatalf("var/check: %q", l)
+			}
+			lines[i] = "last=" + strconv.FormatInt(n-secs, 10)
+		}
+	}
+	if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func TestUpdaterCheck(t *testing.T) {
+	h := newPullHost(t)
+	h.publish("1.4.0", "", "", false)
+	if _, stderr, code := h.sh("releases"); code != 0 {
+		t.Fatalf("releases:\n%s", stderr)
+	}
+	if c := h.check(); c["state"] != "checked" || c["trigger"] != "operator" || c["message"] != "new releases: 1.4.0" || c["finished"] == "" {
+		t.Errorf("a releases run by hand: check = %v", c)
+	}
+	if _, stderr, code := h.sh("install", "1.4.0"); code != 0 {
+		t.Fatalf("install 1.4.0:\n%s", stderr)
+	}
+	h.setCheckLast(3600)
+	// Published after the last releases run.
+	h.publish("1.5.0", "", "", false)
+
+	t.Run("a check runs releases now and never installs", func(t *testing.T) {
+		stderr, code := h.request("check\n")
+		if code != 0 {
+			t.Fatalf("exit %d:\n%s", code, stderr)
+		}
+		if c := h.check(); c["state"] != "checked" || c["trigger"] != "app" || c["message"] != "new releases: 1.5.0" {
+			t.Errorf("check = %v", c)
+		}
+		mustContain(t, "available.json", readFile(t, filepath.Join(h.u.home, ".myapp/updates/available.json")), `"version": "1.5.0"`)
+		if h.read("backend") != "true myapp:1.4.0" {
+			t.Errorf("a check changed the stack: %q", h.read("backend"))
+		}
+		if b, _ := os.ReadFile(filepath.Join(h.u.home, ".myapp/updates/request")); len(b) != 0 {
+			t.Errorf("the request was not emptied: %q", b)
+		}
+		if h.exists("var/releases.lock") {
+			t.Error("the releases lock is left behind")
+		}
+	})
+
+	t.Run("a second check within a minute is rejected", func(t *testing.T) {
+		before, _ := os.ReadFile(filepath.Join(h.u.home, ".myapp/updates/available.json"))
+		h.request("check")
+		c := h.check()
+		if c["state"] != "rejected" || c["trigger"] != "app" || !strings.Contains(c["message"].(string), "check again in") {
+			t.Errorf("check = %v", c)
+		}
+		if after, _ := os.ReadFile(filepath.Join(h.u.home, ".myapp/updates/available.json")); string(after) != string(before) {
+			t.Error("a rejected check ran releases")
+		}
+		// Rejections don't move the limit: a minute after the last real check, a check runs.
+		h.setCheckLast(61)
+		h.request("check")
+		if c := h.check(); c["state"] != "checked" {
+			t.Errorf("after the limit: check = %v", c)
+		}
+	})
+
+	t.Run("rejected while an install runs", func(t *testing.T) {
+		h.setCheckLast(3600)
+		lock := filepath.Join(h.u.home, ".myapp", "var", "install.lock")
+		if err := os.MkdirAll(lock, 0755); err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(lock)
+		if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+			t.Fatal(err)
+		}
+		h.request("check")
+		if c := h.check(); c["state"] != "rejected" || !strings.Contains(c["message"].(string), "an install is running") {
+			t.Errorf("check = %v", c)
+		}
+	})
+
+	t.Run("one releases at a time", func(t *testing.T) {
+		h.setCheckLast(3600)
+		lock := filepath.Join(h.u.home, ".myapp", "var", "releases.lock")
+		if err := os.MkdirAll(lock, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+			t.Fatal(err)
+		}
+		before := h.check()
+		stderr, _ := h.request("check")
+		mustContain(t, "stderr", stderr, "check: rejected — a check is running")
+		if c := h.check(); fmt.Sprint(c) != fmt.Sprint(before) {
+			t.Errorf("a rejection replaced the record of the running check: %v, was %v", c, before)
+		}
+		_, stderr, code := h.sh("releases")
+		if code == 0 {
+			t.Error("a second releases ran")
+		}
+		mustContain(t, "stderr", stderr, "another releases run is going on (PID")
+		os.RemoveAll(lock)
+	})
+
+	t.Run("an interrupted check is recorded as failed", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(h.u.home, ".myapp/var/check"), []byte("state=checking\ntrigger=timer\nstarted=s\nfinished=\nmessage=checking\nlast=1\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		stderr, _ := h.request("check")
+		mustContain(t, "stderr", stderr, "recorded the interrupted check as failed")
+		if c := h.check(); c["state"] != "checked" || c["trigger"] != "app" {
+			t.Errorf("the check after the interrupted one: %v", c)
+		}
+		mustContain(t, "status.json", readFile(t, filepath.Join(h.u.home, ".myapp/updates/status.json")), `"state": "checked"`)
+	})
+
+	t.Run("a failed check records the error", func(t *testing.T) {
+		h.setCheckLast(3600)
+		h.rm("http/releases.json")
+		h.request("check")
+		c := h.check()
+		if c["state"] != "failed" || !strings.Contains(c["message"].(string), "could not download http://fake/releases.json") {
+			t.Errorf("check = %v", c)
+		}
+		h.writeIndex()
+		// A failed check counts for the limit, too.
+		h.request("check")
+		if c := h.check(); c["state"] != "rejected" {
+			t.Errorf("right after a failed check: %v", c)
+		}
+	})
+
+	t.Run("a version request that arrives during a check is rejected", func(t *testing.T) {
+		h.setCheckLast(3600)
+		// The fake curl writes the next request while releases fetches the index.
+		h.serve("releases.json", readFile(t, h.state("http/releases.json")))
+		if err := os.WriteFile(h.state("on-fetch-request"), []byte("1.5.0"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		defer h.rm("on-fetch-request")
+		h.request("check")
+		if v, state, msg := h.requestState(); v != "1.5.0" || state != "rejected" || !strings.Contains(msg, "arrived while a check was running") {
+			t.Errorf("request = %s %s %s", v, state, msg)
+		}
+		if h.read("backend") != "true myapp:1.4.0" {
+			t.Errorf("backend %q", h.read("backend"))
+		}
+	})
+}
+
+func TestLoadRewritesTheUpdatersUnits(t *testing.T) {
+	h := newPullHost(t)
+	h.withSystemd()
+	units := filepath.Join(h.u.home, ".config", "systemd", "user")
+	h.publish("1.4.0", "", "", false)
+	if _, stderr, code := h.sh("releases"); code != 0 {
+		t.Fatalf("releases:\n%s", stderr)
+	}
+
+	t.Run("without the updater, load writes no units", func(t *testing.T) {
+		if _, stderr, code := h.sh("install", "1.4.0"); code != 0 {
+			t.Fatalf("install:\n%s", stderr)
+		}
+		if _, err := os.Stat(units); err == nil {
+			t.Error("units written without the updater")
+		}
+	})
+
+	// An updater enabled by an older schemaf: an hourly timer.
+	if err := os.MkdirAll(units, 0755); err != nil {
+		t.Fatal(err)
+	}
+	timer := filepath.Join(units, "schemaf-myapp-releases.timer")
+	if err := os.WriteFile(timer, []byte("[Timer]\nOnBootSec=5min\nOnUnitActiveSec=1h\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.u.home, ".myapp/updates/updater"), []byte("enabled\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("1.5.0", "", "", false)
+	if _, stderr, code := h.sh("releases"); code != 0 {
+		t.Fatalf("releases:\n%s", stderr)
+	}
+	_, stderr, code := h.sh("install", "1.5.0")
+	if code != 0 {
+		t.Fatalf("install 1.5.0:\n%s", stderr)
+	}
+	mustContain(t, "stderr", stderr, "rewrote the updater's units")
+	mustContain(t, "releases.timer", readFile(t, timer), "OnUnitActiveSec=1d", "RandomizedDelaySec=1h")
+	mustContain(t, "request.path", readFile(t, filepath.Join(units, "schemaf-myapp-request.path")), "PathModified=")
+	mustContain(t, "calls", h.u.calls(), "systemctl --user daemon-reload")
 }
