@@ -101,16 +101,13 @@ const (
 	UpdatesChecking   = "checking"
 )
 
-// runningVersion is the tag of the backend's image (SCHEMAF_IMAGE, set by
-// schemaf.sh and passed into the container by compose.gen.yml) if it is a
-// version; empty otherwise (development, a commit tag).
+// runningVersion is the running release: RunningVersion if it is a version;
+// empty otherwise (development, a commit tag).
 func runningVersion() string {
-	img := os.Getenv("SCHEMAF_IMAGE")
-	tag := img[strings.LastIndex(img, ":")+1:]
-	if !versionPattern.MatchString(tag) {
-		return ""
+	if v := RunningVersion(); versionPattern.MatchString(v) {
+		return v
 	}
-	return tag
+	return ""
 }
 
 // newerVersion reports whether version a is newer than b by semver

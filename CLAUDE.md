@@ -96,6 +96,7 @@ These are framework-wide conventions. Do not deviate.
 - `api/*.go` → endpoint struct implementations
 - `api/endpoints.gen.go` → generated `api.Provider`
 - `frontend/src/api/generated/api.gen.ts` → generated TypeScript client
+- `frontend/src/api/generated/version.gen.ts` → generated version check (`loadedVersion`, `serverVersionChanged`)
 - `apiclient/client.gen.go` → generated Go API client (via oapi-codegen)
 - `compose.gen.yml` → generated base compose (postgres + backend)
 - `compose.dev.gen.yml` → generated dev overlay (exposed ports)

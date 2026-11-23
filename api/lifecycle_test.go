@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -69,14 +70,14 @@ func TestNewHandlerWithoutDevProxy(t *testing.T) {
 		t.Fatalf("GET / = %d %q, want 404", rec.Code, rec.Body.String())
 	}
 
-	SetFrontend(fstest.MapFS{"index.html": {Data: []byte("embedded")}})
+	SetFrontend(fstest.MapFS{"index.html": {Data: []byte("<head></head>embedded")}})
 	h, err = NewHandler(false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
-	if rec.Body.String() != "embedded" {
+	if !strings.Contains(rec.Body.String(), "embedded") {
 		t.Fatalf("GET / = %q, want the embedded frontend", rec.Body.String())
 	}
 }

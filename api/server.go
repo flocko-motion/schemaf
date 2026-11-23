@@ -37,15 +37,15 @@ func frameworkRoutes() []frameworkRoute {
 	}
 }
 
-// NewMux builds and returns the http.ServeMux with all framework defaults and
-// registered routes. Useful for testing with httptest.NewServer.
+// NewMux builds and returns the server's handler with all framework defaults
+// and registered routes. Useful for testing with httptest.NewServer.
 //
 // The OpenAPI spec set by SetOpenAPISpec gates /api and everything under
 // /api/: a path not in the spec is a 404, a method not in the spec a 405
 // (see EXTEND.md, Routing). NewMux panics, as http.ServeMux does on
 // conflicting patterns, if the spec and the handlers don't agree (see
 // checkRoutes); NewHandler returns that error instead.
-func NewMux() *http.ServeMux {
+func NewMux() http.Handler {
 	mux, err := buildMux(DevMode())
 	if err != nil {
 		panic(err)
@@ -53,9 +53,11 @@ func NewMux() *http.ServeMux {
 	return mux
 }
 
-// buildMux builds the mux behind NewMux and NewHandler. proxyFrontend
-// selects the frontend: the dev server proxy, or the embedded files.
-func buildMux(proxyFrontend bool) (*http.ServeMux, error) {
+// buildMux builds the handler behind NewMux and NewHandler: the mux, wrapped
+// so every response gets the response headers (withResponseHeaders).
+// proxyFrontend selects the frontend: the dev server proxy, or the embedded
+// files.
+func buildMux(proxyFrontend bool) (http.Handler, error) {
 	if openAPISpec == "" {
 		return nil, fmt.Errorf("api: %w", errNoOpenAPISpec)
 	}
@@ -98,8 +100,13 @@ func buildMux(proxyFrontend bool) (*http.ServeMux, error) {
 	mux.Handle(apiPrefix, gated)
 	// Everything else is the frontend (dev proxy or embedded static files),
 	// for GET and HEAD only.
-	mux.Handle("/", frontendOnly(frontendHandler(proxyFrontend)))
-	return mux, nil
+	version := RunningVersion()
+	frontend, err := frontendHandler(proxyFrontend, version)
+	if err != nil {
+		return nil, err
+	}
+	mux.Handle("/", frontendOnly(frontend))
+	return withResponseHeaders(version, onResponseHeaders, mux), nil
 }
 
 // openAPIPattern is the one route outside /api/.

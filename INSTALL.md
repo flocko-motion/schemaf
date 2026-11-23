@@ -328,6 +328,18 @@ Builds `Dockerfile.gen` into the image `<name>:<tag>`. It needs the container ru
 - **Lockfiles**: the image gets exactly the dependencies the commit pins (see [Lockfiles](#lockfiles) below).
 - **Empty inputs**: before building, `build` prints codegen's warnings about empty inputs from `gen/empty-inputs`, e.g. `⚠ no migrations in go/db/migrations — db.Provider() is empty`. They never stop the build. See [Empty inputs](EXTEND.md#empty-inputs).
 
+### The image tag is the version
+
+The backend image's tag is the app's version: the server reports it on every response and in the page it serves ([Noticing an upgrade](EXTEND.md#noticing-an-upgrade-in-an-open-page)), and `api.RunningVersion()` returns it.
+
+| Built by | Tag |
+|---|---|
+| a release: a pushed tag `vX.Y.Z`, built by [`release.gen.yml`](#releases-from-ci-releasegenyml) | `X.Y.Z` |
+| a local `./schemaf.sh build` (or `run`, which builds first) | the short commit hash, e.g. `3f9a2c1` (`3f9a2c1-dirty` with uncommitted changes), or your `--tag` |
+| `./schemaf.sh dev`, integration tests: the backend runs natively, no image | `dev` |
+
+The tag is reported as it is, never rewritten. Only a version (`X.Y.Z` or `X.Y.Z-<pre>`) counts as a release for the [updater](#the-updater).
+
 ### Lockfiles
 
 `build` installs exactly what the lockfiles pin, so every build of a commit gets the same dependencies, on any host:

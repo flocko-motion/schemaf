@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
@@ -49,6 +50,11 @@ type App struct {
 	// (twice, or nil), reported by Start.
 	onRequest    api.OnRequestFunc
 	onRequestErr error
+
+	// onResponseHeaders is the OnResponseHeaders hook; onResponseHeadersErr
+	// a wrong registration (twice, or nil), reported by Start.
+	onResponseHeaders    api.ResponseHeadersFunc
+	onResponseHeadersErr error
 
 	// apiProviders and frontend are applied by Start, which rebuilds the
 	// routes on every start.
@@ -156,6 +162,30 @@ func (a *App) OnRequest(fn func(ctx context.Context, adm *api.Admission) (contex
 		a.onRequestErr = errors.New("app.OnRequest called twice: register one hook and call your own steps from it")
 	default:
 		a.onRequest = fn
+	}
+}
+
+// OnResponseHeaders registers the response-headers hook: it runs on every
+// response the server writes (endpoints, schemaf's routes, /openapi.json,
+// the frontend, the route gate's 404 and 405, errors), before routing and
+// authentication, so it sees no subject. It adds headers to h; a handler runs
+// after it and may override them. The X-Schemaf- prefix is reserved: a hook
+// that sets, changes or deletes an X-Schemaf-* header fails the request with
+// a 500. Calling it twice, or with nil, is a startup error. See EXTEND.md,
+// "Response headers". Wire up in Wire (go/app/app.go):
+//
+//	app.OnResponseHeaders(func(r *http.Request, h http.Header) {
+//	    h.Set("X-Content-Type-Options", "nosniff")
+//	})
+func (a *App) OnResponseHeaders(fn func(r *http.Request, h http.Header)) {
+	switch {
+	case a.onResponseHeadersErr != nil: // keep the first wrong registration
+	case fn == nil:
+		a.onResponseHeadersErr = errors.New("app.OnResponseHeaders called with nil: pass the hook, or don't call OnResponseHeaders")
+	case a.onResponseHeaders != nil:
+		a.onResponseHeadersErr = errors.New("app.OnResponseHeaders called twice: register one hook and set all headers from it")
+	default:
+		a.onResponseHeaders = fn
 	}
 }
 

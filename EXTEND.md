@@ -9,6 +9,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
   - [Runtime config: `PUBLIC_*`](#runtime-config-public_)
 - [Built-in Endpoints](#built-in-endpoints)
 - [Routing](#routing)
+- [Response headers: `OnResponseHeaders`](#response-headers-onresponseheaders)
 - [Development mode](#development-mode)
 - [Endpoint Interface](#endpoint-interface)
   - [Auth levels](#auth-levels)
@@ -21,6 +22,7 @@ Back to [README](README.md) | See also: [Installation](INSTALL.md)
   - [Sessions](#sessions)
   - [Per-request hook: `OnRequest`](#per-request-hook-onrequest)
 - [Updates](#updates) — the app shows new releases and requests an upgrade (`/api/updates`)
+  - [Noticing an upgrade in an open page](#noticing-an-upgrade-in-an-open-page)
 - [Stream Endpoints](#stream-endpoints)
 - [Raw Endpoints](#raw-endpoints)
 - [Database](#database)
@@ -61,6 +63,7 @@ func Wire(app *schemaf.App) {
     app.AddSubcommand(importer.SubcommandProvider) // custom: CLI commands
     // optional: app.OnLogin(...), app.AddIdentityProvider(...) — see Authentication
     // optional: app.OnRequest(...) — see Per-request hook
+    // optional: app.OnResponseHeaders(...) — see Response headers
     // optional: app.CanSeeErrorDetails(...) — see Error details
     // optional: app.SetUpdatesAuth(...) — see Updates
     // optional: app.OnBeforeServe(...) — see Before-serve hook
@@ -153,7 +156,7 @@ app.SetFrontend(FrontendFS())
 `./schemaf.sh codegen` does two things for the frontend:
 
 1. **Scaffold** — if `frontend/` doesn't exist, creates a Vite + TypeScript setup with React (the default) and runs `npm install`, which writes `frontend/package-lock.json`. Commit it: `build` installs exactly what it pins (see [Lockfiles](INSTALL.md#lockfiles))
-2. **Generate** — creates `go/app/frontend.gen.go` (embeds `frontend/dist/` into the Go binary), `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec) and `frontend/src/api/generated/config.gen.ts` ([runtime config](#runtime-config-public_))
+2. **Generate** — creates `go/app/frontend.gen.go` (embeds `frontend/dist/` into the Go binary), `frontend/src/api/generated/api.gen.ts` (type-safe API client from OpenAPI spec), `frontend/src/api/generated/config.gen.ts` ([runtime config](#runtime-config-public_)) and `frontend/src/api/generated/version.gen.ts` ([noticing an upgrade](#noticing-an-upgrade-in-an-open-page))
 
 If `frontend/` exists, codegen validates it: the required files must be present, and `vite.config.ts`, `index.html` and the entry file (`src/main.tsx` or `src/main.ts`) must contain the [runtime config](#runtime-config-public_) setup. If something is missing, codegen stops and prints what to add.
 
@@ -348,7 +351,7 @@ endpoint BlobEndpoint: Path() "/api/blob/{path...}" uses {path...}, which OpenAP
 - no spec is set at all: wire the generated provider in `Wire` (`go/app/app.go`), `app.AddApi(api.Provider)`;
 - a spec path item is a `$ref`, or declares no operation. Codegen never writes either, so the spec was edited by hand or is broken.
 
-Codegen builds the spec and the handler registration from the same endpoint structs, so these only fire when something was registered by hand or the generated files are out of date. `api.NewMux()` (for tests with `httptest`) panics with the same error, as `http.ServeMux` does on conflicting patterns; the server returns it from `app.Run`.
+Codegen builds the spec and the handler registration from the same endpoint structs, so these only fire when something was registered by hand or the generated files are out of date. `api.NewMux()` (an `http.Handler` for tests with `httptest`) panics with the same error, as `http.ServeMux` does on conflicting patterns; the server returns it from `app.Run`.
 
 **Frontend space is `GET` and `HEAD` only.** Every path outside `/api/` and `/openapi.json` belongs to the frontend: the dev server in [development mode](#development-mode), the embedded build with its SPA fallback (unknown paths get `index.html`) in production. Only `GET` and `HEAD` reach it; any other method gets `405` `{"error": "method not allowed", "code": "method_not_allowed"}` with `Allow: GET, HEAD`. The same goes for `POST /openapi.json`.
 
@@ -358,6 +361,43 @@ Codegen builds the spec and the handler registration from the same endpoint stru
 - Move endpoints with a `Path()` outside `/api/` under `/api/`; codegen names each one.
 - A server without `app.AddApi(api.Provider)` no longer starts. Before, it started and only `/openapi.json` failed.
 - Clients relying on a wrong method or an unknown `/api/` path reaching the frontend (with `200` and HTML) now get `404` or `405` with a JSON error.
+
+## Response headers: `OnResponseHeaders`
+
+To put a header on every response the server writes (a security header such as `X-Content-Type-Options`, a `Cache-Control` policy), register one `OnResponseHeaders` hook in `Wire`:
+
+```go
+// go/app/app.go
+app.OnResponseHeaders(func(r *http.Request, h http.Header) {
+    h.Set("X-Content-Type-Options", "nosniff")
+    if !strings.HasPrefix(r.URL.Path, "/api/") {
+        h.Set("Cache-Control", "no-cache")
+    }
+})
+```
+
+- **Where it runs**: on every response: your endpoints, schemaf's own `/api/*` routes, `/openapi.json`, the embedded frontend's files and its SPA fallback, the frontend dev proxy, the [route gate's](#routing) 404 and 405, and error responses.
+- **When**: before routing and authentication. The hook sees the request but no subject (`api.Subject(r.Context())` reports none). A header that depends on the caller belongs in the handler.
+- **Handlers win**: the handler runs after the hook and may change or remove a header the hook set.
+- **One hook**: calling `app.OnResponseHeaders` twice, or with `nil`, is a startup error. Put all headers into the one hook; it can call as many of your own functions as it likes.
+- **No return value**: the hook can't refuse a request; that is the [per-request hook's](#per-request-hook-onrequest) job.
+- Without `OnResponseHeaders`, a response carries only what schemaf and the handler set. [Integration tests](#integration-tests-schemaftest) run the hook too, since they share `Wire`.
+
+**schemaf owns the `X-Schemaf-` prefix.** schemaf sets its own headers first, so the hook sees them; today that is [`X-Schemaf-Version`](#noticing-an-upgrade-in-an-open-page). After the hook returns, schemaf checks that its own headers are unchanged and that the hook added no other `X-Schemaf-*` header. If the hook set, changed or deleted one, the request fails with a 500 through the normal [error path](#error-responses), the handler doesn't run, and the logged error names the header:
+
+```
+api: the OnResponseHeaders hook set X-Schemaf-Build: the X-Schemaf- prefix is reserved for schemaf
+```
+
+Handlers are not checked, but the prefix is reserved for them as well: don't set `X-Schemaf-*` headers anywhere.
+
+**Order per request**: schemaf's headers → `OnResponseHeaders` → reserved-prefix check → route gate → authentication → `OnRequest` → handler.
+
+#### Upgrading: response headers
+
+- `api.NewMux()` returns an `http.Handler` instead of an `*http.ServeMux`, so that the headers wrap the whole mux. `httptest.NewServer(api.NewMux())` and `api.NewMux().ServeHTTP(…)` keep working; code that stored it in an `*http.ServeMux` variable or registered extra routes on it no longer compiles.
+- Every response now carries `X-Schemaf-Version`, and the embedded `index.html` gets a `schemaf-version` meta tag ([Noticing an upgrade](#noticing-an-upgrade-in-an-open-page)). An embedded `index.html` without `</head>` stops the server at startup.
+- Run `./schemaf.sh codegen` to get `frontend/src/api/generated/version.gen.ts`.
 
 ## Development mode
 
@@ -1430,7 +1470,7 @@ err = api.CheckForUpdates()
 
 | Field | Value |
 |---|---|
-| `Running` | the running version (the tag of the backend's image); empty in development |
+| `Running` | the running release: the tag of the backend's image when it is a version (`X.Y.Z`, `X.Y.Z-<pre>`); empty in development and for any other tag. The tag as it is: [`api.RunningVersion()`](#noticing-an-upgrade-in-an-open-page) |
 | `Status` | `updater not enabled`, `idle`, `installing` or `checking` |
 | `Available` | the verified versions newer than the running one, oldest first, each with its release `Notes` (from [`releases.json`](INSTALL.md#releases-from-ci-releasegenyml)); refreshed by every `releases` run |
 | `Checked` | when `releases` last refreshed `Available`: it moves when a check finishes |
@@ -1451,6 +1491,40 @@ err = api.CheckForUpdates()
 Without an updater, `api.Updates()` returns the running version, an empty `Available` and the status `updater not enabled`. Never a silent no-op: nothing is written without an updater to act on it. The updater checks the request again on its side (INSTALL.md › The updater), so these checks are for a clear answer, not for safety. A `checking` whose check started more than 30 minutes ago is treated as interrupted: `Status` doesn't report it, and `CheckForUpdates` passes the request on to the updater.
 
 **Where the files are.** The backend container sees the run host's `~/.<name>/updates/` at `/schemaf/updates/`: `available.json`, `status.json` and the marker `updater` read-only, and `request` writable (two separate mounts). The run side creates them before it starts the stack.
+
+### Noticing an upgrade in an open page
+
+Frontend and server ship in one image, so a page loaded before an upgrade keeps running the old frontend against the new server until it is reloaded. schemaf tells the page both versions, so it can notice and offer a reload:
+
+- **The server's version is on every response**: `X-Schemaf-Version: <version>`, wherever the [response-headers hook](#response-headers-onresponseheaders) runs (every response), errors included.
+- **The page's version is in `index.html`**: when it serves the embedded `index.html` (at `/` and on the SPA fallback), schemaf inserts `<meta name="schemaf-version" content="<version>">` before `</head>`. An embedded `index.html` without `</head>` is a startup error. In development the frontend comes from the dev server and nothing is inserted.
+
+The version is the tag of the running backend image, as it is ([the image tag is the version](INSTALL.md#the-image-tag-is-the-version)): `1.5.0` for a release, a commit such as `3f9a2c1` or `3f9a2c1-dirty` for a local `build`, or your own `--tag`. Without an image it is `dev`: `./schemaf.sh dev`, and [integration tests](#integration-tests-schemaftest). It is computed once at server start. The page only compares for equality, so two local builds of different commits are told apart too.
+
+Codegen writes `frontend/src/api/generated/version.gen.ts` with two functions:
+
+| Function | Returns |
+|---|---|
+| `loadedVersion(): string` | the version in the page's meta tag, or `"dev"` without one |
+| `serverVersionChanged(res: Response): boolean` | whether the response's `X-Schemaf-Version` differs from `loadedVersion()`; `false` when the response has no such header (e.g. an opaque response) |
+
+Your app decides where to look (its own fetch wrapper, or the generated client's `customFetch`) and what to show. schemaf neither wraps `fetch` nor polls:
+
+```ts
+import { serverVersionChanged } from "./api/generated/version.gen";
+
+export async function apiFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init);
+  if (serverVersionChanged(res)) {
+    showReloadBanner(); // your UI: "A new version is available — reload"
+  }
+  return res;
+}
+```
+
+In development the page and the server are both `dev`, so nothing ever changes.
+
+`api.RunningVersion()` returns the same string to Go code (logs, error reports). `api.Updates().Running` stays the running *release*, empty for any other tag, because the updater deals only in releases.
 
 #### Upgrading: checking for updates
 
@@ -1810,7 +1884,7 @@ Codegen is fast, so it always runs every step; there are no single-step subcomma
    - Generates `frontend/src/api/generated/api.gen.ts` — type-safe client for your frontend
    - No running server needed
 
-   Codegen also writes `frontend/src/api/generated/config.gen.ts`, the reader for [runtime config](#runtime-config-public_).
+   Codegen also writes `frontend/src/api/generated/config.gen.ts`, the reader for [runtime config](#runtime-config-public_), and `frontend/src/api/generated/version.gen.ts`, the [version check](#noticing-an-upgrade-in-an-open-page).
 
 5. **Compose → compose.gen.yml**
    - Merges schemaf's built-in compose (backend, Postgres) with your `compose/*.yml`

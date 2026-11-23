@@ -27,18 +27,22 @@ func TestFrontendFollowsDevMode(t *testing.T) {
 	defer constants.SetPort(oldPort)
 
 	oldFS := frontendFS
-	SetFrontend(fstest.MapFS{"index.html": {Data: []byte("embedded")}})
+	SetFrontend(fstest.MapFS{"index.html": {Data: []byte("<head></head>embedded")}})
 	defer SetFrontend(oldFS)
 
 	for _, tc := range []struct{ dev, want string }{
 		{dev: "1", want: "vite"},
-		{dev: "", want: "embedded"},
+		{dev: "", want: `<head><meta name="schemaf-version" content="dev"></head>embedded`},
 	} {
 		t.Run("SCHEMAF_DEV="+tc.dev, func(t *testing.T) {
 			t.Setenv("SCHEMAF_DEV", tc.dev)
 			t.Setenv("SCHEMAF_ENV", "") // native, outside compose: must not decide the mode
 			rec := httptest.NewRecorder()
-			frontendHandler(DevMode()).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+			h, err := frontendHandler(DevMode(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 			if got := rec.Body.String(); got != tc.want {
 				t.Errorf("GET / served %q, want %q", got, tc.want)
 			}

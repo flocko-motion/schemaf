@@ -134,7 +134,7 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 	// starts that service (the backend runs natively, scaled to 0), so a
 	// placeholder satisfies compose; it is never pulled or run.
 	if os.Getenv("SCHEMAF_IMAGE") == "" {
-		os.Setenv("SCHEMAF_IMAGE", constants.ProjectName()+":dev-runs-natively")
+		os.Setenv("SCHEMAF_IMAGE", nativeDevImage())
 	}
 
 	// Stop production compose if running — dev and prod can't coexist. Only
@@ -493,4 +493,10 @@ func runCmd(args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// nativeDevImage is the placeholder SCHEMAF_IMAGE of the dev command. Its tag
+// makes api.RunningVersion report "dev".
+func nativeDevImage() string {
+	return constants.ProjectName() + ":dev-runs-natively"
 }
