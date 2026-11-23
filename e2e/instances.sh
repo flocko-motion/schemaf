@@ -85,6 +85,8 @@ table_count() {
 
 say "a second checkout: ${WT}"
 cp -R "$DIR" "$WT"
+# A fresh worktree has no frontend packages: dev must install them itself.
+rm -rf "$WT/frontend/node_modules"
 
 say "default instance in ${DIR} (ports ${PORT}..$((PORT + 3)))"
 start_dev "$DIR" default all
@@ -96,6 +98,14 @@ wait_http "http://127.0.0.1:${PORT}/api/health"
 wait_http "http://127.0.0.1:${IPORT}/api/health"
 wait_http "http://localhost:$((PORT + 2))/"
 wait_http "http://localhost:$((IPORT + 2))/"
+say "both backends serve the page through Vite (200, not 502)"
+for p in "$PORT" "$IPORT"; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${p}/" || true)
+  [ "$code" = 200 ] || fail "GET / on the backend :${p} answered ${code}, want 200"
+done
+grep -q "frontend packages missing or outdated — running npm ci" "$LOGS/instance1.log" \
+  || fail "dev --instance 1 did not install the frontend packages"
+[ -e "$WT/frontend/node_modules/.package-lock.json" ] || fail "dev did not install $WT/frontend/node_modules"
 grep -q "ports: backend :${IPORT}, Vite :$((IPORT + 2)), Postgres :$((IPORT + 3))" "$LOGS/instance1.log" \
   || fail "dev --instance 1 did not print its ports"
 

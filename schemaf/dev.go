@@ -5,11 +5,14 @@ package schemaf
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -175,6 +178,9 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 		if _, err := os.Stat("frontend"); os.IsNotExist(err) {
 			return fmt.Errorf("frontend/ directory not found — run codegen first")
 		}
+		if err := ensureFrontendPackages("frontend"); err != nil {
+			return err
+		}
 	}
 
 	compose := []string{"compose", "-f", "compose.gen.yml", "-f", "compose.dev.gen.yml"}
@@ -261,12 +267,12 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 			return cmd.Wait()
 		}
 
-		// Give Vite a moment — fail fast if it crashes.
-		time.Sleep(time.Second)
-		if cmd.ProcessState != nil {
-			cleanup()
-			return fmt.Errorf("frontend dev server failed to start")
-		}
+		// The backend starts once Vite listens, and stops when Vite exits.
+		return superviseVite(cmd, constants.FrontendPort(), viteStartTimeout, func(viteExited <-chan error) error {
+			signal.Stop(sigCh)
+			close(backendUp)
+			return a.serveUntil(viteExited) // superviseVite stops Vite afterwards
+		})
 	}
 
 	// Start Go server (foreground) — reuse the app's serve() method.
@@ -279,6 +285,119 @@ func (a *App) runDev(spec string, resetDB, autoYes bool) error {
 	}
 
 	return nil
+}
+
+// frontendNeedsInstall decides whether dev runs npm ci in frontend/, from the
+// modification times of frontend/package-lock.json (lock) and of npm's record
+// of the last install, frontend/node_modules/.package-lock.json (installed).
+// A zero time means the file is missing. Without a lockfile it refuses: npm ci
+// needs one, and dev never falls back to npm install.
+func frontendNeedsInstall(lock, installed time.Time) (bool, error) {
+	if lock.IsZero() {
+		return false, fmt.Errorf("frontend/package-lock.json is missing — run npm install in frontend/ and commit frontend/package-lock.json")
+	}
+	return installed.IsZero() || installed.Before(lock), nil
+}
+
+// ensureFrontendPackages runs npm ci in dir when its packages are missing or
+// older than its lockfile (frontendNeedsInstall). npm's output streams to the
+// terminal; a failing npm ci stops dev.
+func ensureFrontendPackages(dir string) error {
+	if _, err := exec.LookPath("npm"); err != nil {
+		return fmt.Errorf("npm not found on PATH — dev runs the frontend with npm: install Node.js (it brings npm)")
+	}
+	lock, err := modTime(filepath.Join(dir, "package-lock.json"))
+	if err != nil {
+		return err
+	}
+	installed, err := modTime(filepath.Join(dir, "node_modules", ".package-lock.json"))
+	if err != nil {
+		return err
+	}
+	need, err := frontendNeedsInstall(lock, installed)
+	if err != nil || !need {
+		return err
+	}
+	fmt.Fprintln(os.Stderr, "frontend packages missing or outdated — running npm ci")
+	cmd := exec.Command("npm", "ci")
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("npm ci in %s/ failed: %w", dir, err)
+	}
+	return nil
+}
+
+// modTime returns a file's modification time, or the zero time if it doesn't exist.
+func modTime(path string) (time.Time, error) {
+	fi, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return fi.ModTime(), nil
+}
+
+// viteStartTimeout bounds how long dev waits for Vite to listen on its port.
+const viteStartTimeout = 30 * time.Second
+
+// superviseVite takes the started Vite process (cmd) and waits until it
+// listens on port. If it exits first or doesn't listen within timeout, it
+// stops Vite and fails: the backend never starts. Otherwise it runs serve,
+// whose channel delivers an error when Vite exits, so the backend can stop.
+// Vite is stopped when serve returns. superviseVite owns cmd.Wait.
+func superviseVite(cmd *exec.Cmd, port int, timeout time.Duration, serve func(viteExited <-chan error) error) error {
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	stopVite := func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+		}
+	}
+
+	deadline := time.Now().Add(timeout)
+	for !viteListening(port) {
+		select {
+		case err := <-exited:
+			return fmt.Errorf("frontend dev server failed to start (%s)", exitStatus(err))
+		case <-time.After(100 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			stopVite()
+			return fmt.Errorf("frontend dev server failed to start: not listening on :%d after %s", port, timeout)
+		}
+	}
+
+	viteExited := make(chan error, 1)
+	go func() {
+		err := <-exited
+		viteExited <- fmt.Errorf("frontend dev server exited (%s) — dev stopped", exitStatus(err))
+	}()
+	err := serve(viteExited)
+	stopVite()
+	return err
+}
+
+// viteListening reports whether something accepts connections on the port,
+// on localhost as the backend's frontend proxy dials it.
+func viteListening(port int) bool {
+	c, err := net.DialTimeout("tcp", net.JoinHostPort("localhost", strconv.Itoa(port)), 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
+// exitStatus describes how a process ended, from its Wait error.
+func exitStatus(err error) string {
+	if err == nil {
+		return "exit status 0"
+	}
+	return err.Error()
 }
 
 // setUpInstance applies dev's --instance to the checkout (.schemaf/instance),

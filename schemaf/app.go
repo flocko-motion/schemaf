@@ -403,7 +403,11 @@ const shutdownTimeout = 8 * time.Second
 
 // serve runs the server command: Start on the instance's port, then a
 // graceful Stop on SIGINT or SIGTERM.
-func (a *App) serve() error {
+func (a *App) serve() error { return a.serveUntil(nil) }
+
+// serveUntil is serve that also stops gracefully when stop delivers an error
+// (dev: Vite exited), and returns that error. A nil stop never fires.
+func (a *App) serveUntil(stop <-chan error) error {
 	sigCtx, stopSignals := signal.NotifyContext(a.ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
@@ -431,6 +435,15 @@ func (a *App) serve() error {
 	case <-sigCtx.Done():
 		slog.Info("shutting down")
 	case serveErr = <-srv.Err():
+	case serveErr = <-stop:
+		// Ctrl-C reaches Vite too, so its exit can race the signal: a
+		// signal that arrives right after it is a plain shutdown.
+		select {
+		case <-sigCtx.Done():
+			serveErr = nil
+		case <-time.After(250 * time.Millisecond):
+		}
+		slog.Info("shutting down")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
