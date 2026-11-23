@@ -219,6 +219,37 @@ func TestFrontendGenWritesConfigTS(t *testing.T) {
 	}
 }
 
+// Codegen writes version.gen.ts next to config.gen.ts: loadedVersion reads
+// the meta tag schemaf inserts into index.html ("dev" without one), and
+// serverVersionChanged compares a response's X-Schemaf-Version with it.
+func TestFrontendGenWritesVersionTS(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, d := range []string{"frontend", "go"} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runFrontendGen(); err != nil {
+		t.Fatal(err)
+	}
+	if versionGenTSOut != "frontend/src/api/generated/version.gen.ts" {
+		t.Errorf("version.gen.ts is written to %s", versionGenTSOut)
+	}
+	s := readFile(t, filepath.FromSlash(versionGenTSOut))
+	for _, want := range []string{
+		"DO NOT EDIT",
+		"export function loadedVersion(): string",
+		`meta[name="schemaf-version"]`,
+		`"dev"`,
+		"export function serverVersionChanged(res: Response): boolean",
+		`res.headers.get("X-Schemaf-Version")`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("version.gen.ts lacks %q:\n%s", want, s)
+		}
+	}
+}
+
 func TestComposeBackendLoadsEnvFile(t *testing.T) {
 	t.Chdir(t.TempDir())
 	writeMinimalProject(t)

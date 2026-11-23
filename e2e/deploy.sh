@@ -156,7 +156,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# health checks that the app answers and the backend runs the expected tag.
+# versions_everywhere <tag>: every kind of response carries
+# X-Schemaf-Version: <tag>, and the served index.html its meta tag (EXTEND.md
+# › Noticing an upgrade in an open page).
+versions_everywhere() {
+  local tag="$1" base="http://127.0.0.1:${PORT}" index asset spec method path want headers status got
+  index=$(curl -fsS "$base/") || fail "GET / failed"
+  grep -qF "<meta name=\"schemaf-version\" content=\"${tag}\">" <<<"$index" \
+    || { echo "$index" >&2; fail "the served index.html lacks <meta name=\"schemaf-version\" content=\"${tag}\">"; }
+  asset=$(grep -oE '/assets/[^"]+\.js' <<<"$index" | head -n 1 || true)
+  [ -n "$asset" ] || { echo "$index" >&2; fail "the served index.html names no /assets/*.js"; }
+  for spec in "GET /api/number 200" "GET /api/health 200" "GET /openapi.json 200" "GET $asset 200" \
+              "GET / 200" "GET /some/client/route 200" "GET /api/does-not-exist 404" "POST /api/health 405"; do
+    read -r method path want <<<"$spec"
+    headers=$(curl -sS -o /dev/null -D - -X "$method" "$base$path" | tr -d '\r') || fail "$method $path failed"
+    status=$(head -n 1 <<<"$headers" | cut -d' ' -f2)
+    [ "$status" = "$want" ] || fail "$method $path answered $status, want $want"
+    got=$(grep -i '^x-schemaf-version:' <<<"$headers" | cut -d' ' -f2- || true)
+    [ "$got" = "$tag" ] || fail "$method $path carries X-Schemaf-Version '$got', want '$tag'"
+  done
+  say "every kind of response carries X-Schemaf-Version: ${tag}, and index.html its meta tag"
+}
+
+# health checks that the app answers and the backend runs the expected tag,
+# and that every response says so (versions_everywhere).
 health() {
   local tag="$1" i running
   for i in $(seq 1 60); do
@@ -164,6 +187,7 @@ health() {
       running=$(rt_runner container inspect --format '{{.Config.Image}}' "${NAME}-backend")
       [ "${running##*:}" = "$tag" ] || fail "backend runs ${running}, want tag ${tag}"
       say "app responds on :${PORT}, running ${tag}"
+      versions_everywhere "$tag"
       return 0
     fi
     sleep 1

@@ -37,14 +37,15 @@ func specFor(routes []Route) string {
 
 // testMux sets the spec codegen would generate for the registered routes and
 // returns NewMux(), as the generated Provider() and the server do.
-func testMux(t *testing.T) *http.ServeMux {
+func testMux(t *testing.T) http.Handler {
 	t.Helper()
 	SetOpenAPISpec(specFor(Routes()))
 	return NewMux()
 }
 
 // frontendModes runs fn once with the embedded production frontend and once
-// with the dev proxy (to a stand-in Vite server). Both answer "frontend".
+// with the dev proxy (to a stand-in Vite server). Both answer with a body
+// that contains "frontend".
 func frontendModes(t *testing.T, fn func(t *testing.T)) {
 	t.Helper()
 	vite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +59,7 @@ func frontendModes(t *testing.T, fn func(t *testing.T)) {
 	t.Cleanup(func() { constants.SetPort(oldPort) })
 
 	oldFS := frontendFS
-	SetFrontend(fstest.MapFS{"index.html": {Data: []byte("frontend")}})
+	SetFrontend(fstest.MapFS{"index.html": {Data: []byte("<head></head>frontend")}})
 	t.Cleanup(func() { SetFrontend(oldFS) })
 
 	for _, mode := range []struct{ name, dev string }{{"prod", ""}, {"dev", "1"}} {
@@ -144,7 +145,7 @@ func TestFrontendSpaceGetHeadOnly(t *testing.T) {
 			}
 		}
 		resp, body := serveMux(t, "GET", "/some-page")
-		if resp.StatusCode != 200 || body != "frontend" {
+		if resp.StatusCode != 200 || !strings.Contains(body, "frontend") {
 			t.Errorf("GET /some-page = %d %q, want 200 from the frontend", resp.StatusCode, body)
 		}
 		resp, _ = serveMux(t, "HEAD", "/some-page")

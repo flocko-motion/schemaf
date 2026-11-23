@@ -21,6 +21,13 @@ var configGenTS string
 // configGenTSOut is the generated runtime config reader (see EXTEND.md, Runtime config).
 const configGenTSOut = "frontend/src/api/generated/config.gen.ts"
 
+//go:embed version.gen.ts.tmpl
+var versionGenTS string
+
+// versionGenTSOut is the generated version check (see EXTEND.md, Noticing an
+// upgrade in an open page).
+const versionGenTSOut = "frontend/src/api/generated/version.gen.ts"
+
 func runFrontendGen() error {
 	// Only generate if project has a frontend/ directory.
 	if _, err := os.Stat("frontend"); os.IsNotExist(err) {
@@ -55,21 +62,26 @@ func runFrontendGen() error {
 
 	cli.Success("Generated %s", outPath)
 
-	if err := writeConfigGenTS(); err != nil {
-		return err
+	for _, f := range []struct{ path, content string }{
+		{configGenTSOut, configGenTS},
+		{versionGenTSOut, versionGenTS},
+	} {
+		if err := writeStaticTS(f.path, f.content); err != nil {
+			return err
+		}
+		cli.Success("Generated %s", f.path)
 	}
-	cli.Success("Generated %s", configGenTSOut)
 	return nil
 }
 
-// writeConfigGenTS writes the runtime config reader. Its content is the same
-// for every project.
-func writeConfigGenTS() error {
-	if err := os.MkdirAll(filepath.Dir(configGenTSOut), 0755); err != nil {
-		return fmt.Errorf("creating %s: %w", filepath.Dir(configGenTSOut), err)
+// writeStaticTS writes a generated TypeScript file whose content is the same
+// for every project (the runtime config reader, the version check).
+func writeStaticTS(path, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(configGenTSOut, []byte(configGenTS), 0644); err != nil {
-		return fmt.Errorf("writing %s: %w", configGenTSOut, err)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
 }

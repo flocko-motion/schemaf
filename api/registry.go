@@ -54,6 +54,7 @@ func Reset() {
 	identityProviders = nil
 	onLogin = nil
 	onRequest = nil
+	onResponseHeaders = nil
 	canSeeErrorDetails = nil
 	updatesAuth = nil
 }
