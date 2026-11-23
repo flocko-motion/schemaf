@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withUpdatesDir points the update API at a temp dir holding files (name →
@@ -224,7 +226,7 @@ func TestUpdateEndpoints(t *testing.T) {
 
 func TestUpdateEndpointsInSpec(t *testing.T) {
 	paths, schemas := FrameworkOpenAPI()
-	for path, method := range map[string]string{"/api/updates": "get", "/api/updates/request": "post"} {
+	for path, method := range map[string]string{"/api/updates": "get", "/api/updates/request": "post", "/api/updates/check": "post"} {
 		item, _ := paths[path].(map[string]any)
 		op, _ := item[method].(map[string]any)
 		if op == nil || op["security"] == nil {
@@ -276,4 +278,159 @@ func TestNewerVersion(t *testing.T) {
 			}
 		}
 	}
+}
+
+// checkFiles is an enabled updater whose status.json holds check, a JSON
+// object or "" for none, and whose available.json was refreshed at checked.
+func checkFiles(check, checked string) map[string]string {
+	files := enabledFiles()
+	files["available.json"] = `{"checked": "` + checked + `", "versions": [{"version": "1.5.0", "notes": ""}]}`
+	if check != "" {
+		files["status.json"] = `{"running": "1.4.0", "check": ` + check + `}`
+	} else {
+		files["status.json"] = `{"running": "1.4.0"}`
+	}
+	return files
+}
+
+func withNow(t *testing.T, at time.Time) {
+	t.Helper()
+	old := now
+	now = func() time.Time { return at }
+	t.Cleanup(func() { now = old })
+}
+
+func TestCheckForUpdates(t *testing.T) {
+	at := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) string { return at.Add(-d).Format(time.RFC3339) }
+	withNow(t, at)
+
+	t.Run("writes check to the request file", func(t *testing.T) {
+		dir := withUpdatesDir(t, checkFiles(`{"state": "checked", "trigger": "timer", "started": "`+ago(3*time.Hour)+`", "finished": "`+ago(2*time.Hour)+`", "message": "checked"}`, ago(2*time.Hour)))
+		if err := CheckForUpdates(); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(dir, "request")); string(b) != "check\n" {
+			t.Errorf("request = %q, want check", b)
+		}
+	})
+
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		want  error
+		msg   string
+	}{
+		{"without an updater", nil, ErrUpdaterNotEnabled, ""},
+		{"while an install runs", func() map[string]string {
+			f := checkFiles("", ago(time.Hour))
+			f["status.json"] = `{"running": "1.4.0", "install": {"version": "1.5.0", "from": "1.4.0", "state": "installing"}}`
+			return f
+		}(), ErrInstallRunning, ""},
+		{"while a check runs", checkFiles(`{"state": "checking", "trigger": "timer", "started": "`+ago(10*time.Second)+`", "finished": "", "message": ""}`, ago(time.Hour)), ErrCheckRunning, ""},
+		{"right after a check finished", checkFiles(`{"state": "checked", "trigger": "app", "started": "`+ago(30*time.Second)+`", "finished": "`+ago(20*time.Second)+`", "message": ""}`, ago(20*time.Second)), ErrCheckTooSoon, "last check finished 20s ago — check again in 40s"},
+		{"right after a failed check", checkFiles(`{"state": "failed", "trigger": "app", "started": "`+ago(30*time.Second)+`", "finished": "`+ago(15*time.Second)+`", "message": "could not download"}`, ago(time.Hour)), ErrCheckTooSoon, "check again in 45s"},
+		{"a rejected check doesn't hide the last refresh", checkFiles(`{"state": "rejected", "trigger": "app", "started": "`+ago(time.Second)+`", "finished": "`+ago(time.Second)+`", "message": "too soon"}`, ago(30*time.Second)), ErrCheckTooSoon, "check again in 30s"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := withUpdatesDir(t, c.files)
+			err := CheckForUpdates()
+			if !errors.Is(err, c.want) || !strings.Contains(fmt.Sprint(err), c.msg) {
+				t.Fatalf("err = %v, want %v containing %q", err, c.want, c.msg)
+			}
+			if b, _ := os.ReadFile(filepath.Join(dir, "request")); len(b) != 0 {
+				t.Errorf("a refused check wrote %q", b)
+			}
+		})
+	}
+
+	t.Run("an interrupted check (no finished time) doesn't count for the limit", func(t *testing.T) {
+		withUpdatesDir(t, checkFiles(`{"state": "failed", "trigger": "timer", "started": "`+ago(time.Hour)+`", "finished": "", "message": "the check was interrupted"}`, ago(2*time.Hour)))
+		if err := CheckForUpdates(); err != nil {
+			t.Errorf("err = %v", err)
+		}
+	})
+
+	t.Run("a check older than 30 minutes counts as interrupted", func(t *testing.T) {
+		dir := withUpdatesDir(t, checkFiles(`{"state": "checking", "trigger": "timer", "started": "`+ago(31*time.Minute)+`", "finished": "", "message": ""}`, ago(time.Hour)))
+		st, err := Updates()
+		if err != nil || st.Status != UpdatesIdle {
+			t.Errorf("Status = %q, %v; want idle", st.Status, err)
+		}
+		if err := CheckForUpdates(); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(dir, "request")); string(b) != "check\n" {
+			t.Errorf("request = %q", b)
+		}
+	})
+
+	t.Run("Updates reports the check", func(t *testing.T) {
+		withUpdatesDir(t, checkFiles(`{"state": "checking", "trigger": "app", "started": "`+ago(5*time.Second)+`", "finished": "", "message": "checking for new releases"}`, ago(time.Hour)))
+		st, err := Updates()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := &CheckState{State: "checking", Trigger: "app", Started: ago(5 * time.Second), Message: "checking for new releases"}
+		if st.Status != UpdatesChecking || st.Check == nil || *st.Check != *want {
+			t.Errorf("Status %q, Check %+v; want checking, %+v", st.Status, st.Check, want)
+		}
+	})
+
+	t.Run("an install outranks a check", func(t *testing.T) {
+		f := checkFiles("", ago(time.Hour))
+		f["status.json"] = `{"running": "1.4.0", "install": {"version": "1.5.0", "from": "1.4.0", "state": "installing"},
+		  "check": {"state": "checking", "trigger": "timer", "started": "` + ago(time.Second) + `", "finished": "", "message": ""}}`
+		withUpdatesDir(t, f)
+		if st, _ := Updates(); st.Status != UpdatesInstalling {
+			t.Errorf("Status = %q", st.Status)
+		}
+	})
+
+	t.Run("an empty check record from an older run side is no check", func(t *testing.T) {
+		withUpdatesDir(t, checkFiles(`{"state": "", "trigger": "", "started": "", "finished": "", "message": ""}`, ago(time.Hour)))
+		if st, _ := Updates(); st.Check != nil {
+			t.Errorf("Check = %+v", st.Check)
+		}
+	})
+}
+
+func TestCheckEndpoint(t *testing.T) {
+	withNow(t, time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC))
+	dir := withUpdatesDir(t, checkFiles("", "2026-11-23T10:00:00Z"))
+
+	SetUpdatesAuth(nil)
+	if w := callUpdates(t, updatesCheckHandler(), "POST", ""); w.Code != http.StatusForbidden {
+		t.Errorf("unauthorized: %d %s", w.Code, w.Body)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "request")); len(b) != 0 {
+		t.Errorf("an unauthorized check wrote %q", b)
+	}
+
+	SetUpdatesAuth(func(ctx context.Context) error { return nil })
+	w := callUpdates(t, updatesCheckHandler(), "POST", "")
+	if w.Code != http.StatusAccepted || w.Body.Len() != 0 {
+		t.Errorf("%d %q, want 202 without content", w.Code, w.Body)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "request")); string(b) != "check\n" {
+		t.Errorf("request = %q", b)
+	}
+
+	t.Run("too soon: 429 with Retry-After", func(t *testing.T) {
+		withUpdatesDir(t, checkFiles(`{"state": "checked", "trigger": "app", "started": "2026-11-23T11:59:30Z", "finished": "2026-11-23T11:59:40Z", "message": ""}`, "2026-11-23T11:59:40Z"))
+		SetUpdatesAuth(func(ctx context.Context) error { return nil })
+		w := callUpdates(t, updatesCheckHandler(), "POST", "")
+		if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "check_too_soon") || w.Header().Get("Retry-After") != "40" {
+			t.Errorf("%d %s Retry-After=%q", w.Code, w.Body, w.Header().Get("Retry-After"))
+		}
+	})
+
+	t.Run("running: 409 check_running", func(t *testing.T) {
+		withUpdatesDir(t, checkFiles(`{"state": "checking", "trigger": "timer", "started": "2026-11-23T11:59:50Z", "finished": "", "message": ""}`, "2026-11-23T10:00:00Z"))
+		SetUpdatesAuth(func(ctx context.Context) error { return nil })
+		w := callUpdates(t, updatesCheckHandler(), "POST", "")
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "check_running") {
+			t.Errorf("%d %s", w.Code, w.Body)
+		}
+	})
 }

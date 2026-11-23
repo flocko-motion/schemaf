@@ -171,8 +171,9 @@ func (a *App) CanSeeErrorDetails(fn func(ctx context.Context, subject string) bo
 	a.canSeeErrorDetails = fn
 }
 
-// SetUpdatesAuth sets who may use the update endpoints, GET /api/updates and
-// POST /api/updates/request. Without it, nobody may: both answer 403. fn runs
+// SetUpdatesAuth sets who may use the update endpoints, GET /api/updates,
+// POST /api/updates/request and POST /api/updates/check. Without it, nobody
+// may: all three answer 403. fn runs
 // after authentication and the OnRequest hook, so it sees the app's caller; a
 // returned error refuses the request (api.Error(api.ErrForbidden, …) is a
 // 403). See EXTEND.md, "Updates". Wire up in Wire (go/app/app.go):

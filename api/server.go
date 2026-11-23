@@ -33,6 +33,7 @@ func frameworkRoutes() []frameworkRoute {
 		{"GET /api/errors/{id}", AuthOptional, errorDetailsHandler()},
 		{"GET /api/updates", AuthRequired, updatesHandler()},
 		{"POST /api/updates/request", AuthRequired, updatesRequestHandler()},
+		{"POST /api/updates/check", AuthRequired, updatesCheckHandler()},
 	}
 }
 

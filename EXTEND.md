@@ -258,10 +258,10 @@ The framework provides these endpoints out of the box:
 - `/api/user/me` — current user info (requires auth)
 - `/api/auth/{provider}/login`, `/api/auth/logout`, `/api/auth/refresh` — login and sessions (see [Authentication](#authentication))
 - `/api/errors/{id}` — the details of a 5xx by its `id` (see [Error details](#error-details))
-- `/api/updates`, `/api/updates/request` — the instance's updates and the request to install one, closed until the app authorizes someone (see [Updates](#updates))
+- `/api/updates`, `/api/updates/request`, `/api/updates/check` — the instance's updates, the request to install one and the request to check for new releases now, closed until the app authorizes someone (see [Updates](#updates))
 - `/openapi.json` — OpenAPI 3.0 spec: exactly `gen/openapi.json`, compiled into the binary by codegen (see [Code Generation](#code-generation))
 
-All of them except `/openapi.json` are part of `openapi.json` (`GET /api/health`, `GET /api/status`, `GET /api/config`, `GET /api/user/me`, `GET /api/errors/{id}`, `GET /api/updates`, `POST /api/updates/request` and the auth routes), so the generated TypeScript and Go clients can call them with types, and the [route gate](#routing) lets them through. `/openapi.json` is the one route outside `/api/`.
+All of them except `/openapi.json` are part of `openapi.json` (`GET /api/health`, `GET /api/status`, `GET /api/config`, `GET /api/user/me`, `GET /api/errors/{id}`, `GET /api/updates`, `POST /api/updates/request`, `POST /api/updates/check` and the auth routes), so the generated TypeScript and Go clients can call them with types, and the [route gate](#routing) lets them through. `/openapi.json` is the one route outside `/api/`.
 
 ### Extending /api/health
 
@@ -1395,18 +1395,19 @@ app.OnRequest(core.Admit)
 
 ## Updates
 
-On a run host that [pulls releases](INSTALL.md#pulling-releases-linux) with the [updater](INSTALL.md#the-updater) enabled, the app can show what an upgrade would bring and ask for one: an instance admin starts an upgrade from inside the app, with no operator in the loop. **The app asks, the run side decides:** the app only writes a version string; the updater installs it only if it is a verified release on the host's channel that is newer than the running one. A compromised app can at most start an install of a genuine newer release: no image choice, no command, no downgrade, no channel switch.
+On a run host that [pulls releases](INSTALL.md#pulling-releases-linux) with the [updater](INSTALL.md#the-updater) enabled, the app can show what an upgrade would bring and ask for one: an instance admin starts an upgrade from inside the app, with no operator in the loop. The run host looks for new releases once a day; an admin who just published one can have it look now. **The app asks, the run side decides:** the app only writes a version string (or the word `check`); the updater installs it only if it is a verified release on the host's channel that is newer than the running one. A compromised app can at most start an install of a genuine newer release, or a check at most once a minute: no image choice, no command, no downgrade, no channel switch.
 
 ### The built-in endpoints
 
-Two endpoints are always live and always in `openapi.json` and the generated TypeScript and Go clients, whatever the configuration (like the [Auth0 login route](#activating-auth0)). Both need a signed-in caller ([`AuthRequired`](#auth-levels)):
+Three endpoints are always live and always in `openapi.json` and the generated TypeScript and Go clients, whatever the configuration (like the [Auth0 login route](#activating-auth0)). All three need a signed-in caller ([`AuthRequired`](#auth-levels)):
 
 | Endpoint | Does |
 |---|---|
 | `GET /api/updates` | `api.Updates()` as JSON (below) |
 | `POST /api/updates/request` | body `{"version": "1.5.0"}`: `api.RequestUpgrade(version)`; answers `202` with `{"version": "1.5.0"}` |
+| `POST /api/updates/check` | no body: `api.CheckForUpdates()`; answers `202` with no content |
 
-**Closed by default.** Until the app calls `app.SetUpdatesAuth` in `Wire`, both answer `403` with `updates: the app has not authorized anyone (app.SetUpdatesAuth)`. The authorizer decides for both endpoints. It runs after authentication and the [per-request hook](#per-request-hook-onrequest), so it sees the app's own caller; a returned error refuses the request and is answered in the [standard error shape](#error-responses) (an `api.Error(api.ErrForbidden, …)` is a 403, a plain error a 500):
+**Closed by default.** Until the app calls `app.SetUpdatesAuth` in `Wire`, all three answer `403` with `updates: the app has not authorized anyone (app.SetUpdatesAuth)`. The authorizer decides for all three endpoints. It runs after authentication and the [per-request hook](#per-request-hook-onrequest), so it sees the app's own caller; a returned error refuses the request and is answered in the [standard error shape](#error-responses) (an `api.Error(api.ErrForbidden, …)` is a 403, a plain error a 500):
 
 ```go
 app.SetUpdatesAuth(func(ctx context.Context) error {
@@ -1422,6 +1423,7 @@ app.SetUpdatesAuth(func(ctx context.Context) error {
 ```go
 state, err := api.Updates()          // api.UpdateState
 err = api.RequestUpgrade("1.5.0")
+err = api.CheckForUpdates()
 ```
 
 `api.Updates()` returns:
@@ -1429,23 +1431,32 @@ err = api.RequestUpgrade("1.5.0")
 | Field | Value |
 |---|---|
 | `Running` | the running version (the tag of the backend's image); empty in development |
-| `Status` | `updater not enabled`, `idle` or `installing` |
+| `Status` | `updater not enabled`, `idle`, `installing` or `checking` |
 | `Available` | the verified versions newer than the running one, oldest first, each with its release `Notes` (from [`releases.json`](INSTALL.md#releases-from-ci-releasegenyml)); refreshed by every `releases` run |
-| `Checked` | when `releases` last refreshed `Available` |
+| `Checked` | when `releases` last refreshed `Available`: it moves when a check finishes |
 | `Install` | the last or current install: `Version`, `From`, `State` (`installing`, `installed`, `rolled-back`, `failed`, `rollback-failed`), `Started`, `Finished`, `Message`; nil before the first one |
-| `Request` | the last request the updater handled: `Version`, `State` (`accepted`, `rejected`), `Message`, `Time`; nil before the first one |
+| `Request` | the last install request the updater handled: `Version`, `State` (`accepted`, `rejected`), `Message`, `Time`; nil before the first one |
+| `Check` | the last or current check for new releases: `State` (`checking`, `checked`, `failed`, `rejected`), `Trigger` (`timer`: the daily timer, `app`: `CheckForUpdates`, `operator`: `schemaf.sh releases` by hand), `Started`, `Finished`, `Message`; nil before the first one |
 
-`api.RequestUpgrade(version)` writes the version to the updater's request file. It refuses, with typed errors to compare with `errors.Is`:
+`api.RequestUpgrade(version)` writes the version to the updater's request file. `api.CheckForUpdates()` writes the word `check` to it: the updater runs [`releases`](INSTALL.md#releases) right away, which fetches and verifies, and never installs. Poll `api.Updates()`: `Status` is `checking` while it runs, and `Check` and `Checked` show the outcome when it's done. Both refuse, with typed errors to compare with `errors.Is`:
 
 | Error | When | HTTP |
 |---|---|---|
 | `api.ErrUpdaterNotEnabled` | no updater on this host: development, macOS, a host without `schemaf.sh updater enable` | 409 `updater_not_enabled` |
-| `api.ErrVersionNotAvailable` | the version isn't in `Available` | 422 `version_not_available` |
+| `api.ErrVersionNotAvailable` | `RequestUpgrade`: the version isn't in `Available` | 422 `version_not_available` |
 | `api.ErrInstallRunning` | an install is running | 409 `install_running` |
+| `api.ErrCheckRunning` | `CheckForUpdates`: a check is running (from the timer or an earlier request) | 409 `check_running` |
+| `api.ErrCheckTooSoon` | `CheckForUpdates`: the last check finished less than a minute ago; the message says how long to wait, and the response carries `Retry-After` | 429 `check_too_soon` |
 
-Without an updater, `api.Updates()` returns the running version, an empty `Available` and the status `updater not enabled`. Never a silent no-op: nothing is written without an updater to act on it. The updater checks the request again on its side (INSTALL.md › The updater), so these checks are for a clear answer, not for safety.
+Without an updater, `api.Updates()` returns the running version, an empty `Available` and the status `updater not enabled`. Never a silent no-op: nothing is written without an updater to act on it. The updater checks the request again on its side (INSTALL.md › The updater), so these checks are for a clear answer, not for safety. A `checking` whose check started more than 30 minutes ago is treated as interrupted: `Status` doesn't report it, and `CheckForUpdates` passes the request on to the updater.
 
 **Where the files are.** The backend container sees the run host's `~/.<name>/updates/` at `/schemaf/updates/`: `available.json`, `status.json` and the marker `updater` read-only, and `request` writable (two separate mounts). The run side creates them before it starts the stack.
+
+#### Upgrading: checking for updates
+
+- Run `./schemaf.sh codegen` to get `POST /api/updates/check` into `gen/openapi.json`; the server refuses to start with a spec that lacks it.
+- The run host's timer now looks for releases once a day instead of hourly. `load` rewrites the units of an enabled updater, so a host gets the new timer with the first release built with this schemaf version; nobody has to run `schemaf.sh updater enable` again ([The updater](INSTALL.md#the-updater)).
+- `status.json` gains the `check` record and `Status` the value `checking`; a frontend that switches over `Status` should handle it.
 
 ## Stream Endpoints
 

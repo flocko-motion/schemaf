@@ -157,7 +157,7 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 				"schema": map[string]any{"type": "string"},
 			}}, map[string]any{"200": jsonResp("OK", ref("SchemafErrorDetails"))}),
 		"/api/updates": getOp("getApiUpdates", "The instance's updates",
-			"The running version, the verified versions the app may request (with their release notes), and the last install and request. Status \"updater not enabled\" without an updater on the run host. 403 until the app authorizes callers (app.SetUpdatesAuth).",
+			"The running version, the verified versions the app may request (with their release notes), and the last install, install request and check for new releases. Status \"updater not enabled\" without an updater on the run host. 403 until the app authorizes callers (app.SetUpdatesAuth).",
 			AuthRequired, nil, map[string]any{"200": jsonResp("OK", ref("SchemafUpdateState"))}),
 		"/api/updates/request": map[string]any{
 			"post": map[string]any{
@@ -168,6 +168,18 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 				"requestBody": jsonBody(ref("SchemafUpdateRequest")),
 				"responses": map[string]any{
 					"202":     jsonResp("Requested", ref("SchemafUpdateRequest")),
+					"default": OpenAPIErrorResponse(),
+				},
+			},
+		},
+		"/api/updates/check": map[string]any{
+			"post": map[string]any{
+				"operationId": "postApiUpdatesCheck",
+				"summary":     "Check for new releases now",
+				"description": "Asks the run host's updater to look for new releases now (fetch and verify, never install); poll GET /api/updates for the outcome. 403 until the app authorizes callers (app.SetUpdatesAuth); 409 updater_not_enabled, install_running or check_running; 429 check_too_soon (the last check finished less than a minute ago, with Retry-After).",
+				"security":    OpenAPISecurity(AuthRequired),
+				"responses": map[string]any{
+					"202":     map[string]any{"description": "Requested"},
 					"default": OpenAPIErrorResponse(),
 				},
 			},
@@ -257,7 +269,7 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 			"required": []any{"running", "status", "available"},
 			"properties": map[string]any{
 				"running": map[string]any{"type": "string", "description": "The running version; empty in development."},
-				"status":  map[string]any{"type": "string", "enum": []any{"updater not enabled", "idle", "installing"}},
+				"status":  map[string]any{"type": "string", "enum": []any{"updater not enabled", "idle", "installing", "checking"}},
 				"available": map[string]any{"type": "array", "items": map[string]any{
 					"type": "object", "required": []any{"version", "notes"},
 					"properties": map[string]any{"version": str, "notes": str},
@@ -277,6 +289,15 @@ func FrameworkOpenAPI() (paths map[string]any, schemas map[string]any) {
 					"properties": map[string]any{
 						"version": str, "message": str, "time": str,
 						"state": map[string]any{"type": "string", "enum": []any{"accepted", "rejected"}},
+					},
+				},
+				"check": map[string]any{
+					"type":     "object",
+					"required": []any{"state", "trigger", "started", "finished", "message"},
+					"properties": map[string]any{
+						"started": str, "finished": str, "message": str,
+						"state":   map[string]any{"type": "string", "enum": []any{"checking", "checked", "failed", "rejected"}},
+						"trigger": map[string]any{"type": "string", "enum": []any{"timer", "app", "operator"}},
 					},
 				},
 			},
