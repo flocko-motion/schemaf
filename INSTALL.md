@@ -241,7 +241,7 @@ Codegen produces:
 ./schemaf.sh instances       # List the project's dev instances on this machine
 ```
 
-`run` starts the production stack with `<runtime> compose` (`podman compose` by default, see [Container runtime](#container-runtime)); the server runs inside the backend container. `dev` starts only Postgres and the project's compose services in containers. The backend runs natively on the host (`go run`), and Vite runs with `npm run dev`. Ctrl-C stops the backend and Vite; the containers keep running. `--instance` runs a separate dev stack, see [Parallel dev instances](#parallel-dev-instances). `build` and `run` need only the container runtime, git and the repository; they never call Go or Node on the host (both run inside the image build).
+`run` starts the production stack with `<runtime> compose` (`podman compose` by default, see [Container runtime](#container-runtime)); the server runs inside the backend container. `dev` starts only Postgres and the project's compose services in containers. The backend runs natively on the host (`go run`), and Vite runs with `npm run dev`. Before anything starts, `dev` installs the frontend's packages when it needs them: if `frontend/node_modules/` is missing or older than `frontend/package-lock.json` (by npm's own record of the last install, `frontend/node_modules/.package-lock.json`), it runs `npm ci` in `frontend/`. Without `frontend/package-lock.json` it refuses, naming the fix (`npm install` in `frontend/`, then commit the lockfile); a failing `npm ci` stops it. The backend starts only once Vite listens on its port. If Vite fails to start within 30 seconds, or exits while the backend runs, `dev` stops (the backend gracefully) and exits non-zero. Ctrl-C stops the backend and Vite; the containers keep running. `--instance` runs a separate dev stack, see [Parallel dev instances](#parallel-dev-instances). `build` and `run` need only the container runtime, git and the repository; they never call Go or Node on the host (both run inside the image build).
 
 To add custom commands, use `app.AddSubcommand()` in your Go code — see [CLI Subcommands](EXTEND.md#cli-subcommands).
 
@@ -770,6 +770,8 @@ The dev stack's ports are fixed, so only one checkout of a project can run `./sc
 cd ../myapp-349
 ./schemaf.sh dev all --instance 349
 ```
+
+A fresh worktree needs no `npm install`: `dev` installs the frontend's packages itself (see [schemaf.sh](#schemafsh)).
 
 **Names.** An instance is named with a whole number ≥ 1, usually the issue number. Without a number, commands use the `default` instance, which is exactly the dev stack described everywhere else. schemaf never picks a name for you.
 
